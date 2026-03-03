@@ -136,6 +136,13 @@ RValue VMBuiltins_getVariable(VMContext* ctx, const char* name, int32_t arrayInd
         if (strcmp(name, "room_speed") == 0) return RValue_makeReal((double) runner->currentRoom->speed);
         if (strcmp(name, "room_width") == 0) return RValue_makeReal((double) runner->currentRoom->width);
         if (strcmp(name, "room_height") == 0) return RValue_makeReal((double) runner->currentRoom->height);
+        if (strcmp(name, "view_current") == 0) return RValue_makeReal(0.0);
+        if (strcmp(name, "view_xview") == 0) {
+            if (arrayIndex >= 0 && 8 > arrayIndex) {
+                return RValue_makeReal((double) runner->currentRoom->views[arrayIndex].viewX);
+            }
+            return RValue_makeReal(0.0);
+        }
     }
 
     // Timing
@@ -182,6 +189,7 @@ RValue VMBuiltins_getVariable(VMContext* ctx, const char* name, int32_t arrayInd
 
 void VMBuiltins_setVariable(VMContext* ctx, const char* name, RValue val, int32_t arrayIndex) {
     Instance* inst = (Instance*) ctx->currentInstance;
+    Runner* runner = (Runner*) requireNotNullMessage(ctx->runner, "VM: setVariable called but no runner!");
 
     // Per-instance properties
     if (inst != nullptr) {
@@ -207,11 +215,20 @@ void VMBuiltins_setVariable(VMContext* ctx, const char* name, RValue val, int32_
         }
     }
 
+    // View properties
+    if (strcmp(name, "view_xview") == 0) {
+        if (arrayIndex >= 0 && 8 > arrayIndex) {
+            runner->currentRoom->views[arrayIndex].viewX = RValue_toInt32(val);
+        }
+        return;
+    }
+
     // Read-only variables (silently ignore)
     if (strcmp(name, "os_type") == 0 || strcmp(name, "os_windows") == 0 ||
         strcmp(name, "os_ps4") == 0 || strcmp(name, "os_psvita") == 0 ||
         strcmp(name, "id") == 0 || strcmp(name, "object_index") == 0 ||
-        strcmp(name, "current_time") == 0 || strcmp(name, "room") == 0) {
+        strcmp(name, "current_time") == 0 || strcmp(name, "room") == 0 ||
+        strcmp(name, "view_current") == 0) {
         fprintf(stderr, "VM: Warning - attempted write to read-only built-in '%s'\n", name);
         return;
     }
