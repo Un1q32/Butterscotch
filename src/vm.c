@@ -867,7 +867,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
 
     bool functionIsBeingTraced = false;
     char* functionArgumentList = nullptr;
-    if (shgeti(ctx->functionCallsToBeTraced, "*") != -1 || shgeti(ctx->functionCallsToBeTraced, funcName) != -1) {
+    if (shgeti(ctx->functionCallsToBeTraced, "*") != -1 || shgeti(ctx->functionCallsToBeTraced, funcName) != -1 || shgeti(ctx->functionCallsToBeTraced, ctx->currentCodeName) != -1) {
         functionIsBeingTraced = true;
 
         functionArgumentList = strdup("");
