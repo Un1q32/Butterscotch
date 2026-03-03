@@ -251,7 +251,7 @@ static RValue builtinShowDebugMessage(VMContext* ctx, RValue* args, int32_t argC
     }
 
     char* val = RValue_toString(args[0]);
-    printf("%s\n", val);
+    printf("Game: %s\n", val);
     free(val);
 
     return RValue_makeUndefined();
