@@ -126,6 +126,23 @@ RValue VMBuiltins_getVariable(VMContext* ctx, const char* name, int32_t arrayInd
             }
             return RValue_makeReal(0.0);
         }
+        if (strcmp(name, "bbox_left") == 0 || strcmp(name, "bbox_right") == 0 || strcmp(name, "bbox_top") == 0 || strcmp(name, "bbox_bottom") == 0) {
+            if (inst->spriteIndex >= 0 && runner != nullptr && runner->dataWin->sprt.count > (uint32_t) inst->spriteIndex) {
+                Sprite* spr = &runner->dataWin->sprt.sprites[inst->spriteIndex];
+                double left = inst->x + inst->imageXscale * (spr->marginLeft - spr->originX);
+                double right = left + inst->imageXscale * ((spr->marginRight + 1) - spr->marginLeft);
+                double top = inst->y + inst->imageYscale * (spr->marginTop - spr->originY);
+                double bottom = top + inst->imageYscale * ((spr->marginBottom + 1) - spr->marginTop);
+                if (left > right) { double tmp = left; left = right; right = tmp; }
+                if (top > bottom) { double tmp = top; top = bottom; bottom = tmp; }
+                if (strcmp(name, "bbox_left") == 0) return RValue_makeReal(round(left));
+                if (strcmp(name, "bbox_right") == 0) return RValue_makeReal(round(right));
+                if (strcmp(name, "bbox_top") == 0) return RValue_makeReal(round(top));
+                return RValue_makeReal(round(bottom));
+            }
+            if (strcmp(name, "bbox_left") == 0 || strcmp(name, "bbox_right") == 0) return RValue_makeReal(inst->x);
+            return RValue_makeReal(inst->y);
+        }
         if (strcmp(name, "visible") == 0) return RValue_makeBool(inst->visible);
         if (strcmp(name, "depth") == 0) return RValue_makeReal((double) inst->depth);
         if (strcmp(name, "x") == 0) return RValue_makeReal(inst->x);
