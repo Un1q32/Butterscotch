@@ -236,7 +236,11 @@ void VMBuiltins_setVariable(VMContext* ctx, const char* name, RValue val, int32_
         if (strcmp(name, "solid") == 0) { inst->solid = RValue_toBool(val); return; }
         if (strcmp(name, "alarm") == 0) {
             if (isValidAlarmIndex(arrayIndex)) {
-                inst->alarm[arrayIndex] = RValue_toInt32(val);
+                int32_t newValue = RValue_toInt32(val);
+                if (shgeti(ctx->alarmsToBeTraced, "*") != -1 || shgeti(ctx->alarmsToBeTraced, runner->dataWin->objt.objects[inst->objectIndex].name) != -1) {
+                    printf("VM: [%s] Setting Alarm[%d] = %d (instanceId=%d)\n", runner->dataWin->objt.objects[inst->objectIndex].name, arrayIndex, newValue, inst->instanceId);
+                }
+                inst->alarm[arrayIndex] = newValue;
             }
             return;
         }
