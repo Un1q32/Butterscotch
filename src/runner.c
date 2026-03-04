@@ -144,10 +144,26 @@ static const char* getEventName(int32_t eventType, int32_t eventSubtype) {
         case EVENT_KEYBOARD:   return "Keyboard";
         case EVENT_OTHER:
             switch (eventSubtype) {
-                case OTHER_GAME_START: return "GameStart";
-                case OTHER_ROOM_START: return "RoomStart";
-                case OTHER_ROOM_END:   return "RoomEnd";
-                default:               return "Other";
+                case OTHER_GAME_START:      return "GameStart";
+                case OTHER_ROOM_START:      return "RoomStart";
+                case OTHER_ROOM_END:        return "RoomEnd";
+                case OTHER_USER0 +  0:      return "UserEvent0";
+                case OTHER_USER0 +  1:      return "UserEvent1";
+                case OTHER_USER0 +  2:      return "UserEvent2";
+                case OTHER_USER0 +  3:      return "UserEvent3";
+                case OTHER_USER0 +  4:      return "UserEvent4";
+                case OTHER_USER0 +  5:      return "UserEvent5";
+                case OTHER_USER0 +  6:      return "UserEvent6";
+                case OTHER_USER0 +  7:      return "UserEvent7";
+                case OTHER_USER0 +  8:      return "UserEvent8";
+                case OTHER_USER0 +  9:      return "UserEvent9";
+                case OTHER_USER0 + 10:      return "UserEvent10";
+                case OTHER_USER0 + 11:      return "UserEvent11";
+                case OTHER_USER0 + 12:      return "UserEvent12";
+                case OTHER_USER0 + 13:      return "UserEvent13";
+                case OTHER_USER0 + 14:      return "UserEvent14";
+                case OTHER_USER0 + 15:      return "UserEvent15";
+                default:                    return "Other";
             }
         case EVENT_KEYPRESS:   return "KeyPress";
         case EVENT_KEYRELEASE: return "KeyRelease";
