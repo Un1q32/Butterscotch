@@ -39,12 +39,6 @@ static uint8_t* loadFileRaw(const char* path, uint32_t* outSize) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if (0 >= size) {
-        fprintf(stderr, "GsRenderer: File %s is empty or unreadable (size=%ld)\n", path, size);
-        fclose(f);
-        abort();
-    }
-
     // 128-byte aligned for DMA transfers
     uint8_t* data = (uint8_t*) memalign(128, (size_t) size);
     if (data == nullptr) {
