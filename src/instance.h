@@ -69,7 +69,7 @@ static inline void Instance_setSelfVar(Instance* inst, int32_t varID, RValue val
         RValue_free(&inst->selfVars[idx].value);
     }
     if (val.type == RVALUE_STRING && val.string != nullptr) {
-        val = RValue_makeOwnedString(strdup(val.string));
+        val = RValue_makeOwnedString(safeStrdup(val.string));
     }
     hmput(inst->selfVars, varID, val);
 }

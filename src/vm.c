@@ -182,7 +182,7 @@ static void arrayMapSet(ArrayMapEntry** map, int32_t varID, int32_t arrayIndex, 
     }
     // If storing a non-owning string, make an owning copy
     if (val.type == RVALUE_STRING && !val.ownsString && val.string != nullptr) {
-        val = RValue_makeOwnedString(strdup(val.string));
+        val = RValue_makeOwnedString(safeStrdup(val.string));
     }
     hmput(*map, k, val);
 }
@@ -512,7 +512,7 @@ static void writeSingleInstanceVariable(VMContext* ctx, Instance* inst, Variable
     // Array write
     if (access->isArray) {
         int32_t resolvedVarID = resolveArrayAliasHm(inst->selfVars, varDef->varID);
-        RValue valCopy = (val.type == RVALUE_STRING && val.string != nullptr) ? RValue_makeOwnedString(strdup(val.string)) : val;
+        RValue valCopy = (val.type == RVALUE_STRING && val.string != nullptr) ? RValue_makeOwnedString(safeStrdup(val.string)) : val;
         arrayMapSet(&inst->selfArrayMap, resolvedVarID, access->arrayIndex, valCopy);
         hmput(inst->selfArrayVarTracker, resolvedVarID, 1);
         return;
@@ -673,7 +673,7 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
             RValue* dest = &ctx->localVars[varDef->varID];
             RValue_free(dest);
             if (val.type == RVALUE_STRING && !val.ownsString && val.string != nullptr) {
-                *dest = RValue_makeOwnedString(strdup(val.string));
+                *dest = RValue_makeOwnedString(safeStrdup(val.string));
             } else {
                 *dest = val;
             }
@@ -685,7 +685,7 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
             RValue* dest = &ctx->globalVars[varDef->varID];
             RValue_free(dest);
             if (val.type == RVALUE_STRING && !val.ownsString && val.string != nullptr) {
-                *dest = RValue_makeOwnedString(strdup(val.string));
+                *dest = RValue_makeOwnedString(safeStrdup(val.string));
             } else {
                 *dest = val;
             }
@@ -1076,7 +1076,7 @@ static void handleMul(VMContext* ctx) {
         if (count <= 0 || len == 0) {
             RValue_free(&a);
             RValue_free(&b);
-            stackPush(ctx,RValue_makeOwnedString(strdup("")));
+            stackPush(ctx,RValue_makeOwnedString(safeStrdup("")));
         } else {
             char* result = safeMalloc(len * count + 1);
             repeat(count, i) {
@@ -1338,7 +1338,7 @@ static void handleDup(VMContext* ctx, uint32_t instr) {
 
         // If the value owns a string, duplicate it to avoid double-free
         if (copy.type == RVALUE_STRING && copy.ownsString && copy.string != nullptr) {
-            copy.string = strdup(copy.string);
+            copy.string = safeStrdup(copy.string);
         }
 
         stackPush(ctx, copy);
@@ -1393,7 +1393,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     bool functionIsBeingTraced = shgeti(ctx->functionCallsToBeTraced, "*") != -1 || shgeti(ctx->functionCallsToBeTraced, funcName) != -1 || shgeti(ctx->functionCallsToBeTraced, ctx->currentCodeName) != -1;
     char* functionArgumentList = nullptr;
     if (functionIsBeingTraced) {
-        functionArgumentList = strdup("");
+        functionArgumentList = safeStrdup("");
         for (int32_t i = 0; i < argCount; i++) {
             char* display = RValue_toStringFancy(args[i]);
 
@@ -1404,7 +1404,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
                 functionArgumentList = tmp;
             } else {
                 free(functionArgumentList);
-                functionArgumentList = strdup(display);
+                functionArgumentList = safeStrdup(display);
             }
             free(display);
         }
@@ -2013,7 +2013,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
         repeat(argCount, argIdx) {
             RValue argCopy = args[argIdx];
             if (argCopy.type == RVALUE_STRING && argCopy.ownsString && argCopy.string != nullptr) {
-                argCopy.string = strdup(argCopy.string);
+                argCopy.string = safeStrdup(argCopy.string);
             }
             ctx->scriptArgs[argIdx] = argCopy;
         }
@@ -2027,7 +2027,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     // Make result string owning BEFORE freeing callee locals/arrays to prevent
     // dangling pointer if the returned string points into a callee local var or array map.
     if (result.type == RVALUE_STRING && !result.ownsString && result.string != nullptr) {
-        result = RValue_makeOwnedString(strdup(result.string));
+        result = RValue_makeOwnedString(safeStrdup(result.string));
     }
 
     // Restore caller frame

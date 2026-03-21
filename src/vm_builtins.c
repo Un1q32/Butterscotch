@@ -614,7 +614,7 @@ static RValue builtinReal([[maybe_unused]] VMContext* ctx, RValue* args, int32_t
 }
 
 static RValue builtinString([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount) return RValue_makeOwnedString(strdup(""));
+    if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
     char* result = RValue_toString(args[0]);
     return RValue_makeOwnedString(result);
 }
@@ -701,28 +701,28 @@ static RValue builtinIsUndefined([[maybe_unused]] VMContext* ctx, RValue* args, 
 // ===[ STRING FUNCTIONS ]===
 
 static RValue builtinStringUpper([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
-    char* result = strdup(args[0].string != nullptr ? args[0].string : "");
+    if (1 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
+    char* result = safeStrdup(args[0].string != nullptr ? args[0].string : "");
     for (char* p = result; *p; p++) *p = (char) toupper((unsigned char) *p);
     return RValue_makeOwnedString(result);
 }
 
 static RValue builtinStringLower([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
-    char* result = strdup(args[0].string != nullptr ? args[0].string : "");
+    if (1 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
+    char* result = safeStrdup(args[0].string != nullptr ? args[0].string : "");
     for (char* p = result; *p; p++) *p = (char) tolower((unsigned char) *p);
     return RValue_makeOwnedString(result);
 }
 
 static RValue builtinStringCopy([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (3 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (3 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* str = args[0].string != nullptr ? args[0].string : "";
     int32_t pos = RValue_toInt32(args[1]) - 1; // GMS is 1-based
     int32_t len = RValue_toInt32(args[2]);
     int32_t strLen = (int32_t) strlen(str);
 
     if (0 > pos) pos = 0;
-    if (pos >= strLen || 0 >= len) return RValue_makeOwnedString(strdup(""));
+    if (pos >= strLen || 0 >= len) return RValue_makeOwnedString(safeStrdup(""));
     if (pos + len > strLen) len = strLen - pos;
 
     char* result = safeMalloc(len + 1);
@@ -732,10 +732,10 @@ static RValue builtinStringCopy([[maybe_unused]] VMContext* ctx, RValue* args, i
 }
 
 static RValue builtinStringRepeat([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (2 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (2 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* str = args[0].string != nullptr ? args[0].string : "";
     int32_t count = RValue_toInt32(args[1]);
-    if (0 >= count || str[0] == '\0') return RValue_makeOwnedString(strdup(""));
+    if (0 >= count || str[0] == '\0') return RValue_makeOwnedString(safeStrdup(""));
 
     size_t strLen = strlen(str);
     size_t totalLen = strLen * (size_t) count;
@@ -755,9 +755,9 @@ static RValue builtinOrd([[maybe_unused]] VMContext* ctx, RValue* args, int32_t 
 }
 
 static RValue builtinChr([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount) return RValue_makeOwnedString(strdup(""));
+    if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
     char buf[2] = { (char) RValue_toInt32(args[0]), '\0' };
-    return RValue_makeOwnedString(strdup(buf));
+    return RValue_makeOwnedString(safeStrdup(buf));
 }
 
 static RValue builtinStringPos([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
@@ -770,23 +770,23 @@ static RValue builtinStringPos([[maybe_unused]] VMContext* ctx, RValue* args, in
 }
 
 static RValue builtinStringCharAt([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (2 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (2 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* str = args[0].string != nullptr ? args[0].string : "";
     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
     int32_t strLen = (int32_t) strlen(str);
-    if (0 > pos || pos >= strLen) return RValue_makeOwnedString(strdup(""));
+    if (0 > pos || pos >= strLen) return RValue_makeOwnedString(safeStrdup(""));
     char buf[2] = { str[pos], '\0' };
-    return RValue_makeOwnedString(strdup(buf));
+    return RValue_makeOwnedString(safeStrdup(buf));
 }
 
 static RValue builtinStringDelete([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (3 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (3 > argCount || args[0].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* str = args[0].string != nullptr ? args[0].string : "";
     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
     int32_t count = RValue_toInt32(args[2]);
     int32_t strLen = (int32_t) strlen(str);
 
-    if (0 > pos || pos >= strLen || 0 >= count) return RValue_makeOwnedString(strdup(str));
+    if (0 > pos || pos >= strLen || 0 >= count) return RValue_makeOwnedString(safeStrdup(str));
     if (pos + count > strLen) count = strLen - pos;
 
     char* result = safeMalloc(strLen - count + 1);
@@ -797,7 +797,7 @@ static RValue builtinStringDelete([[maybe_unused]] VMContext* ctx, RValue* args,
 }
 
 static RValue builtinStringInsert([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (3 > argCount || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (3 > argCount || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* substr = args[0].string != nullptr ? args[0].string : "";
     const char* str = args[1].string != nullptr ? args[1].string : "";
     int32_t pos = RValue_toInt32(args[2]) - 1; // 1-based
@@ -816,12 +816,12 @@ static RValue builtinStringInsert([[maybe_unused]] VMContext* ctx, RValue* args,
 }
 
 static RValue builtinStringReplaceAll([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (3 > argCount || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING || args[2].type != RVALUE_STRING) return RValue_makeOwnedString(strdup(""));
+    if (3 > argCount || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING || args[2].type != RVALUE_STRING) return RValue_makeOwnedString(safeStrdup(""));
     const char* str = args[0].string != nullptr ? args[0].string : "";
     const char* needle = args[1].string != nullptr ? args[1].string : "";
     const char* replacement = args[2].string != nullptr ? args[2].string : "";
     int32_t needleLen = (int32_t) strlen(needle);
-    if (0 == needleLen) return RValue_makeOwnedString(strdup(str));
+    if (0 == needleLen) return RValue_makeOwnedString(safeStrdup(str));
     int32_t replacementLen = (int32_t) strlen(replacement);
 
     // Count occurrences to pre-allocate
@@ -1067,7 +1067,7 @@ static RValue builtinChoose([[maybe_unused]] VMContext* ctx, RValue* args, int32
     // Must duplicate the value since args will be freed
     RValue val = args[idx];
     if (val.type == RVALUE_STRING && val.string != nullptr) {
-        return RValue_makeOwnedString(strdup(val.string));
+        return RValue_makeOwnedString(safeStrdup(val.string));
     }
     return val;
 }
@@ -1083,7 +1083,7 @@ static RValue builtinRandomize(VMContext* ctx, [[maybe_unused]] RValue* args, [[
 static RValue builtinRoomGetName(VMContext* ctx, [[maybe_unused]] RValue* args, [[maybe_unused]] int32_t argCount) {
     if (1 > argCount) return RValue_makeUndefined();
     Room* room = &ctx->dataWin->room.rooms[RValue_toInt32(args[0])];
-    return RValue_makeOwnedString(strdup(room->name));
+    return RValue_makeOwnedString(safeStrdup(room->name));
 }
 
 static RValue builtinRoomGotoNext(VMContext* ctx, [[maybe_unused]] RValue* args, [[maybe_unused]] int32_t argCount) {
@@ -1177,7 +1177,7 @@ static RValue builtinVariableGlobalGet(VMContext* ctx, RValue* args, int32_t arg
         RValue val = ctx->globalVars[varID];
         // Duplicate owned strings
         if (val.type == RVALUE_STRING && val.ownsString && val.string != nullptr) {
-            return RValue_makeOwnedString(strdup(val.string));
+            return RValue_makeOwnedString(safeStrdup(val.string));
         }
         return val;
     }
@@ -1195,7 +1195,7 @@ static RValue builtinVariableGlobalSet(VMContext* ctx, RValue* args, int32_t arg
         RValue val = args[1];
         // Duplicate owned strings since args will be freed
         if (val.type == RVALUE_STRING && val.string != nullptr) {
-            ctx->globalVars[varID] = RValue_makeOwnedString(strdup(val.string));
+            ctx->globalVars[varID] = RValue_makeOwnedString(safeStrdup(val.string));
         } else {
             ctx->globalVars[varID] = val;
         }
@@ -1231,11 +1231,11 @@ static RValue builtinScriptExecute(VMContext* ctx, RValue* args, int32_t argCoun
 // ===[ OS FUNCTIONS ]===
 
 static RValue builtinOsGetLanguage([[maybe_unused]] VMContext* ctx, [[maybe_unused]] RValue* args, [[maybe_unused]] int32_t argCount) {
-    return RValue_makeOwnedString(strdup("en"));
+    return RValue_makeOwnedString(safeStrdup("en"));
 }
 
 static RValue builtinOsGetRegion([[maybe_unused]] VMContext* ctx, [[maybe_unused]] RValue* args, [[maybe_unused]] int32_t argCount) {
-    return RValue_makeOwnedString(strdup("US"));
+    return RValue_makeOwnedString(safeStrdup("US"));
 }
 
 // ===[ DS_MAP BUILTIN FUNCTIONS ]===
@@ -1260,7 +1260,7 @@ static RValue builtinDsMapAdd([[maybe_unused]] VMContext* ctx, RValue* args, int
     } else {
         RValue val = args[2];
         if (val.type == RVALUE_STRING && val.string != nullptr) {
-            val = RValue_makeOwnedString(strdup(val.string));
+            val = RValue_makeOwnedString(safeStrdup(val.string));
         }
         shput(*mapPtr, key, val);
         // The RValue is now "owned" by the map, we do not need to free it!
@@ -1286,7 +1286,7 @@ static RValue builtinDsMapSet([[maybe_unused]] VMContext* ctx, RValue* args, int
 
     RValue val = args[2];
     if (val.type == RVALUE_STRING && val.string != nullptr) {
-        val = RValue_makeOwnedString(strdup(val.string));
+        val = RValue_makeOwnedString(safeStrdup(val.string));
     }
 
     shput(*mapPtr, key, val);
@@ -1317,7 +1317,7 @@ static RValue builtinDsMapFindValue([[maybe_unused]] VMContext* ctx, RValue* arg
     if (0 > idx) return RValue_makeUndefined();
     RValue val = (*mapPtr)[idx].value;
     if (val.type == RVALUE_STRING && val.string != nullptr) {
-        return RValue_makeOwnedString(strdup(val.string));
+        return RValue_makeOwnedString(safeStrdup(val.string));
     }
     return val;
 }
@@ -1339,7 +1339,7 @@ static RValue builtinDsMapFindFirst([[maybe_unused]] VMContext* ctx, RValue* arg
     int32_t id = RValue_toInt32(args[0]);
     DsMapEntry** mapPtr = dsMapGet(id);
     if (mapPtr == nullptr || shlen(*mapPtr) == 0) return RValue_makeUndefined();
-    return RValue_makeOwnedString(strdup((*mapPtr)[0].key));
+    return RValue_makeOwnedString(safeStrdup((*mapPtr)[0].key));
 }
 
 static RValue builtinDsMapFindNext([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
@@ -1352,7 +1352,7 @@ static RValue builtinDsMapFindNext([[maybe_unused]] VMContext* ctx, RValue* args
     ptrdiff_t idx = shgeti(*mapPtr, prevKey);
     free(prevKey);
     if (0 > idx || idx + 1 >= shlen(*mapPtr)) return RValue_makeUndefined();
-    return RValue_makeOwnedString(strdup((*mapPtr)[idx + 1].key));
+    return RValue_makeOwnedString(safeStrdup((*mapPtr)[idx + 1].key));
 }
 
 static RValue builtinDsMapSize([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
@@ -1392,7 +1392,7 @@ static RValue builtinDsListAdd([[maybe_unused]] VMContext* ctx, RValue* args, in
     repeat(argCount - 1, i) {
         RValue val = args[i + 1];
         if (val.type == RVALUE_STRING) {
-            val = RValue_makeOwnedString(strdup(val.string));
+            val = RValue_makeOwnedString(safeStrdup(val.string));
         }
         arrput(list->items, val);
     }
@@ -1734,7 +1734,7 @@ static RValue builtinIniOpen(VMContext* ctx, RValue* args, int32_t argCount) {
     Runner* runner = (Runner*) ctx->runner;
     FileSystem* fs = runner->fileSystem;
 
-    currentIniPath = strdup(path);
+    currentIniPath = safeStrdup(path);
 
     char* content = fs->vtable->readFileText(fs, path);
     if (content != nullptr) {
@@ -1775,19 +1775,19 @@ static RValue builtinIniClose(VMContext* ctx, [[maybe_unused]] RValue* args, [[m
 }
 
 static RValue builtinIniReadString([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (3 > argCount || currentIni == nullptr) return RValue_makeOwnedString(strdup(""));
+    if (3 > argCount || currentIni == nullptr) return RValue_makeOwnedString(safeStrdup(""));
 
     const char* section = (args[0].type == RVALUE_STRING ? args[0].string : "");
     const char* key = (args[1].type == RVALUE_STRING ? args[1].string : "");
 
     const char* value = Ini_getString(currentIni, section, key);
     if (value != nullptr) {
-        return RValue_makeOwnedString(strdup(value));
+        return RValue_makeOwnedString(safeStrdup(value));
     }
 
     // Return the default value (3rd arg)
     if (args[2].type == RVALUE_STRING && args[2].string != nullptr) {
-        return RValue_makeOwnedString(strdup(args[2].string));
+        return RValue_makeOwnedString(safeStrdup(args[2].string));
     }
     char* str = RValue_toString(args[2]);
     return RValue_makeOwnedString(str);
@@ -1884,7 +1884,7 @@ static RValue builtinFileTextOpenRead(VMContext* ctx, RValue* args, int32_t argC
     char* content = fs->vtable->readFileText(fs, path);
     if (content == nullptr) {
         // GML returns a valid handle even if the file doesn't exist; eof is immediately true
-        content = strdup("");
+        content = safeStrdup("");
     }
 
     openTextFiles[slot] = (OpenTextFile) {
@@ -1913,8 +1913,8 @@ static RValue builtinFileTextOpenWrite(VMContext* ctx, RValue* args, int32_t arg
 
     openTextFiles[slot] = (OpenTextFile) {
         .content = nullptr,
-        .writeBuffer = strdup(""),
-        .filePath = strdup(path),
+        .writeBuffer = safeStrdup(""),
+        .filePath = safeStrdup(path),
         .readPos = 0,
         .contentLen = 0,
         .isWriteMode = true,
@@ -1944,12 +1944,12 @@ static RValue builtinFileTextClose(VMContext* ctx, RValue* args, int32_t argCoun
 }
 
 static RValue builtinFileTextReadString([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount) return RValue_makeOwnedString(strdup(""));
+    if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
     int32_t handle = RValue_toInt32(args[0]);
-    if (0 > handle || handle >= MAX_OPEN_TEXT_FILES || !openTextFiles[handle].isOpen) return RValue_makeOwnedString(strdup(""));
+    if (0 > handle || handle >= MAX_OPEN_TEXT_FILES || !openTextFiles[handle].isOpen) return RValue_makeOwnedString(safeStrdup(""));
 
     OpenTextFile* file = &openTextFiles[handle];
-    if (file->readPos >= file->contentLen) return RValue_makeOwnedString(strdup(""));
+    if (file->readPos >= file->contentLen) return RValue_makeOwnedString(safeStrdup(""));
 
     // Read until newline, carriage return, or EOF (does NOT consume the newline)
     int32_t start = file->readPos;
@@ -1968,9 +1968,9 @@ static RValue builtinFileTextReadString([[maybe_unused]] VMContext* ctx, RValue*
 }
 
 static RValue builtinFileTextReadln([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount) return RValue_makeOwnedString(strdup(""));
+    if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
     int32_t handle = RValue_toInt32(args[0]);
-    if (0 > handle || MAX_OPEN_TEXT_FILES <= handle || !openTextFiles[handle].isOpen) return RValue_makeOwnedString(strdup(""));
+    if (0 > handle || MAX_OPEN_TEXT_FILES <= handle || !openTextFiles[handle].isOpen) return RValue_makeOwnedString(safeStrdup(""));
 
     OpenTextFile* file = &openTextFiles[handle];
 
@@ -1989,7 +1989,7 @@ static RValue builtinFileTextReadln([[maybe_unused]] VMContext* ctx, RValue* arg
         }
     }
 
-    return RValue_makeOwnedString(strdup(""));
+    return RValue_makeOwnedString(safeStrdup(""));
 }
 
 static RValue builtinFileTextReadReal([[maybe_unused]] VMContext* ctx, RValue* args, int32_t argCount) {

@@ -70,24 +70,24 @@ static char* RValue_toString(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:
             snprintf(buf, sizeof(buf), "%.16g", val.real);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_INT32:
             snprintf(buf, sizeof(buf), "%d", val.int32);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_INT64:
             snprintf(buf, sizeof(buf), "%lld", (long long) val.int64);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_STRING:
-            return strdup(val.string != nullptr ? val.string : "");
+            return safeStrdup(val.string != nullptr ? val.string : "");
         case RVALUE_BOOL:
-            return strdup(val.int32 ? "1" : "0");
+            return safeStrdup(val.int32 ? "1" : "0");
         case RVALUE_UNDEFINED:
-            return strdup("undefined");
+            return safeStrdup("undefined");
         case RVALUE_ARRAY_REF:
             snprintf(buf, sizeof(buf), "<array_ref:%d>", val.int32);
-            return strdup(buf);
+            return safeStrdup(buf);
     }
-    return strdup("");
+    return safeStrdup("");
 }
 
 // Converts an RValue to a heap-allocated string representation, used for debug logs.
@@ -120,13 +120,13 @@ static char* RValue_toStringTyped(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:
             snprintf(buf, sizeof(buf), "real(%.16g)", val.real);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_INT32:
             snprintf(buf, sizeof(buf), "int32(%d)", val.int32);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_INT64:
             snprintf(buf, sizeof(buf), "int64(%lld)", (long long) val.int64);
-            return strdup(buf);
+            return safeStrdup(buf);
         case RVALUE_STRING: {
             const char* str = val.string != nullptr ? val.string : "";
             size_t needed = strlen(str) + 3;
@@ -135,14 +135,14 @@ static char* RValue_toStringTyped(RValue val) {
             return result;
         }
         case RVALUE_BOOL:
-            return strdup(val.int32 ? "bool(true)" : "bool(false)");
+            return safeStrdup(val.int32 ? "bool(true)" : "bool(false)");
         case RVALUE_UNDEFINED:
-            return strdup("undefined");
+            return safeStrdup("undefined");
         case RVALUE_ARRAY_REF:
             snprintf(buf, sizeof(buf), "<array_ref:%d>", val.int32);
-            return strdup(buf);
+            return safeStrdup(buf);
     }
-    return strdup("???");
+    return safeStrdup("???");
 }
 
 static void RValue_free(RValue* val) {
