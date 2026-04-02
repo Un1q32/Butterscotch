@@ -3177,7 +3177,9 @@ static RValue builtin_drawTextColor(VMContext* ctx, RValue* args, [[maybe_unused
     int32_t c4 = (float) RValue_toInt32(args[6]);
     float alpha = (float) RValue_toReal(args[7]);
 
-    runner->renderer->vtable->drawTextColor(runner->renderer, str, x, y, 1.0f, 1.0f, 0.0f, c1, c2, c3, c4, alpha);
+    char* processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
+    runner->renderer->vtable->drawTextColor(runner->renderer, processedText, x, y, 1.0f, 1.0f, 0.0f, c1, c2, c3, c4, alpha);
+    free(processedText);
     free(str);
     return RValue_makeUndefined();
 }
@@ -3198,7 +3200,9 @@ static RValue builtin_drawTextColorTransformed(VMContext* ctx, RValue* args, [[m
     int32_t c4 = (float) RValue_toInt32(args[9]);
     float alpha = (float) RValue_toReal(args[10]);
 
-    runner->renderer->vtable->drawTextColor(runner->renderer, str, x, y, xscale, yscale, angle, c1, c2, c3, c4, alpha);
+    char* processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
+    runner->renderer->vtable->drawTextColor(runner->renderer, processedText, x, y, xscale, yscale, angle, c1, c2, c3, c4, alpha);
+    free(processedText);
     free(str);
     return RValue_makeUndefined();
 }

@@ -1247,12 +1247,10 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
     uint8_t a = alphaToGS(renderer->drawAlpha);
     u64 textColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
 
-    // Preprocess GML text (# -> \n, \# -> #)
-    char* processed = TextUtils_preprocessGmlText(text);
-    int32_t textLen = (int32_t) strlen(processed);
+    int32_t textLen = (int32_t) strlen(text);
 
     // Vertical alignment
-    int32_t lineCount = TextUtils_countLines(processed, textLen);
+    int32_t lineCount = TextUtils_countLines(text, textLen);
     float totalHeight = (float) lineCount * (float) font->emSize;
     float valignOffset = 0;
     if (renderer->drawValign == 1) valignOffset = -totalHeight / 2.0f;
@@ -1264,12 +1262,12 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
     while (textLen >= lineStart) {
         // Find end of current line
         int32_t lineEnd = lineStart;
-        while (textLen > lineEnd && !TextUtils_isNewlineChar(processed[lineEnd])) {
+        while (textLen > lineEnd && !TextUtils_isNewlineChar(text[lineEnd])) {
             lineEnd++;
         }
 
         int32_t lineLen = lineEnd - lineStart;
-        const char* line = processed + lineStart;
+        const char* line = text + lineStart;
 
         // Horizontal alignment
         float lineWidth = TextUtils_measureLineWidth(font, line, lineLen);
@@ -1327,13 +1325,11 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
         // Next line
         cursorY += (float) font->emSize;
         if (textLen > lineEnd) {
-            lineStart = TextUtils_skipNewline(processed, lineEnd, textLen);
+            lineStart = TextUtils_skipNewline(text, lineEnd, textLen);
         } else {
             break;
         }
     }
-
-    free(processed);
 }
 
 static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, [[maybe_unused]] float angleDeg, int32_t _c1, int32_t _c2, int32_t _c3, int32_t _c4, float alpha) {
@@ -1366,13 +1362,11 @@ static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float
         }
     }
 
-    // Preprocess GML text (# -> \n, \# -> #)
-    char* processed = TextUtils_preprocessGmlText(text);
-    int32_t textLen = (int32_t) strlen(processed);
+    int32_t textLen = (int32_t) strlen(text);
     if(textLen == 0) return;
 
     // Vertical alignment
-    int32_t lineCount = TextUtils_countLines(processed, textLen);
+    int32_t lineCount = TextUtils_countLines(text, textLen);
     float totalHeight = (float) lineCount * (float) font->emSize;
     float valignOffset = 0;
     if (renderer->drawValign == 1) valignOffset = -totalHeight / 2.0f;
@@ -1418,12 +1412,12 @@ static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float
 
         // Find end of current line
         int32_t lineEnd = lineStart;
-        while (textLen > lineEnd && !TextUtils_isNewlineChar(processed[lineEnd])) {
+        while (textLen > lineEnd && !TextUtils_isNewlineChar(text[lineEnd])) {
             lineEnd++;
         }
 
         int32_t lineLen = lineEnd - lineStart;
-        const char* line = processed + lineStart;
+        const char* line = text + lineStart;
 
         // Horizontal alignment
         float lineWidth = TextUtils_measureLineWidth(font, line, lineLen);
@@ -1517,15 +1511,13 @@ static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float
         // Next line
         cursorY += (float) font->emSize;
         if (textLen > lineEnd) {
-            lineStart = TextUtils_skipNewline(processed, lineEnd, textLen);
+            lineStart = TextUtils_skipNewline(text, lineEnd, textLen);
         } else {
             break;
         }
         c4 = c3;    // set left edge to be what the last right edge was....
 		c1 = c2;    //
     }
-
-    free(processed);
 }
 
 static void gsDrawTriangle(Renderer *renderer, float x1, float y1, float x2, float y2, float x3, float y3, bool outline)
