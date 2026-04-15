@@ -495,27 +495,6 @@ int main(int argc, char* argv[]) {
     // Initialize the file system
     GlfwFileSystem* glfwFileSystem = GlfwFileSystem_create(args.dataWinPath);
 
-    // Initialize the runner
-    Runner* runner = Runner_create(dataWin, vm, (FileSystem*) glfwFileSystem);
-    runner->debugMode = args.debug;
-
-    // Set up input recording/playback (both can be active: playback then continue recording)
-    if (args.playbackInputsPath != nullptr) {
-        globalInputRecording = InputRecording_createPlayer(args.playbackInputsPath, args.recordInputsPath);
-    } else if (args.recordInputsPath != nullptr) {
-        globalInputRecording = InputRecording_createRecorder(args.recordInputsPath);
-    }
-    shcopyFromTo(args.varReadsToBeTraced, runner->vmContext->varReadsToBeTraced);
-    shcopyFromTo(args.varWritesToBeTraced, runner->vmContext->varWritesToBeTraced);
-    shcopyFromTo(args.functionCallsToBeTraced, runner->vmContext->functionCallsToBeTraced);
-    shcopyFromTo(args.alarmsToBeTraced, runner->vmContext->alarmsToBeTraced);
-    shcopyFromTo(args.instanceLifecyclesToBeTraced, runner->vmContext->instanceLifecyclesToBeTraced);
-    shcopyFromTo(args.eventsToBeTraced, runner->vmContext->eventsToBeTraced);
-    shcopyFromTo(args.opcodesToBeTraced, runner->vmContext->opcodesToBeTraced);
-    shcopyFromTo(args.stackToBeTraced, runner->vmContext->stackToBeTraced);
-    shcopyFromTo(args.tilesToBeTraced, runner->vmContext->tilesToBeTraced);
-    runner->vmContext->traceEventInherited = args.traceEventInherited;
-
     // Init GLFW
     if(strcmp(args.renderer, "legacy-gl") == 0)
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
@@ -559,22 +538,34 @@ int main(int argc, char* argv[]) {
     else
         renderer = GLRenderer_create();
 
-    renderer->vtable->init(renderer, dataWin);
-    runner->renderer = renderer;
-
     // Initialize the audio system
-    MaAudioSystem* maAudio = nullptr;
+    AudioSystem* audioSystem = nullptr;
     if (!args.headless) {
-        maAudio = MaAudioSystem_create();
-        AudioSystem* audioSystem = (AudioSystem*) maAudio;
-        audioSystem->vtable->init(audioSystem, dataWin, (FileSystem*) glfwFileSystem);
-        runner->audioSystem = audioSystem;
+        audioSystem = (AudioSystem*) MaAudioSystem_create();
     } else {
-        NoopAudioSystem* noopAudio = NoopAudioSystem_create();
-        AudioSystem* audioSystem = (AudioSystem*) noopAudio;
-        audioSystem->vtable->init(audioSystem, dataWin, (FileSystem*) glfwFileSystem);
-        runner->audioSystem = audioSystem;
+        audioSystem = (AudioSystem*) NoopAudioSystem_create();
     }
+
+    // Initialize the runner
+    Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) glfwFileSystem, audioSystem);
+    runner->debugMode = args.debug;
+
+    // Set up input recording/playback (both can be active: playback then continue recording)
+    if (args.playbackInputsPath != nullptr) {
+        globalInputRecording = InputRecording_createPlayer(args.playbackInputsPath, args.recordInputsPath);
+    } else if (args.recordInputsPath != nullptr) {
+        globalInputRecording = InputRecording_createRecorder(args.recordInputsPath);
+    }
+    shcopyFromTo(args.varReadsToBeTraced, runner->vmContext->varReadsToBeTraced);
+    shcopyFromTo(args.varWritesToBeTraced, runner->vmContext->varWritesToBeTraced);
+    shcopyFromTo(args.functionCallsToBeTraced, runner->vmContext->functionCallsToBeTraced);
+    shcopyFromTo(args.alarmsToBeTraced, runner->vmContext->alarmsToBeTraced);
+    shcopyFromTo(args.instanceLifecyclesToBeTraced, runner->vmContext->instanceLifecyclesToBeTraced);
+    shcopyFromTo(args.eventsToBeTraced, runner->vmContext->eventsToBeTraced);
+    shcopyFromTo(args.opcodesToBeTraced, runner->vmContext->opcodesToBeTraced);
+    shcopyFromTo(args.stackToBeTraced, runner->vmContext->stackToBeTraced);
+    shcopyFromTo(args.tilesToBeTraced, runner->vmContext->tilesToBeTraced);
+    runner->vmContext->traceEventInherited = args.traceEventInherited;
 
     // Set up keyboard input
     glfwSetWindowUserPointer(window, runner);

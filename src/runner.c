@@ -854,15 +854,22 @@ void Runner_reset(Runner* runner) {
     runner->currentRoomOrderPosition = -1;
     runner->nextInstanceId = runner->dataWin->gen8.lastObj + 1;
     runner->savedRoomStates = safeCalloc(runner->dataWin->room.count, sizeof(SavedRoomState));
-    if (runner->audioSystem != nullptr)
-        runner->audioSystem->vtable->stopAll(runner->audioSystem);
+    runner->audioSystem->vtable->stopAll(runner->audioSystem);
 }
 
-Runner* Runner_create(DataWin* dataWin, VMContext* vm, FileSystem* fileSystem) {
+Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileSystem* fileSystem, AudioSystem* audioSystem) {
+    requireNotNull(dataWin);
+    requireNotNull(vm);
+    requireNotNull(renderer);
+    requireNotNull(fileSystem);
+    requireNotNull(audioSystem);
+
     Runner* runner = safeCalloc(1, sizeof(Runner));
     runner->dataWin = dataWin;
     runner->vmContext = vm;
+    runner->renderer = renderer;
     runner->fileSystem = fileSystem;
+    runner->audioSystem = audioSystem;
     runner->frameCount = 0;
     runner->isGMS2 = (dataWin->gen8.major >= 2);
     runner->keyboard = RunnerKeyboard_create();
@@ -871,6 +878,9 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, FileSystem* fileSystem) {
 
     // Link runner to VM context
     vm->runner = (struct Runner*) runner;
+
+    renderer->vtable->init(renderer, dataWin);
+    audioSystem->vtable->init(audioSystem, dataWin, fileSystem);
 
     return runner;
 }

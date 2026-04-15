@@ -388,12 +388,6 @@ int main(int argc, char* argv[]) {
         int32_t freeBytes = MAX_MEMORY_BYTES - usedBytes;
         printf("Memory after data.win parsing: used=%d bytes (%.1f KB), total=%d bytes (%.1f KB), free=%d bytes (%.1f KB)\n", usedBytes, usedBytes / 1024.0f, MAX_MEMORY_BYTES, MAX_MEMORY_BYTES / 1024.0f, freeBytes, freeBytes / 1024.0f);
     }
-    // ===[ Create texture cache and renderer ]===
-    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Creating renderer...", &loadingState);
-
-    Renderer* renderer = GsRenderer_create(gsGlobal);
-
-    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Creating VM and runner...", &loadingState);
 
     // ===[ Load CONFIG.JSN ]===
     drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Loading CONFIG.JSN...", &loadingState);
@@ -428,8 +422,27 @@ int main(int argc, char* argv[]) {
         while (true) {}
     }
 
+    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Creating VM...", &loadingState);
+
     VMContext* vm = VM_create(dataWin);
-    Runner* runner = Runner_create(dataWin, vm, fileSystem);
+
+    // ===[ Initialize Renderer ]===
+    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Initializing renderer...", &loadingState);
+
+    Renderer* renderer = GsRenderer_create(gsGlobal);
+
+    // ===[ Initialize Audio System ]===
+#ifndef DISABLE_PS2_AUDIO
+    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Initializing audio...", &loadingState);
+    Ps2AudioSystem* ps2Audio = Ps2AudioSystem_create();
+    AudioSystem* audioSystem = (AudioSystem*) ps2Audio;
+#else
+    AudioSystem* audioSystem = (AudioSystem*) NoopAudioSystem_create();
+#endif
+
+    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Creating runner...", &loadingState);
+
+    Runner* runner = Runner_create(dataWin, vm, renderer, fileSystem, audioSystem);
 
     // Parse disabledObjects from CONFIG.JSN
     JsonValue* disabledObjectsArr = JsonReader_getObject(configRoot, "disabledObjects");
@@ -466,22 +479,6 @@ int main(int argc, char* argv[]) {
         int32_t freeBytes = MAX_MEMORY_BYTES - usedBytes;
         printf("Memory after VM and runner creation: used=%d bytes (%.1f KB), total=%d bytes (%.1f KB), free=%d bytes (%.1f KB)\n", usedBytes, usedBytes / 1024.0f, MAX_MEMORY_BYTES, MAX_MEMORY_BYTES / 1024.0f, freeBytes, freeBytes / 1024.0f);
     }
-
-    runner->renderer = renderer;
-
-    // ===[ Initialize Audio System ]===
-#ifndef DISABLE_PS2_AUDIO
-    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Initializing audio...", &loadingState);
-    Ps2AudioSystem* ps2Audio = Ps2AudioSystem_create();
-    AudioSystem* audioSystem = (AudioSystem*) ps2Audio;
-    audioSystem->vtable->init(audioSystem, dataWin, fileSystem);
-    runner->audioSystem = audioSystem;
-#else
-    runner->audioSystem = (AudioSystem*) NoopAudioSystem_create();
-#endif
-
-    drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Initializing renderer...", &loadingState);
-    renderer->vtable->init(renderer, dataWin);
 
     drawStatusScreen(gsGlobal, gsFontM, dataWin->gen8.displayName, "Initializing first room...", &loadingState);
     Runner_initFirstRoom(runner);
