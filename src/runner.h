@@ -80,6 +80,44 @@ typedef struct {
     RValue* items; // stb_ds dynamic array of RValues
 } DsList;
 
+// ===[ GML Buffer System ]===
+
+// Buffer type constants (matching GML)
+#define GML_BUFFER_FIXED 0
+#define GML_BUFFER_GROW  1
+#define GML_BUFFER_WRAP  2
+#define GML_BUFFER_FAST  3
+
+// Buffer data type constants (matching GML)
+#define GML_BUFTYPE_U8      1
+#define GML_BUFTYPE_S8      2
+#define GML_BUFTYPE_U16     3
+#define GML_BUFTYPE_S16     4
+#define GML_BUFTYPE_U32     5
+#define GML_BUFTYPE_S32     6
+#define GML_BUFTYPE_F16     7
+#define GML_BUFTYPE_F32     8
+#define GML_BUFTYPE_F64     9
+#define GML_BUFTYPE_BOOL   10
+#define GML_BUFTYPE_STRING 11
+#define GML_BUFTYPE_U64    12
+#define GML_BUFTYPE_TEXT   13
+
+// Buffer seek mode constants (matching GML)
+#define GML_BUFFER_SEEK_START    0
+#define GML_BUFFER_SEEK_RELATIVE 1
+#define GML_BUFFER_SEEK_END      2
+
+typedef struct {
+    uint8_t* data;       // raw byte storage
+    int32_t size;        // allocated size in bytes
+    int32_t position;    // current read/write cursor
+    int32_t usedSize;    // high-water mark for grow buffers
+    int32_t alignment;   // byte alignment for read/write operations
+    int32_t type;        // GML_BUFFER_FIXED, _GROW, _WRAP, _FAST
+    bool isValid;        // false after buffer_delete (tombstone)
+} GmlBuffer;
+
 // Open text file handle for GML file_text_* functions
 #define MAX_OPEN_TEXT_FILES 32
 typedef struct {
@@ -142,6 +180,7 @@ typedef struct Runner {
     // ===[ Builtin function state ]===
     DsMapEntry** dsMapPool; // stb_ds array of stb_ds hashmaps
     DsList* dsListPool; // stb_ds array of DsList
+    GmlBuffer* gmlBufferPool; // stb_ds array of GmlBuffer
 
     // Motion planning potential field settings
     GMLReal mpPotMaxrot;
