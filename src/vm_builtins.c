@@ -1366,21 +1366,47 @@ static RValue builtinVariableGlobalSet(VMContext* ctx, RValue* args, int32_t arg
     return RValue_makeUndefined();
 }
 
+// ===[ METHOD ]===
+
+static RValue builtinMethod(VMContext* ctx, MAYBE_UNUSED RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+
+    int32_t boundInstance = RValue_toInt32(args[0]);
+    int32_t codeIndex = RValue_toInt32(args[1]);
+
+    // If binding to current self (-1), capture the actual instance ID
+    if (boundInstance == -1 && ctx->currentInstance != nullptr) {
+        boundInstance = ((Instance*) ctx->currentInstance)->instanceId;
+    }
+
+    return RValue_makeMethod(codeIndex, boundInstance);
+}
+
 // ===[ SCRIPT EXECUTE ]===
 
 static RValue builtinScriptExecute(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeUndefined();
-    int32_t scriptIdx = RValue_toInt32(args[0]);
 
-    // Look up the script to get its codeId
-    if (scriptIdx < 0 || (uint32_t) scriptIdx >= ctx->dataWin->scpt.count) {
-        fprintf(stderr, "VM: script_execute - invalid script index %d\n", scriptIdx);
-        return RValue_makeUndefined();
+    int32_t codeId;
+
+    if (args[0].type == RVALUE_METHOD) {
+        // If it is a method value, we'll need to extract code index directly
+        codeId = args[0].method.codeIndex;
+    } else {
+        // Numeric script index
+        int32_t scriptIdx = RValue_toInt32(args[0]);
+
+        // Look up the script to get its codeId
+        if (scriptIdx < 0 || (uint32_t) scriptIdx >= ctx->dataWin->scpt.count) {
+            fprintf(stderr, "VM: script_execute - invalid script index %d\n", scriptIdx);
+            return RValue_makeUndefined();
+        }
+
+        codeId = ctx->dataWin->scpt.scripts[scriptIdx].codeId;
     }
 
-    int32_t codeId = ctx->dataWin->scpt.scripts[scriptIdx].codeId;
     if (0 > codeId || ctx->dataWin->code.count <= (uint32_t) codeId) {
-        fprintf(stderr, "VM: script_execute - invalid codeId %d for script %d\n", codeId, scriptIdx);
+        fprintf(stderr, "VM: script_execute - invalid codeId %d\n", codeId);
         return RValue_makeUndefined();
     }
 
@@ -1388,7 +1414,22 @@ static RValue builtinScriptExecute(VMContext* ctx, RValue* args, int32_t argCoun
     RValue* scriptArgs = (argCount > 1) ? &args[1] : nullptr;
     int32_t scriptArgCount = argCount - 1;
 
-    return VM_callCodeIndex(ctx, codeId, scriptArgs, scriptArgCount);
+    // If the method has a bound instance, temporarily swap currentInstance
+    Instance* savedInstance = (Instance*) ctx->currentInstance;
+    if (args[0].type == RVALUE_METHOD && args[0].method.boundInstanceId >= 0) {
+        Runner* runner = (Runner*) ctx->runner;
+        repeat(arrlen(runner->instances), i) {
+            if (runner->instances[i]->instanceId == (uint32_t) args[0].method.boundInstanceId) {
+                ctx->currentInstance = runner->instances[i];
+                break;
+            }
+        }
+    }
+
+    RValue result = VM_callCodeIndex(ctx, codeId, scriptArgs, scriptArgCount);
+
+    ctx->currentInstance = savedInstance;
+    return result;
 }
 
 // ===[ OS FUNCTIONS ]===
@@ -4869,6 +4910,7 @@ void VMBuiltins_registerAll(VMContext* ctx, bool isGMS2) {
 
     // Script
     VM_registerBuiltin(ctx, "script_execute", builtinScriptExecute);
+    VM_registerBuiltin(ctx, "method", builtinMethod);
 
     // OS
     VM_registerBuiltin(ctx, "os_get_language", builtinOsGetLanguage);
