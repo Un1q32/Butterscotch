@@ -1026,27 +1026,31 @@ static RValue builtinDistanceToPoint(VMContext* ctx, RValue* args, int32_t argCo
 
     Instance* inst = ctx->currentInstance;
     int32_t sprIdx = (inst->maskIndex >= 0) ? inst->maskIndex : inst->spriteIndex;
+
+    // Compute bounding box
+    GMLReal bboxLeft, bboxRight, bboxTop, bboxBottom;
     if (0 > sprIdx || (uint32_t) sprIdx >= ctx->dataWin->sprt.count) {
-        return RValue_makeReal(0.0);
-    }
-
-    Sprite* spr = &ctx->dataWin->sprt.sprites[sprIdx];
-
-    // Compute bounding box (no-rotation path)
-    GMLReal bboxLeft = inst->x + inst->imageXscale * (spr->marginLeft - spr->originX);
-    GMLReal bboxRight = inst->x + inst->imageXscale * ((spr->marginRight + 1) - spr->originX);
-    if (bboxLeft > bboxRight) {
-        GMLReal t = bboxLeft;
-        bboxLeft = bboxRight;
-        bboxRight = t;
-    }
-
-    GMLReal bboxTop = inst->y + inst->imageYscale * (spr->marginTop - spr->originY);
-    GMLReal bboxBottom = inst->y + inst->imageYscale * ((spr->marginBottom + 1) - spr->originY);
-    if (bboxTop > bboxBottom) {
-        GMLReal t = bboxTop;
-        bboxTop = bboxBottom;
-        bboxBottom = t;
+        // No sprite/mask: treat bbox as a single point at (x, y)
+        bboxLeft = inst->x;
+        bboxRight = inst->x;
+        bboxTop = inst->y;
+        bboxBottom = inst->y;
+    } else {
+        Sprite* spr = &ctx->dataWin->sprt.sprites[sprIdx];
+        bboxLeft = inst->x + inst->imageXscale * (spr->marginLeft - spr->originX);
+        bboxRight = inst->x + inst->imageXscale * ((spr->marginRight + 1) - spr->originX);
+        if (bboxLeft > bboxRight) {
+            GMLReal t = bboxLeft;
+            bboxLeft = bboxRight;
+            bboxRight = t;
+        }
+        bboxTop = inst->y + inst->imageYscale * (spr->marginTop - spr->originY);
+        bboxBottom = inst->y + inst->imageYscale * ((spr->marginBottom + 1) - spr->originY);
+        if (bboxTop > bboxBottom) {
+            GMLReal t = bboxTop;
+            bboxTop = bboxBottom;
+            bboxBottom = t;
+        }
     }
 
     // Distance from point to nearest edge of bbox (0 if inside)
