@@ -1599,6 +1599,20 @@ static void handleConv(VMContext* ctx, uint32_t instr) {
     stackPush(ctx, result);
 }
 
+// Tries to parse a string as a real number, mirroring HTML5 yyCompareVal's behavior:
+// trim leading whitespace, then accept a numeric prefix (sign, digits, decimal, exponent).
+// Returns true on success, with the parsed value written to *out.
+static bool tryParseRealFromString(const char* str, GMLReal* out) {
+    if (str == nullptr) return false;
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
+    if (*str == '\0') return false;
+    char* endPtr = nullptr;
+    GMLReal value = GMLReal_strtod(str, &endPtr);
+    if (endPtr == str) return false;
+    *out = value;
+    return true;
+}
+
 static void handleCmp(VMContext* ctx, uint32_t instr) {
     uint8_t cmpKind = instrCmpKind(instr);
     RValue b = stackPop(ctx);
@@ -1616,28 +1630,47 @@ static void handleCmp(VMContext* ctx, uint32_t instr) {
             case CMP_GT:  result = cmp > 0; break;
             default: result = false; break;
         }
-    } else if ((a.type == RVALUE_STRING) != (b.type == RVALUE_STRING)) {
-        // Type mismatch: one side is a string, the other is not.
-        // Because they will never be equal, we'll always return false.
-        switch (cmpKind) {
-            case CMP_EQ:  result = false; break;
-            case CMP_NEQ: result = true;  break;
-            default:      result = false; break;
-        }
     } else {
-        GMLReal da = RValue_toReal(a);
-        GMLReal db = RValue_toReal(b);
-        GMLReal diff = da - db;
-        // GML uses epsilon-based comparison for all numeric CMP operations
-        int cmp = GMLReal_fabs(diff) <= GML_MATH_EPSILON ? 0 : (diff < 0 ? -1 : 1);
-        switch (cmpKind) {
-            case CMP_LT:  result = cmp < 0; break;
-            case CMP_LTE: result = cmp <= 0; break;
-            case CMP_EQ:  result = cmp == 0; break;
-            case CMP_NEQ: result = cmp != 0; break;
-            case CMP_GTE: result = cmp >= 0; break;
-            case CMP_GT:  result = cmp > 0; break;
-            default: result = false; break;
+        // Mixed string/number: coerce strings to reals (matching GameMaker-HTML5 yyCompareVal).
+        // Don't be fooled, this behavior is not a GameMaker-HTML5 (JavaScript) quirk! Some GameMaker games do use this,
+        // such as gml_Object_obj_ch2_scene6_Step_0 in DELTARUNE: Chapter 2, where the c_wait uses a string instead of a number
+        //
+        // If a string side fails to parse as a number, the values are considered incomparable: false for all comparisons except NEQ.
+        bool incomparable = false;
+        GMLReal da = 0.0;
+        GMLReal db = 0.0;
+        if (a.type == RVALUE_STRING) {
+            if (!tryParseRealFromString(a.string, &da)) incomparable = true;
+        } else {
+            da = RValue_toReal(a);
+        }
+        if (!incomparable) {
+            if (b.type == RVALUE_STRING) {
+                if (!tryParseRealFromString(b.string, &db)) incomparable = true;
+            } else {
+                db = RValue_toReal(b);
+            }
+        }
+
+        if (incomparable) {
+            switch (cmpKind) {
+                case CMP_EQ:  result = false; break;
+                case CMP_NEQ: result = true;  break;
+                default:      result = false; break;
+            }
+        } else {
+            GMLReal diff = da - db;
+            // GML uses epsilon-based comparison for all numeric CMP operations
+            int cmp = GMLReal_fabs(diff) <= GML_MATH_EPSILON ? 0 : (diff < 0 ? -1 : 1);
+            switch (cmpKind) {
+                case CMP_LT:  result = cmp < 0; break;
+                case CMP_LTE: result = cmp <= 0; break;
+                case CMP_EQ:  result = cmp == 0; break;
+                case CMP_NEQ: result = cmp != 0; break;
+                case CMP_GTE: result = cmp >= 0; break;
+                case CMP_GT:  result = cmp > 0; break;
+                default: result = false; break;
+            }
         }
     }
 
