@@ -1611,30 +1611,74 @@ static void handleCmp(VMContext* ctx, uint32_t instr) {
     stackPush(ctx,RValue_makeBool(result));
 }
 
+// Converts a native byte count to RValue slot count by walking the stack backwards from a given position.
+static int32_t bytesToSlotCount(VMContext* ctx, int32_t nativeBytes, int32_t stackPos) {
+    int32_t slots = 0;
+    int32_t remaining = nativeBytes;
+    while (remaining > 0) {
+        slots++;
+        require(stackPos >= slots);
+        uint8_t slotGmlType = ctx->stack.slots[stackPos - slots].gmlStackType;
+        remaining -= gmlTypeNativeSize(slotGmlType);
+    }
+    require(remaining == 0); // Byte count must align exactly to slot boundaries
+    return slots;
+}
+
 static void handleDup(VMContext* ctx, uint32_t instr) {
-    uint8_t extra = (uint8_t)(instr & 0xFF);
+    uint16_t operand = (uint16_t)(instr & 0xFFFF);
+    uint8_t type1 = instrType1(instr);
+    int32_t typeSize = gmlTypeNativeSize(type1);
+
+    // Swap mode: bit 15 of operand is set
+    // The Dup instruction doubles as a stack rotation when bit 15 is set.
+    // It takes the top N items and moves them below the next M items.
+    // Bits 0-10: top group size (in native type units)
+    // Bits 11-14: bottom group size (in native type units)
+    if ((operand & 0x8000) != 0) {
+        int32_t topNativeCount = operand & 0x7FF;
+        int32_t bottomNativeCount = (operand >> 11) & 0xF;
+        int32_t topBytes = topNativeCount * typeSize;
+        int32_t bottomBytes = bottomNativeCount * typeSize;
+
+        // Convert byte counts to slot counts
+        int32_t topSlots = bytesToSlotCount(ctx, topBytes, ctx->stack.top);
+        int32_t bottomSlots = bytesToSlotCount(ctx, bottomBytes, ctx->stack.top - topSlots);
+
+        int32_t totalSlots = topSlots + bottomSlots;
+        int32_t baseIdx = ctx->stack.top - totalSlots;
+
+        // Save top group to temp
+        RValue temp[topSlots];
+        for (int32_t i = 0; topSlots > i; i++) {
+            temp[i] = ctx->stack.slots[ctx->stack.top - topSlots + i];
+        }
+
+        // Shift bottom group up to where top group was
+        for (int32_t i = bottomSlots - 1; i >= 0; i--) {
+            ctx->stack.slots[baseIdx + topSlots + i] = ctx->stack.slots[baseIdx + i];
+        }
+
+        // Place top group at the bottom
+        for (int32_t i = 0; topSlots > i; i++) {
+            ctx->stack.slots[baseIdx + i] = temp[i];
+        }
+        return;
+    }
+
+    // Normal dup mode
     int32_t count;
 
     if (ctx->dataWin->gen8.bytecodeVersion >= 17) {
-        // In bytecode 17+, the Dup instruction encodes a byte count in units of the instruction's type1 size: total bytes = (Extra + 1) * typeSize(type1).
+        // In bytecode 17+, the operand encodes a native element count: total bytes = (operand + 1) * typeSize(type1).
         // The native runner's stack stores raw bytes (int=4, double=8, variable=16), but our VM uses uniform RValue slots.
         // We walk backward through the stack, summing each slot's native size (tracked via gmlStackType), to find how many slots correspond to the byte count.
-        uint8_t type1 = instrType1(instr);
-        int32_t totalBytes = ((int32_t) extra + 1) * gmlTypeNativeSize(type1);
+        int32_t totalBytes = ((int32_t)(operand & 0x7FFF) + 1) * typeSize;
 
-        count = 0;
-        int32_t bytesRemaining = totalBytes;
-        while (bytesRemaining > 0) {
-            count++;
-            require(ctx->stack.top >= count);
-            uint8_t slotGmlType = ctx->stack.slots[ctx->stack.top - count].gmlStackType;
-            bytesRemaining -= gmlTypeNativeSize(slotGmlType);
-        }
-
-        require(bytesRemaining == 0); // Byte count must align exactly to slot boundaries
+        count = bytesToSlotCount(ctx, totalBytes, ctx->stack.top);
     } else {
-        // Bytecode 16: Extra directly encodes how many additional items beyond 1 to duplicate (dup.i 0 = duplicate 1 item, dup.i 1 = duplicate 2 items, etc)
-        count = (int32_t) extra + 1;
+        // Bytecode 16: operand directly encodes how many additional items beyond 1 to duplicate (dup.i 0 = duplicate 1 item, dup.i 1 = duplicate 2 items, etc)
+        count = (int32_t)(operand & 0xFF) + 1;
         require(ctx->stack.top >= count);
     }
 
