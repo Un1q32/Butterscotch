@@ -1025,6 +1025,12 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
                 int32_t scope = RValue_toInt32(scopeVal);
                 RValue_free(&firstIndexVal);
                 RValue_free(&scopeVal);
+                // BC17: -9 (INSTANCE_STACKTOP) means "pop again for the real instance ID/object index" (e.g. `other_inst.arr[i][j]`). DR ch1&ch2 only uses -1/-5, but other BC17 games may compile multi-dim access through an instance reference.
+                if (scope == INSTANCE_STACKTOP) {
+                    RValue realInst = stackPop(ctx);
+                    scope = RValue_toInt32(realInst);
+                    RValue_free(&realInst);
+                }
 
                 // Look up the top-level array to find or create the sub-array at firstIndex
                 RValue topRef = RValue_makeGMLArray(varDef->varID, scope);
