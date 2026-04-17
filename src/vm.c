@@ -85,7 +85,9 @@ static void stackPush(VMContext* ctx, RValue val) {
 }
 
 static void stackPushTyped(VMContext* ctx, RValue val, uint8_t gmlStackType) {
-    val.gmlStackType = gmlStackType;
+    if (IS_BC17_OR_HIGHER(ctx)) {
+        val.gmlStackType = gmlStackType;
+    }
     stackPush(ctx, val);
 }
 
@@ -1109,8 +1111,7 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
             } else {
                 RValue val = resolveVariableRead(ctx, instanceType, varRef);
                 // Mark as variable-width (16 bytes on native stack) regardless of the RValue's actual type
-                val.gmlStackType = GML_TYPE_VARIABLE;
-                stackPush(ctx, val);
+                stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
             }
             break;
         }
@@ -1123,8 +1124,7 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
         case GML_TYPE_INT16: {
             int16_t value = (int16_t) (instr & 0xFFFF);
             RValue val = RValue_makeInt32((int32_t) value);
-            val.gmlStackType = GML_TYPE_INT16;
-            stackPush(ctx, val);
+            stackPushTyped(ctx, val, GML_TYPE_INT16);
             break;
         }
         default:
@@ -1149,8 +1149,7 @@ static void handlePushLoc(VMContext* ctx, const uint8_t* extraData) {
         }
     } else {
         RValue val = resolveVariableRead(ctx, INSTANCE_LOCAL, varRef);
-        val.gmlStackType = GML_TYPE_VARIABLE;
-        stackPush(ctx, val);
+        stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
     }
 }
 
@@ -1166,8 +1165,7 @@ static void handlePushGlb(VMContext* ctx, const uint8_t* extraData) {
         }
     } else {
         RValue val = resolveVariableRead(ctx, INSTANCE_GLOBAL, varRef);
-        val.gmlStackType = GML_TYPE_VARIABLE;
-        stackPush(ctx, val);
+        stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
     }
 }
 
@@ -1187,16 +1185,14 @@ static void handlePushBltn(VMContext* ctx, uint32_t instr, const uint8_t* extraD
         stackPush(ctx, RValue_makeGMLArray(varDef->varID, scope));
     } else {
         RValue val = resolveVariableRead(ctx, (int32_t) instrInstanceType(instr), varRef);
-        val.gmlStackType = GML_TYPE_VARIABLE;
-        stackPush(ctx, val);
+        stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
     }
 }
 
 static void handlePushI(VMContext* ctx, uint32_t instr) {
     int16_t value = (int16_t) (instr & 0xFFFF);
     RValue val = RValue_makeInt32((int32_t) value);
-    val.gmlStackType = GML_TYPE_INT16;
-    stackPush(ctx, val);
+    stackPushTyped(ctx, val, GML_TYPE_INT16);
 }
 
 static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) {
@@ -1940,8 +1936,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
         }
 #endif
 
-        result.gmlStackType = GML_TYPE_VARIABLE;
-        stackPush(ctx, result);
+        stackPushTyped(ctx, result, GML_TYPE_VARIABLE);
         return;
     }
 
@@ -1966,8 +1961,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
             if (args != stackArgs) free(args);
         }
 
-        result.gmlStackType = GML_TYPE_VARIABLE;
-        stackPush(ctx, result);
+        stackPushTyped(ctx, result, GML_TYPE_VARIABLE);
         return;
     }
 
