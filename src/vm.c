@@ -110,6 +110,14 @@ static RValue stackPop(VMContext* ctx) {
     return val;
 }
 
+// Helper function that calls stackPop and returns the result as an int32_t
+static int32_t stackPopInt32(VMContext* ctx) {
+    RValue rvalue = stackPop(ctx);
+    int32_t value = RValue_toInt32(rvalue);
+    RValue_free(&rvalue);
+    return value;
+}
+
 static RValue* stackPeek(VMContext* ctx) {
     require(ctx->stack.top > 0);
     return &ctx->stack.slots[ctx->stack.top - 1];
@@ -393,10 +401,7 @@ typedef struct {
 } ArrayAccess;
 
 static int32_t resolveInstanceStackTop(VMContext* ctx) {
-    RValue realInst = stackPop(ctx);
-    int32_t instanceType = RValue_toInt32(realInst);
-    RValue_free(&realInst);
-    return instanceType;
+    return stackPopInt32(ctx);
 }
 
 static const char* varTypeToString(uint8_t varType) {
@@ -416,13 +421,8 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
     uint8_t varType = (varRef >> 24) & 0xF8;
     if (varType == VARTYPE_ARRAY) {
         // For array reads, GMS pushes: instanceType then arrayIndex (arrayIndex on top)
-        RValue indexVal = stackPop(ctx);
-        int32_t arrayIndex = RValue_toInt32(indexVal);
-        RValue_free(&indexVal);
-
-        RValue instTypeVal = stackPop(ctx);
-        int32_t instanceType = RValue_toInt32(instTypeVal);
-        RValue_free(&instTypeVal);
+        int32_t arrayIndex = stackPopInt32(ctx);
+        int32_t instanceType = stackPopInt32(ctx);
 
         // BC17: if instanceType is -9 (INSTANCE_STACKTOP), the actual instance is the next stack item.
         // This is used for chained access like `command_actor[i].specialsprite[arg]` where the array variable's owning instance is resolved from a computed value on the stack.
@@ -433,9 +433,8 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
         return (ArrayAccess){ .arrayIndex = arrayIndex, .instanceType = instanceType, .isArray = true, .hasInstanceType = true };
     }
     if (varType == VARTYPE_STACKTOP) {
-        RValue stacktop = stackPop(ctx);
-        int32_t instanceType = RValue_toInt32(stacktop);
-        RValue_free(&stacktop);
+        int32_t instanceType = stackPopInt32(ctx);
+
         // BC17: PushI.e -9 (INSTANCE_STACKTOP) is pushed before the Pop instruction.
         // When we pop -9, it means "the real instance type is the next item on the stack".
         if (IS_BC17_OR_HIGHER(ctx) && instanceType == INSTANCE_STACKTOP) {
@@ -1042,12 +1041,8 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
                 // We resolve the variable's top-level array slot, materialise it if needed, then drill into arr->data[firstIndex] (materialising a sub-array there too).
                 // The sub-array is pushed as a weak ref; subsequent BREAK_PUSHAC/PUSHAF/POPAF consume it.
                 Variable* varDef = resolveVarDef(ctx, varRef);
-                RValue firstIndexVal = stackPop(ctx);
-                RValue scopeVal = stackPop(ctx);
-                int32_t firstIndex = RValue_toInt32(firstIndexVal);
-                int32_t scope = RValue_toInt32(scopeVal);
-                RValue_free(&firstIndexVal);
-                RValue_free(&scopeVal);
+                int32_t firstIndex = stackPopInt32(ctx);
+                int32_t scope = stackPopInt32(ctx);
                 if (IS_BC17_OR_HIGHER(ctx) && scope == INSTANCE_STACKTOP) {
                     scope = resolveInstanceStackTop(ctx);
                 }
@@ -1240,13 +1235,8 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
     if (varType == VARTYPE_ARRAY) {
         if (type1 == GML_TYPE_VARIABLE) {
             // Simple assignment (Pop.v.v): stack bottom-to-top = [value, (realInstance,) instanceType, arrayIndex]
-            RValue arrayIdxVal = stackPop(ctx);
-            arrayIndex = RValue_toInt32(arrayIdxVal);
-            RValue_free(&arrayIdxVal);
-
-            RValue instTypeVal = stackPop(ctx);
-            instanceType = RValue_toInt32(instTypeVal);
-            RValue_free(&instTypeVal);
+            arrayIndex = stackPopInt32(ctx);
+            instanceType = stackPopInt32(ctx);
 
             // BC17: -9 (INSTANCE_STACKTOP) means "pop again for the real instance ID/object index" (e.g. `su_actor.specialsprite[0] = ...`)
             if (IS_BC17_OR_HIGHER(ctx) && instanceType == INSTANCE_STACKTOP) {
@@ -1258,13 +1248,8 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
             // Compound assignment (Pop.i.v, etc.): stack bottom-to-top = [(realInstance,) instanceType, arrayIndex, value]
             val = stackPop(ctx);
 
-            RValue arrayIdxVal = stackPop(ctx);
-            arrayIndex = RValue_toInt32(arrayIdxVal);
-            RValue_free(&arrayIdxVal);
-
-            RValue instTypeVal = stackPop(ctx);
-            instanceType = RValue_toInt32(instTypeVal);
-            RValue_free(&instTypeVal);
+            arrayIndex = stackPopInt32(ctx);
+            instanceType = stackPopInt32(ctx);
 
             // BC17: -9 (INSTANCE_STACKTOP) means "pop again for the real instance ID/object index"
             if (IS_BC17_OR_HIGHER(ctx) && instanceType == INSTANCE_STACKTOP) {
@@ -1274,9 +1259,8 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
     } else if (varType == VARTYPE_STACKTOP && type1 == GML_TYPE_VARIABLE) {
         // Simple assignment (Pop.v.v) with STACKTOP: stack bottom-to-top = [value, instanceType]
         // Pop instanceType first (top), then value (bottom)
-        RValue instTypeVal = stackPop(ctx);
-        instanceType = RValue_toInt32(instTypeVal);
-        RValue_free(&instTypeVal);
+        instanceType = stackPopInt32(ctx);
+
         // BC17: -9 (INSTANCE_STACKTOP) means "pop again for the real instance type"
         if (IS_BC17_OR_HIGHER(ctx) && instanceType == INSTANCE_STACKTOP) {
             instanceType = resolveInstanceStackTop(ctx);
@@ -1553,11 +1537,9 @@ static void handleMod(VMContext* ctx, uint32_t instr) {
 }
 
 #define SIMPLE_BYTECODE_BITWISE_OPERATION(op) \
-    RValue b = stackPop(ctx); \
-    RValue a = stackPop(ctx); \
-    int32_t result = RValue_toInt32(a) op RValue_toInt32(b); \
-    RValue_free(&a); \
-    RValue_free(&b); \
+    int32_t b = stackPopInt32(ctx); \
+    int32_t a = stackPopInt32(ctx); \
+    int32_t result = a op b; \
     stackPushTyped(ctx, RValue_makeInt32(result), instrType2(instr))
 
 static void handleAnd(VMContext* ctx, uint32_t instr) {
@@ -1581,16 +1563,14 @@ static void handleNeg(VMContext* ctx, uint32_t instr) {
 
 static void handleNot(VMContext* ctx, uint32_t instr) {
     uint8_t resultType = instrType1(instr);
-    RValue a = stackPop(ctx);
+    int32_t a = stackPopInt32(ctx);
     if (GML_TYPE_BOOL == resultType) {
         // Logical NOT: compiler emits this for the ! operator on boolean expressions
-        int32_t result = (RValue_toInt32(a) == 0) ? 1 : 0;
-        RValue_free(&a);
+        int32_t result = (a == 0) ? 1 : 0;
         stackPushTyped(ctx, RValue_makeBool(result != 0), resultType);
     } else {
         // Bitwise NOT: used for ~ operator on integer types
-        int32_t result = ~RValue_toInt32(a);
-        RValue_free(&a);
+        int32_t result = ~a;
         stackPushTyped(ctx, RValue_makeInt32(result), resultType);
     }
 }
@@ -1899,9 +1879,7 @@ static void handleBranch(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
 }
 
 static void handleBranchTrue(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
-    RValue val = stackPop(ctx);
-    bool condition = RValue_toInt32(val) != 0;
-    RValue_free(&val);
+    bool condition = stackPopInt32(ctx) != 0;
     if (condition) {
         int32_t offset = instrJumpOffset(instr);
         ctx->ip = instrAddr + offset;
@@ -1909,9 +1887,7 @@ static void handleBranchTrue(VMContext* ctx, uint32_t instr, uint32_t instrAddr)
 }
 
 static void handleBranchFalse(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
-    RValue val = stackPop(ctx);
-    bool condition = RValue_toInt32(val) != 0;
-    RValue_free(&val);
+    bool condition = stackPopInt32(ctx) != 0;
     if (!condition) {
         int32_t offset = instrJumpOffset(instr);
         ctx->ip = instrAddr + offset;
@@ -2075,9 +2051,7 @@ static void handlePushEnv(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
     int32_t jumpOffset = instrJumpOffset(instr);
 
     // Pop target from stack
-    RValue targetVal = stackPop(ctx);
-    int32_t target = RValue_toInt32(targetVal);
-    RValue_free(&targetVal);
+    int32_t target = stackPopInt32(ctx);
     // BC17: -9 (INSTANCE_STACKTOP) means "pop again for the real target"
     if (IS_BC17_OR_HIGHER(ctx) && target == INSTANCE_STACKTOP) {
         target = resolveInstanceStackTop(ctx);
@@ -2411,9 +2385,8 @@ static RValue executeLoop(VMContext* ctx) {
                     }
                     case BREAK_PUSHAF: {
                         // Pop index + array ref, push array[index]. Array ref is a weak RVALUE_ARRAY pointer.
-                        RValue indexVal = stackPop(ctx);
+                        int32_t idx = stackPopInt32(ctx);
                         RValue arrayRef = stackPop(ctx);
-                        int32_t idx = RValue_toInt32(indexVal);
                         RValue result;
                         if (arrayRef.type == RVALUE_ARRAY && arrayRef.array != nullptr && idx >= 0 && idx < arrayRef.array->length) {
                             result = arrayRef.array->data[idx];
@@ -2422,7 +2395,6 @@ static RValue executeLoop(VMContext* ctx) {
                             result = (RValue){ .type = RVALUE_UNDEFINED };
                         }
                         stackPush(ctx, result);
-                        RValue_free(&indexVal);
                         RValue_free(&arrayRef);
                         break;
                     }
@@ -2431,26 +2403,23 @@ static RValue executeLoop(VMContext* ctx) {
                         // CoW via VM_arrayWriteAt requires a slot pointer, since the stack-held arrayRef is a weak view, the real slot is whatever variable holds this array.
                         // We can't easily recover the slot here, so we write directly into the array (no CoW fork at this level, fork already happened when the top-level variable was first written, or on a PUSHAC materialisation).
                         // Assert the array is uniquely-owned or matches the current scope owner. A mismatch here means a shared/aliased array is about to be mutated in place, which silently breaks CoW semantics. BC17+ default mode (pass by reference) is expected to satisfy this since fork already happened at the top-level write. If this fires, a CoW path upstream failed to fork.
-                        RValue indexVal = stackPop(ctx);
+                        int32_t idx = stackPopInt32(ctx);
                         RValue arrayRef = stackPop(ctx);
                         RValue value = stackPop(ctx);
-                        int32_t idx = RValue_toInt32(indexVal);
                         if (arrayRef.type == RVALUE_ARRAY && arrayRef.array != nullptr && idx >= 0) {
                             GMLArray* arr = arrayRef.array;
                             requireMessage(arr->refCount == 1 || arr->owner == ctx->currentArrayOwner, "BREAK_POPAF: Writing through shared/aliased array without prior CoW fork");
                             GMLArray_growTo(arr, idx + 1);
                             storeIntoArraySlot(arr->data, idx, value);
                         }
-                        RValue_free(&indexVal);
                         RValue_free(&arrayRef);
                         RValue_free(&value);
                         break;
                     }
                     case BREAK_PUSHAC: {
                         // Pop index + parent array ref, push sub-array at parent[index]. Materialise a fresh sub-array if the slot isn't already an RVALUE_ARRAY (multi-dim auto-init).
-                        RValue indexVal = stackPop(ctx);
+                        int32_t idx = stackPopInt32(ctx);
                         RValue arrayRef = stackPop(ctx);
-                        int32_t idx = RValue_toInt32(indexVal);
                         if (arrayRef.type != RVALUE_ARRAY || arrayRef.array == nullptr) {
                             fprintf(stderr, "VM: pushac on non-array (type=%d) at offset %u in %s\n", arrayRef.type, instrAddr, ctx->currentCodeName);
                             abort();
@@ -2464,7 +2433,6 @@ static RValue executeLoop(VMContext* ctx) {
                             parent->data[idx] = (RValue){ .array = sub, .type = RVALUE_ARRAY, .ownsString = true, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
                         }
                         stackPush(ctx, RValue_makeArrayWeak(parent->data[idx].array));
-                        RValue_free(&indexVal);
                         RValue_free(&arrayRef);
                         break;
                     }
