@@ -1756,7 +1756,19 @@ static RValue builtinMethod(VMContext* ctx, MAYBE_UNUSED RValue* args, int32_t a
     if (2 > argCount) return RValue_makeUndefined();
 
     int32_t boundInstance = RValue_toInt32(args[0]);
-    int32_t codeIndex = RValue_toInt32(args[1]);
+    int32_t rawArg = RValue_toInt32(args[1]);
+
+    // In GMS2 BC17+, function references are pushed via `Push.i <funcIdx>` where funcIdx is an index into the FUNC chunk (patched in by patchReferenceOperands). Resolve funcIdx -> codeIndex via function name lookup (same flow as Call.i).
+    int32_t codeIndex = rawArg;
+    if (rawArg >= 0 && (uint32_t) rawArg < ctx->dataWin->func.functionCount) {
+        const char* funcName = ctx->dataWin->func.functions[rawArg].name;
+        if (funcName != nullptr) {
+            ptrdiff_t idx = shgeti(ctx->funcMap, (char*) funcName);
+            if (idx >= 0) {
+                codeIndex = ctx->funcMap[idx].value;
+            }
+        }
+    }
 
     // If binding to current self (-1), capture the actual instance ID
     if (boundInstance == -1 && ctx->currentInstance != nullptr) {
