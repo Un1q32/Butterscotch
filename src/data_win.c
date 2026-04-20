@@ -267,10 +267,7 @@ static void parseGEN8(BinaryReader* reader, DataWin* dw) {
 
     // Seed the detected version from GEN8.
     // Later chunk parsers may bump these upward when they identify newer-format features, because since GM:S 2 the value in the GEN8 chunk is not accurate.
-    dw->detectedFormat.major = g->major;
-    dw->detectedFormat.minor = g->minor;
-    dw->detectedFormat.release = g->release;
-    dw->detectedFormat.build = g->build;
+    DataWin_bumpVersionTo(dw, g->major, g->minor, g->release, g->build);
 }
 
 static void parseOPTN(BinaryReader* reader, DataWin* dw) {
@@ -907,6 +904,11 @@ static void parseOBJT(BinaryReader* reader, DataWin* dw) {
         obj->name = readStringPtr(reader, dw);
         obj->spriteId = BinaryReader_readInt32(reader);
         obj->visible = BinaryReader_readBool32(reader);
+        if (DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0)) {
+            obj->managed = BinaryReader_readBool32(reader);
+        } else {
+            obj->managed = false;
+        }
         obj->solid = BinaryReader_readBool32(reader);
         obj->depth = BinaryReader_readInt32(reader);
         obj->persistent = BinaryReader_readBool32(reader);
@@ -1641,6 +1643,27 @@ static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
 
     // Read metadata entries
     bool hasGeneratedMips = DataWin_isVersionAtLeast(dw, 2, 0, 0, 0);
+
+    // Detect GMS 2022.3+ (TextureBlockSize field) and 2022.9+ (Width/Height/IndexInGroup fields) by probing the distance between the first two entry pointers.
+    // Only works when there are at least 2 textures (which is almost always the case for real games).
+    // Layouts:
+    //   pre-2022.3: scaled+generatedMips+blobOffset = 12 bytes
+    //   2022.3+: ... + textureBlockSize = 16 bytes
+    //   2022.9+: ... + width + height + indexInGroup = 28 bytes
+    bool has2022_3 = DataWin_isVersionAtLeast(dw, 2022, 3, 0, 0);
+    bool has2022_9 = DataWin_isVersionAtLeast(dw, 2022, 9, 0, 0);
+    if (count >= 2 && hasGeneratedMips && !has2022_9) {
+        uint32_t diff = ptrs[1] - ptrs[0];
+        if (diff == 28) {
+            DataWin_bumpVersionTo(dw, 2022, 9, 0, 0);
+            has2022_3 = true;
+            has2022_9 = true;
+        } else if (diff == 16 && !has2022_3) {
+            DataWin_bumpVersionTo(dw, 2022, 3, 0, 0);
+            has2022_3 = true;
+        }
+    }
+
     t->textures = safeMalloc(count * sizeof(Texture));
     repeat(count, i) {
         BinaryReader_seek(reader, ptrs[i]);
@@ -1649,6 +1672,20 @@ static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
             t->textures[i].generatedMips = BinaryReader_readUint32(reader);
         } else {
             t->textures[i].generatedMips = 0;
+        }
+        if (has2022_3) {
+            t->textures[i].textureBlockSize = BinaryReader_readUint32(reader);
+        } else {
+            t->textures[i].textureBlockSize = 0;
+        }
+        if (has2022_9) {
+            t->textures[i].textureWidth = BinaryReader_readInt32(reader);
+            t->textures[i].textureHeight = BinaryReader_readInt32(reader);
+            t->textures[i].indexInGroup = BinaryReader_readInt32(reader);
+        } else {
+            t->textures[i].textureWidth = 0;
+            t->textures[i].textureHeight = 0;
+            t->textures[i].indexInGroup = 0;
         }
         t->textures[i].blobOffset = BinaryReader_readUint32(reader);
         t->textures[i].blobData = nullptr;
@@ -1765,6 +1802,20 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         if ((memcmp(chunkName, "CODE", 4) == 0) && chunkLength > 0) {
             codeExists = true;
         }
+
+        // Bump detected version based on chunk presence, so later chunks can use the right version during parsing (parseOBJT needs to know we're >= 2.3 to probe for the GMS 2022.5+ Managed field).
+        if (memcmp(chunkName, "ACRV", 4) == 0 || memcmp(chunkName, "SEQN", 4) == 0 || memcmp(chunkName, "TAGS", 4) == 0) {
+            DataWin_bumpVersionTo(dw, 2, 3, 0, 0);
+        } else if (memcmp(chunkName, "FEDS", 4) == 0) {
+            DataWin_bumpVersionTo(dw, 2, 3, 6, 0);
+        } else if (memcmp(chunkName, "FEAT", 4) == 0) {
+            DataWin_bumpVersionTo(dw, 2022, 8, 0, 0);
+        } else if (memcmp(chunkName, "UILR", 4) == 0) {
+            DataWin_bumpVersionTo(dw, 2024, 13, 0, 0);
+        } else if (memcmp(chunkName, "PSEM", 4) == 0 || memcmp(chunkName, "PSYS", 4) == 0) {
+            DataWin_bumpVersionTo(dw, 2023, 2, 0, 0);
+        }
+
         BinaryReader_seek(&reader, chunkDataStart + chunkLength);
         totalChunks++;
     }

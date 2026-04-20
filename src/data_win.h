@@ -436,6 +436,7 @@ typedef struct {
     const char* name;
     int32_t spriteId;
     bool visible;
+    bool managed; // GMS 2022.5+
     bool solid;
     int32_t depth;
     bool persistent;
@@ -734,6 +735,10 @@ typedef struct {
 typedef struct {
     uint32_t scaled;
     uint32_t generatedMips; // GMS 2.0.6+: number of generated mipmaps (0 for GMS 1.x)
+    uint32_t textureBlockSize; // GMS 2022.3+: size of the texture block (0 for older versions)
+    int32_t textureWidth;  // GMS 2022.9+
+    int32_t textureHeight; // GMS 2022.9+
+    int32_t indexInGroup;  // GMS 2022.9+
     uint32_t blobOffset; // absolute file offset to PNG data
     uint32_t blobSize; // computed size of blob data
     uint8_t* blobData; // owned copy of PNG data
