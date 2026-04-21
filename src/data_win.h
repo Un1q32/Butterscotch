@@ -364,6 +364,12 @@ typedef struct {
     float scaleX;
     float scaleY;
     int32_t ascenderOffset; // bytecodeVersion >= 17 only
+    uint32_t ascender;  // GMS 2022.2+ (0 when absent)
+    uint32_t sdfSpread; // GMS 2023.2 nonLTS+ (0 when absent)
+    uint32_t lineHeight; // GMS 2023.6+ (0 when absent)
+    bool hasAscender;
+    bool hasSDFSpread;
+    bool hasLineHeight;
     uint32_t glyphCount;
     FontGlyph* glyphs;
     uint32_t maxGlyphHeight; // Computed after glyph parse: max sourceHeight across glyphs; HTML5 runner uses this for line stride (see yyFont.TextHeight)

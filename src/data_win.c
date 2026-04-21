@@ -758,6 +758,24 @@ static void parseFONT(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); f->fonts = nullptr; return; }
 
+    // We need to figure out how many uint32 fields are between here and the PointerList
+    uint32_t fontOptionalCount = (dw->gen8.bytecodeVersion >= 17) ? 1u : 0u;
+    {
+        size_t baseAfterScaleY = (size_t) ptrs[0] + 40;
+        for (uint32_t trial = fontOptionalCount; 4 >= trial; trial++) {
+            size_t listStart = baseAfterScaleY + 4u * trial;
+            BinaryReader_seek(reader, listStart);
+            uint32_t probedGlyphCount = BinaryReader_readUint32(reader);
+            if (probedGlyphCount == 0 || probedGlyphCount > 0x10000) continue;
+            uint32_t probedFirstPtr = BinaryReader_readUint32(reader);
+            size_t expectedFirstPtr = listStart + 4u + 4u * probedGlyphCount;
+            if ((size_t) probedFirstPtr == expectedFirstPtr) {
+                fontOptionalCount = trial;
+                break;
+            }
+        }
+    }
+
     f->fonts = safeMalloc(count * sizeof(Font));
     repeat(count, i) {
         BinaryReader_seek(reader, ptrs[i]);
@@ -774,9 +792,34 @@ static void parseFONT(BinaryReader* reader, DataWin* dw) {
         font->textureOffset = BinaryReader_readUint32(reader);
         font->scaleX = BinaryReader_readFloat32(reader);
         font->scaleY = BinaryReader_readFloat32(reader);
-        font->ascenderOffset = 0; // default for BC < 17
-        if (dw->gen8.bytecodeVersion >= 17) {
+        // Optional fields appear in this order when present: AscenderOffset (BC17+),
+        // Ascender, SDFSpread, LineHeight. `fontOptionalCount` says how many are actually on disk.
+        font->ascenderOffset = 0;
+        font->ascender = 0;
+        font->sdfSpread = 0;
+        font->lineHeight = 0;
+        font->hasAscender = false;
+        font->hasSDFSpread = false;
+        font->hasLineHeight = false;
+        uint32_t readSoFar = 0;
+        if (dw->gen8.bytecodeVersion >= 17 && fontOptionalCount > readSoFar) {
             font->ascenderOffset = BinaryReader_readInt32(reader);
+            readSoFar++;
+        }
+        if (fontOptionalCount > readSoFar) {
+            font->ascender = BinaryReader_readUint32(reader);
+            font->hasAscender = true;
+            readSoFar++;
+        }
+        if (fontOptionalCount > readSoFar) {
+            font->sdfSpread = BinaryReader_readUint32(reader);
+            font->hasSDFSpread = true;
+            readSoFar++;
+        }
+        if (fontOptionalCount > readSoFar) {
+            font->lineHeight = BinaryReader_readUint32(reader);
+            font->hasLineHeight = true;
+            readSoFar++;
         }
         font->isSpriteFont = false;
         font->spriteIndex = -1;
