@@ -588,6 +588,7 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
                 // function init(arg2) {
                 //     var test = arg2[0]; // We NEED to read the [0] from the array
                 // }
+                // Without this, the caller gets the whole array back
                 if (access.isArray && result.type == RVALUE_ARRAY && result.array != nullptr) {
                     result = VM_arrayReadAt(&result, access.arrayIndex);
                 }
