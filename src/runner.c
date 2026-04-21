@@ -249,10 +249,57 @@ void Runner_executeEvent(Runner* runner, Instance* instance, int32_t eventType, 
     Runner_executeEventFromObject(runner, instance, instance->objectIndex, eventType, eventSubtype);
 }
 
+// Events that GMS 2.3+ routes through per-object Handle* dispatchers rather than Perform_Event_All.
+static bool eventUsesBC17PerObjectDispatch(int32_t eventType) {
+    return eventType == EVENT_STEP || eventType == EVENT_ALARM || eventType == EVENT_KEYBOARD || eventType == EVENT_KEYPRESS || eventType == EVENT_KEYRELEASE;
+}
+
+// Per-object event dispatch matching the native GMS 2.x eventUsesPerObjectDispatch family.
+// Groups instances by objectIndex, then iterates each bucket in insertion order. Object buckets are visited in ascending objectIndex order, mirroring how the native runner's obj_has_event table enumerates objects that declare this event.
+static void executeEventPerObject(Runner* runner, int32_t eventType, int32_t eventSubtype) {
+    // Bucket instances by objectIndex. Each bucket preserves insertion order, so within a single object type instances still fire oldest-first.
+    // The bucket snapshot taken here also doubles as a way to NOT fire events for newly created instances.
+    int32_t objectCount = (int32_t) runner->dataWin->objt.count;
+    Instance*** bucketsByObject = calloc((size_t) objectCount, sizeof(Instance**));
+    int32_t totalInstances = (int32_t) arrlen(runner->instances);
+    repeat(totalInstances, i) {
+        Instance* inst = runner->instances[i];
+        if (inst->objectIndex >= 0 && inst->objectIndex < objectCount) {
+            arrput(bucketsByObject[inst->objectIndex], inst);
+        }
+    }
+
+    // Visit object buckets in ascending objectIndex order.
+    repeat(objectCount, objIdx) {
+        Instance** bucket = bucketsByObject[objIdx];
+        int32_t bucketCount = (int32_t) arrlen(bucket);
+        if (bucketCount == 0) continue;
+        // Only touch buckets whose object actually handles this event (including inherited from parent chain).
+        int32_t ownerObj = -1;
+        if (findEventCodeIdAndOwner(runner->dataWin, objIdx, eventType, eventSubtype, &ownerObj) < 0) {
+            arrfree(bucket);
+            continue;
+        }
+        repeat(bucketCount, i) {
+            Instance* inst = bucket[i];
+            if (!inst->active) continue;
+            Runner_executeEvent(runner, inst, eventType, eventSubtype);
+        }
+        arrfree(bucket);
+    }
+
+    free(bucketsByObject);
+}
+
 void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventSubtype) {
-    // Matches the native GMS 1.4/2.x runner's Perform_Event_All: walk the room's active instance linked list in forward insertion order (oldest first), skipping destroyed instances.
-    //
-    // Ordering note: a room's own instances are loaded first at initRoom time, then persistent instances carried over from the previous room are appended at the end. That is what the
+    // On BC17+ (GMS 2.x), the native runner dispatches events in the eventUsesPerObjectDispatch set per-object. Route those through executeEventPerObject to match.
+    if (IS_BC17_OR_HIGHER(runner->vmContext) && eventUsesBC17PerObjectDispatch(eventType)) {
+        executeEventPerObject(runner, eventType, eventSubtype);
+        return;
+    }
+
+    // All other events walk the room's active instance list in forward insertion order (oldest first).
+    // Ordering note: a room's own instances are loaded first at initRoom time, then persistent instances carried over from the previous room are appended at the end.
     int32_t count = (int32_t) arrlen(runner->instances);
     // Snapshot the iteration list: events may create new instances (appended to runner->instances) and we do NOT want those to fire in this phase, matching GM semantics where only pre-existing instances run the current event phase.
     Instance** snapshot = nullptr;
