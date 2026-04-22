@@ -1256,7 +1256,6 @@ Instance* Runner_copyInstance(Runner* runner, Instance* source, bool performEven
 }
 
 void Runner_destroyInstance(MAYBE_UNUSED Runner* runner, Instance* inst) {
-    GameObject* gameObject = &runner->dataWin->objt.objects[inst->objectIndex];
     Runner_executeEvent(runner, inst, EVENT_DESTROY, 0);
     // A destroyed instance must ALWAYS be not active
     // If a destroyed instance is active, then well, something went VERY wrong
@@ -1264,6 +1263,7 @@ void Runner_destroyInstance(MAYBE_UNUSED Runner* runner, Instance* inst) {
     inst->destroyed = true;
 
 #ifdef ENABLE_VM_TRACING
+    GameObject* gameObject = &runner->dataWin->objt.objects[inst->objectIndex];
     if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, gameObject->name) != -1) {
         fprintf(stderr, "VM: Instance %s (%d) destroyed\n", gameObject->name, inst->instanceId);
     }
