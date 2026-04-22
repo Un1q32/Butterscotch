@@ -2108,10 +2108,85 @@ static RValue builtinDsListFindIndex(VMContext* ctx, RValue* args, MAYBE_UNUSED 
 
 // ===[ ARRAY FUNCTIONS ]===
 
-static RValue builtinArrayLength1d(VMContext* ctx, RValue* args, int32_t argCount) {
-    (void) ctx; (void) argCount;
+static RValue builtinArrayLength1d(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeReal(0.0);
     return RValue_makeReal((GMLReal) GMLArray_length1D(args[0].array));
+}
+
+// array_push(array, values...) - append one or more values to the end of the array (row 0). BC17+ arrays are mutable references; mutate in place.
+static RValue builtinArrayPush(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeUndefined();
+    GMLArray* arr = args[0].array;
+    int32_t startLen = GMLArray_length1D(arr);
+    int32_t toPush = argCount - 1;
+    if (toPush > 0) {
+        GMLArray_growTo(arr, startLen + toPush);
+        repeat(toPush, i) {
+            RValue* slot = GMLArray_slot(arr, startLen + i);
+            RValue val = args[1 + i];
+            RValue_free(slot);
+            if (val.type == RVALUE_STRING && val.string != nullptr) {
+                *slot = RValue_makeOwnedString(safeStrdup(val.string));
+            } else if (val.type == RVALUE_ARRAY && val.array != nullptr) {
+                GMLArray_incRef(val.array);
+                val.ownsString = true;
+                *slot = val;
+#if IS_BC17_OR_HIGHER_ENABLED
+            } else if (val.type == RVALUE_METHOD && val.method != nullptr) {
+                GMLMethod_incRef(val.method);
+                val.ownsString = true;
+                *slot = val;
+#endif
+            } else {
+                val.ownsString = false;
+                *slot = val;
+            }
+        }
+    }
+    return RValue_makeUndefined();
+}
+
+// array_resize(array, newSize) - resize row 0 to newSize. Growth fills with undefined, shrinking frees truncated entries.
+static RValue builtinArrayResize(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeUndefined();
+    GMLArray* arr = args[0].array;
+    int32_t newSize = (int32_t) RValue_toReal(args[1]);
+    if (0 > newSize) newSize = 0;
+    if (arr->rowCount == 0) {
+        if (newSize == 0) return RValue_makeUndefined();
+        GMLArray_growTo(arr, newSize);
+        return RValue_makeUndefined();
+    }
+    GMLArrayRow* row = &arr->rows[0];
+    if (newSize > row->length) {
+        GMLArray_growTo(arr, newSize);
+    } else if (row->length > newSize) {
+        for (int32_t i = newSize; row->length > i; i++) RValue_free(&row->data[i]);
+        row->length = newSize;
+    }
+    return RValue_makeUndefined();
+}
+
+// array_delete(array, pos, count) - remove `count` entries starting at `pos` from row 0, shifting the tail down.
+static RValue builtinArrayDelete(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (3 > argCount) return RValue_makeUndefined();
+    if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeUndefined();
+    GMLArray* arr = args[0].array;
+    if (arr->rowCount == 0) return RValue_makeUndefined();
+    GMLArrayRow* row = &arr->rows[0];
+    int32_t pos = (int32_t) RValue_toReal(args[1]);
+    int32_t count = (int32_t) RValue_toReal(args[2]);
+    if (0 > pos) pos = 0;
+    if (pos >= row->length || 0 >= count) return RValue_makeUndefined();
+    if (count > row->length - pos) count = row->length - pos;
+    repeat(count, i) RValue_free(&row->data[pos + i]);
+    int32_t tailStart = pos + count;
+    int32_t tailLen = row->length - tailStart;
+    if (tailLen > 0) memmove(&row->data[pos], &row->data[tailStart], (size_t) tailLen * sizeof(RValue));
+    row->length -= count;
+    return RValue_makeUndefined();
 }
 
 // ===[ COLLISION FUNCTIONS]===
@@ -6907,6 +6982,9 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "array_length_1d", builtinArrayLength1d);
     // GM:S 2 alias for array_length_1d
     VM_registerBuiltin(ctx, "array_length", builtinArrayLength1d);
+    VM_registerBuiltin(ctx, "array_push", builtinArrayPush);
+    VM_registerBuiltin(ctx, "array_resize", builtinArrayResize);
+    VM_registerBuiltin(ctx, "array_delete", builtinArrayDelete);
 
     // Steam stubs
     VM_registerBuiltin(ctx, "steam_initialised", builtin_steam_initialised);
