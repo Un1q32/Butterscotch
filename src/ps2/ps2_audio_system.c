@@ -353,82 +353,100 @@ static uint16_t getMusicStreamSampleRate(Ps2AudioSystem* ps2, Ps2MusicStream* st
 // ===[ Software Mixer ]===
 
 static void mixAudio(Ps2AudioSystem* ps2, int16_t* outBuf, int32_t samplePairs) {
-    memset(outBuf, 0, samplePairs * 2 * sizeof(int16_t));
+    int32_t* accum = ps2->mixAccum;
+    memset(accum, 0, samplePairs * 2 * sizeof(int32_t));
 
-    for (int32_t s = 0; samplePairs > s; s++) {
-        int32_t accumL = 0;
-        int32_t accumR = 0;
+    // ===[ Mix SFX instances (from LRU cache) ]===
+    repeat(MAX_PS2_SOUND_INSTANCES, i) {
+        Ps2SoundInstance* inst = &ps2->instances[i];
+        if (!inst->active || inst->paused) continue;
 
-        // Mix SFX instances (from LRU cache)
-        repeat(MAX_PS2_SOUND_INSTANCES, i) {
-            Ps2SoundInstance* inst = &ps2->instances[i];
-            if (!inst->active || inst->paused) continue;
+        DecodedPcmEntry* cache = cacheGet(ps2, inst->audoIndex);
+        if (cache == nullptr) continue;
 
-            DecodedPcmEntry* cache = cacheGet(ps2, inst->audoIndex);
-            if (cache == nullptr) continue;
-
-            if (inst->positionInt >= inst->totalSamples) {
-                if (inst->loop) {
-                    inst->positionInt = 0;
-                    inst->positionFrac = 0;
-                } else {
-                    inst->active = false;
-                    continue;
-                }
+        if (inst->positionInt >= inst->totalSamples) {
+            if (inst->loop) {
+                inst->positionInt = 0;
+                inst->positionFrac = 0;
+            } else {
+                inst->active = false;
+                continue;
             }
+        }
 
-            // Linear interpolation between samples
-            int32_t idx0 = (int32_t) inst->positionInt;
+        // Hoist per-instance constants out of the per-sample loop
+        const int16_t* pcm = cache->pcmData;
+        uint32_t totalSamples = inst->totalSamples;
+        bool loop = inst->loop;
+        float gain = inst->currentGain * inst->sondVolume * ps2->masterGain;
+        Ps2AudoEntry* audo = &ps2->audoEntries[inst->audoIndex];
+        float stepRate = inst->pitch * inst->sondPitch * ((float) audo->sampleRate / (float) AUDSRV_OUTPUT_FREQ);
+        uint32_t stepInt = (uint32_t) stepRate;
+        uint32_t stepFrac = (uint32_t) ((stepRate - (float) stepInt) * 4294967296.0f);
+
+        uint32_t posInt = inst->positionInt;
+        uint32_t posFrac = inst->positionFrac;
+        bool ended = false;
+
+        for (int32_t s = 0; samplePairs > s; s++) {
+            int32_t idx0 = (int32_t) posInt;
             int32_t idx1 = idx0 + 1;
-            if ((uint32_t) idx1 >= inst->totalSamples) idx1 = idx0;
+            if ((uint32_t) idx1 >= totalSamples) idx1 = idx0;
 
-            int32_t s0 = cache->pcmData[idx0];
-            int32_t s1 = cache->pcmData[idx1];
-            int32_t frac = (int32_t) (inst->positionFrac >> 16);
+            int32_t s0 = pcm[idx0];
+            int32_t s1 = pcm[idx1];
+            int32_t frac = (int32_t) (posFrac >> 16);
             int32_t sample = s0 + ((s1 - s0) * frac >> 16);
 
-            float gain = inst->currentGain * inst->sondVolume * ps2->masterGain;
             int32_t scaled = (int32_t) (sample * gain);
-            accumL += scaled;
-            accumR += scaled;
+            accum[s * 2]     += scaled;
+            accum[s * 2 + 1] += scaled;
 
-            // Advance position
-            Ps2AudoEntry* audo = &ps2->audoEntries[inst->audoIndex];
-            float stepRate = inst->pitch * inst->sondPitch * ((float) audo->sampleRate / (float) AUDSRV_OUTPUT_FREQ);
-            uint32_t stepInt = (uint32_t) stepRate;
-            uint32_t stepFrac = (uint32_t) ((stepRate - (float) stepInt) * 4294967296.0f);
-            uint32_t oldFrac = inst->positionFrac;
-            inst->positionFrac += stepFrac;
-            if (oldFrac > inst->positionFrac) inst->positionInt++;
-            inst->positionInt += stepInt;
+            uint32_t oldFrac = posFrac;
+            posFrac += stepFrac;
+            if (oldFrac > posFrac) posInt++;
+            posInt += stepInt;
 
-            if (inst->positionInt >= inst->totalSamples) {
-                if (inst->loop) {
-                    inst->positionInt = inst->positionInt % inst->totalSamples;
-                    inst->positionFrac = 0;
+            if (posInt >= totalSamples) {
+                if (loop) {
+                    posInt = posInt % totalSamples;
+                    posFrac = 0;
                 } else {
-                    inst->active = false;
+                    ended = true;
+                    break;
                 }
             }
         }
 
-        // Mix streaming music instances
-        repeat(MAX_MUSIC_STREAMS, i) {
-            Ps2MusicStream* stream = &ps2->musicStreams[i];
-            if (!stream->active || stream->paused) continue;
+        inst->positionInt = posInt;
+        inst->positionFrac = posFrac;
+        if (ended) inst->active = false;
+    }
 
+    // ===[ Mix streaming music instances ]===
+    repeat(MAX_MUSIC_STREAMS, i) {
+        Ps2MusicStream* stream = &ps2->musicStreams[i];
+        if (!stream->active || stream->paused) continue;
+
+        // Hoist per-stream constants (pitch/sampleRate don't change mid-mix)
+        float gain = stream->currentGain * stream->sondVolume * ps2->masterGain;
+        uint16_t streamSampleRate = getMusicStreamSampleRate(ps2, stream);
+        float stepRate = stream->pitch * stream->sondPitch * ((float) streamSampleRate / (float) AUDSRV_OUTPUT_FREQ);
+        uint32_t stepInt = (uint32_t) stepRate;
+        uint32_t stepFrac = (uint32_t) ((stepRate - (float) stepInt) * 4294967296.0f);
+
+        for (int32_t s = 0; samplePairs > s; s++) {
             uint32_t bufSamples = stream->bufferSampleCount[stream->activeBuffer];
 
             // Check if we've exhausted the active buffer
             if (stream->readPosition >= bufSamples) {
                 if (stream->needsRefill && stream->endOfTrack) {
-                    // Both buffers consumed and track is done
                     if (stream->loop) {
                         streamResetToStart(ps2, stream);
                         bufSamples = stream->bufferSampleCount[stream->activeBuffer];
                     } else {
                         stream->active = false;
-                        continue;
+                        break;
                     }
                 } else {
                     // Swap to the back buffer (which should have been refilled)
@@ -439,52 +457,45 @@ static void mixAudio(Ps2AudioSystem* ps2, int16_t* outBuf, int32_t samplePairs) 
                     bufSamples = stream->bufferSampleCount[stream->activeBuffer];
 
                     if (bufSamples == 0) {
-                        // Back buffer is also empty
                         if (stream->loop) {
                             streamResetToStart(ps2, stream);
                             bufSamples = stream->bufferSampleCount[stream->activeBuffer];
                         } else {
                             stream->active = false;
-                            continue;
+                            break;
                         }
                     }
                 }
             }
 
-            // Linear interpolation between samples
             int32_t idx0 = (int32_t) stream->readPosition;
             int32_t idx1 = idx0 + 1;
             if ((uint32_t) idx1 >= bufSamples) idx1 = idx0;
 
-            int32_t s0 = stream->buffers[stream->activeBuffer][idx0];
-            int32_t s1 = stream->buffers[stream->activeBuffer][idx1];
+            int16_t* buf = stream->buffers[stream->activeBuffer];
+            int32_t s0 = buf[idx0];
+            int32_t s1 = buf[idx1];
             int32_t frac = (int32_t) (stream->readPositionFrac >> 16);
             int32_t sample = s0 + ((s1 - s0) * frac >> 16);
 
-            float gain = stream->currentGain * stream->sondVolume * ps2->masterGain;
             int32_t scaled = (int32_t) (sample * gain);
-            accumL += scaled;
-            accumR += scaled;
+            accum[s * 2]     += scaled;
+            accum[s * 2 + 1] += scaled;
 
-            // Advance read position by pitch-adjusted step (32.32 fixed-point)
-            uint16_t streamSampleRate = getMusicStreamSampleRate(ps2, stream);
-            float stepRate = stream->pitch * stream->sondPitch * ((float) streamSampleRate / (float) AUDSRV_OUTPUT_FREQ);
-            uint32_t stepInt = (uint32_t) stepRate;
-            uint32_t stepFrac = (uint32_t) ((stepRate - (float) stepInt) * 4294967296.0f);
             uint32_t oldFrac = stream->readPositionFrac;
             stream->readPositionFrac += stepFrac;
             if (oldFrac > stream->readPositionFrac) stream->readPosition++;
             stream->readPosition += stepInt;
         }
+    }
 
-        // Clamp and write interleaved stereo
-        if (accumL > 32767) accumL = 32767;
-        if (-32768 > accumL) accumL = -32768;
-        if (accumR > 32767) accumR = 32767;
-        if (-32768 > accumR) accumR = -32768;
-
-        outBuf[s * 2]     = (int16_t) accumL;
-        outBuf[s * 2 + 1] = (int16_t) accumR;
+    // ===[ Clamp accumulator and write interleaved stereo ]===
+    int32_t totalSamples = samplePairs * 2;
+    for (int32_t s = 0; totalSamples > s; s++) {
+        int32_t v = accum[s];
+        if (v > 32767) v = 32767;
+        if (-32768 > v) v = -32768;
+        outBuf[s] = (int16_t) v;
     }
 }
 
