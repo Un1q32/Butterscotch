@@ -135,7 +135,7 @@ elseif(PLATFORM STREQUAL "ps2")
     endif()
     # Treat unsuffixed float constants as single-precision to avoid accidental
     # float->double promotions on platforms with no hardware double
-    add_compile_options(-fsingle-precision-constant -Werror=double-promotion)
+    target_compile_options(butterscotch PRIVATE -fsingle-precision-constant -Werror=double-promotion)
 
     if(PS2)
         # Compiling on the Docker container
