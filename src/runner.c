@@ -1026,6 +1026,10 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         }
     }
 
+    // Append persistent instances carried over from the previous room at the tail, so forward event iteration processes the new room's own instances first and the travelers last.
+    // We NEED to do this here BEFORE firing the room object's events, to avoid code that relies on persistent instances failing (example: if a object uses instance_number to get the number of instances in the room).
+    returnPersistentInstances(runner, carriedPersistent);
+
     // Pass 2: Fire events for newly created instances (in room definition order)
     repeat(room->gameObjectCount, i) {
         RoomGameObject* roomObj = &room->gameObjects[i];
@@ -1050,9 +1054,6 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         RValue result = VM_executeCode(runner->vmContext, room->creationCodeId);
         RValue_free(&result);
     }
-
-    // Append persistent instances carried over from the previous room at the tail, so forward event iteration processes the new room's own instances first and the travelers last.
-    returnPersistentInstances(runner, carriedPersistent);
 
     // Mark this room as initialized for persistent room support
     savedState->initialized = true;
