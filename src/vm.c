@@ -517,11 +517,13 @@ static Instance* findInstanceByTarget(VMContext* ctx, int32_t target) {
         return hmget(runner->instancesToId, target);
     }
 
-    // Object index - find first matching instance, checking parent chains
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, target)) return inst;
+    // Object index - find first active matching instance via the descendant-inclusive bucket. Pure read, no user code, so we walk the bucket directly without an arena snapshot.
+    if (target >= 0 && runner->dataWin->objt.count > (uint32_t) target) {
+        Instance** bucket = runner->instancesByObject[target];
+        int32_t bucketCount = (int32_t) arrlen(bucket);
+        for (int32_t i = 0; bucketCount > i; i++) {
+            if (bucket[i]->active) return bucket[i];
+        }
     }
     return nullptr;
 }
@@ -798,14 +800,15 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
     }
 #endif
 
-    // GML: writing through an object reference (obj_foo.var = val) sets the variable on ALL instances of that object
+    // GML: writing through an object reference (obj_foo.var = val) sets the variable on ALL instances of that object. The setter (writeSingleInstanceVariable) can run user code, so iterate a snapshot of the bucket.
     if (instanceType >= 0 && 100000 > instanceType) {
         Runner* runner = (Runner*) ctx->runner;
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
         bool found = false;
-        repeat(instanceCount, i) {
-            Instance* inst = runner->instances[i];
-            if (!inst->active || !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, instanceType)) continue;
+        int32_t snapBase = Runner_pushInstancesOfObject(runner, instanceType);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            Instance* inst = runner->instanceSnapshots[i];
+            if (!inst->active) continue;
             found = true;
             writeSingleInstanceVariable(ctx, inst, varDef, &access, val);
 #ifdef ENABLE_VM_TRACING
@@ -816,6 +819,7 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
             }
 #endif
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
         if (!found) {
             if (ctx->dataWin->objt.count > (uint32_t) instanceType) {
                 GameObject* gameObject = &ctx->dataWin->objt.objects[instanceType];
@@ -1356,16 +1360,18 @@ static void handlePop(VMContext* ctx, uint32_t instr, const uint8_t* extraData) 
         if (varDef->varID == -6) {
             // Resolve target instance for built-in array variable writes (e.g. obj_foo.alarm[0] = 2)
             if (instanceType >= 0 && 100000 > instanceType) {
-                // Object reference: write to ALL instances of that object
+                // Object reference: write to ALL instances of that object. The setter can run user code, so iterate a snapshot of the bucket.
                 Runner* runner = (Runner*) ctx->runner;
-                int32_t instanceCount = (int32_t) arrlen(runner->instances);
                 Instance* savedInstance = (Instance*) ctx->currentInstance;
-                repeat(instanceCount, i) {
-                    Instance* inst = runner->instances[i];
-                    if (!inst->active || !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, instanceType)) continue;
+                int32_t snapBase = Runner_pushInstancesOfObject(runner, instanceType);
+                int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+                for (int32_t i = snapBase; snapEnd > i; i++) {
+                    Instance* inst = runner->instanceSnapshots[i];
+                    if (!inst->active) continue;
                     ctx->currentInstance = inst;
                     VMBuiltins_setVariable(ctx, varDef->builtinVarId, varDef->name, val, arrayIndex);
                 }
+                Runner_popInstanceSnapshot(runner, snapBase);
                 ctx->currentInstance = savedInstance;
             } else if (instanceType >= 0) {
                 // Instance ID reference
@@ -2271,12 +2277,13 @@ static void handlePushEnv(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
     }
 
     if (target >= 0 && 100000 > target) {
-        // Object index - iterate over active instances of this object (or its descendants)
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        for (int32_t i = 0; instanceCount > i; i++) {
-            Instance* inst = runner->instances[i];
-            if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, target)) {
-                arrput(frame->instanceList, inst);
+        // Object index - copy the descendant-inclusive list for this object into the frame's own list. frame->instanceList has with-block lifetime (not the snapshot arena's loop lifetime), so we don't use the forEach macro; we just copy directly and filter "active" to match prior semantics (deactivated instances are skipped).
+        if (ctx->dataWin->objt.count > (uint32_t) target) {
+            Instance** source = runner->instancesByObject[target];
+            int32_t sourceCount = (int32_t) arrlen(source);
+            for (int32_t i = 0; sourceCount > i; i++) {
+                Instance* inst = source[i];
+                if (inst->active) arrput(frame->instanceList, inst);
             }
         }
 

@@ -1555,12 +1555,12 @@ static RValue builtinDistanceToObject(VMContext* ctx, RValue* args, int32_t argC
     if (!selfBBox.valid) return RValue_makeReal(0.0);
 
     GMLReal minDistSq = 1e20;
-    int32_t count = (int32_t) arrlen(runner->instances);
 
-    repeat(count, i) {
-        Instance* inst = runner->instances[i];
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
         if (!inst->active || inst == self) continue;
-        if (!Collision_matchesTarget(ctx->dataWin, inst, targetObjIndex)) continue;
 
         InstanceBBox otherBBox = Collision_computeBBox(ctx->dataWin, inst);
         if (!otherBBox.valid) continue;
@@ -1575,6 +1575,7 @@ static RValue builtinDistanceToObject(VMContext* ctx, RValue* args, int32_t argC
         GMLReal distSq = xd * xd + yd * yd;
         if (minDistSq > distSq) minDistSq = distSq;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
 
     return RValue_makeReal(GMLReal_sqrt(minDistSq));
 }
@@ -1997,14 +1998,17 @@ static RValue builtinVariableInstanceGet(VMContext* ctx, RValue* args, int32_t a
         return RValue_makeUndefined();
     }
 
-    // Object index: return value from first matching active instance
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, id)) {
+    // Object index: return value from first matching active instance. Pop the snapshot on every return path so we don't strand a chunk in the arena.
+    int32_t snapBase = Runner_pushInstancesOfObject(runner, id);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
+        if (inst->active) {
+            Runner_popInstanceSnapshot(runner, snapBase);
             return variableInstanceGetOn(ctx, inst, name);
         }
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
 }
 
@@ -2023,14 +2027,14 @@ static RValue builtinVariableInstanceSet(VMContext* ctx, RValue* args, int32_t a
         return RValue_makeUndefined();
     }
 
-    // Object index: set on all active instances matching (including descendants)
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, id)) {
-            variableInstanceSetOn(ctx, inst, name, val);
-        }
+    // Object index: set on all active instances matching (including descendants). The setter can run user code, so iterate a snapshot.
+    int32_t snapBase = Runner_pushInstancesOfObject(runner, id);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
+        if (inst->active) variableInstanceSetOn(ctx, inst, name, val);
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
 }
 
@@ -2054,13 +2058,16 @@ static RValue builtinVariableInstanceExists(VMContext* ctx, RValue* args, int32_
         return RValue_makeBool(false);
     }
 
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, id)) {
+    int32_t snapBase = Runner_pushInstancesOfObject(runner, id);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
+        if (inst->active) {
+            Runner_popInstanceSnapshot(runner, snapBase);
             return RValue_makeBool(variableInstanceExistsOn(ctx, inst, name));
         }
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeBool(false);
 }
 
@@ -2592,11 +2599,11 @@ static bool noCollisionWithObject(Runner* runner, Instance* caller, GMLReal test
     bool free = true;
 
     if (callerBBox.valid) {
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        repeat(instanceCount, i) {
-            Instance* other = runner->instances[i];
+        int32_t snapBase = Runner_pushInstancesForTarget(runner, objIndex);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            Instance* other = runner->instanceSnapshots[i];
             if (!other->active || other == caller) continue;
-            if (!Collision_matchesTarget(runner->dataWin, other, objIndex)) continue;
 
             InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
             if (!otherBBox.valid) continue;
@@ -2606,6 +2613,7 @@ static bool noCollisionWithObject(Runner* runner, Instance* caller, GMLReal test
                 break;
             }
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
     }
 
     caller->x = savedX;
@@ -3602,18 +3610,17 @@ static RValue builtinGameEnd(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UN
 STUB_RETURN_UNDEFINED(game_save)
 STUB_RETURN_UNDEFINED(game_load)
 
-static RValue builtinInstanceNumber(VMContext* ctx, RValue* args, int32_t argCount) {
+static RValue builtinInstanceNumber(VMContext* ctx, MAYBE_UNUSED RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(0.0);
     Runner* runner = (Runner*) ctx->runner;
     int32_t objectIndex = RValue_toInt32(args[0]);
     int32_t count = 0;
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, objectIndex)) {
-            count++;
-        }
+    int32_t snapBase = Runner_pushInstancesOfObject(runner, objectIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        if (runner->instanceSnapshots[i]->active) count++;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeReal((GMLReal) count);
 }
 
@@ -3623,15 +3630,17 @@ static RValue builtinInstanceFind(VMContext* ctx, RValue* args, int32_t argCount
     int32_t objectIndex = RValue_toInt32(args[0]);
     int32_t n = RValue_toInt32(args[1]);
     int32_t count = 0;
-    int32_t instanceCount = (int32_t) arrlen(runner->instances);
-    repeat(instanceCount, i) {
-        Instance* inst = runner->instances[i];
-        if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, objectIndex)) {
-            if (count == n) return RValue_makeReal((GMLReal) inst->instanceId);
-            count++;
-        }
+    int32_t resultId = INSTANCE_NOONE;
+    int32_t snapBase = Runner_pushInstancesOfObject(runner, objectIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
+        if (!inst->active) continue;
+        if (count == n) { resultId = inst->instanceId; break; }
+        count++;
     }
-    return RValue_makeReal(INSTANCE_NOONE);
+    Runner_popInstanceSnapshot(runner, snapBase);
+    return RValue_makeReal((GMLReal) resultId);
 }
 
 static RValue builtinInstanceExists(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -3640,15 +3649,12 @@ static RValue builtinInstanceExists(VMContext* ctx, RValue* args, int32_t argCou
     int32_t id = RValue_toInt32(args[0]);
     bool found = false;
     if (id >= 0 && runner->dataWin->objt.count > (uint32_t) id) {
-        // Object type index: search for any active instance of this object (or descendants)
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        repeat(instanceCount, i) {
-            Instance* inst = runner->instances[i];
-            if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, id)) {
-                found = true;
-                break;
-            }
+        int32_t snapBase = Runner_pushInstancesOfObject(runner, id);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            if (runner->instanceSnapshots[i]->active) { found = true; break; }
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
     } else {
         // Instance ID: search for a specific instance
         Instance* inst = hmget(runner->instancesToId, id);
@@ -3666,17 +3672,16 @@ static RValue builtinInstanceDestroy(VMContext* ctx, RValue* args, int32_t argCo
         }
         return RValue_makeUndefined();
     }
-    // 1 arg: find and destroy matching instances
+    // 1 arg: find and destroy matching instances. Destroy events run user code that can spawn/destroy/instance_change other instances; iterate a snapshot of the bucket so those mutations don't corrupt our loop.
     int32_t id = RValue_toInt32(args[0]);
     if (id >= 0 && runner->dataWin->objt.count > (uint32_t) id) {
-        // Object type index: destroy all active instances of this object (or descendants)
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        repeat(instanceCount, i) {
-            Instance* inst = runner->instances[i];
-            if (inst->active && VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, id)) {
-                Runner_destroyInstance(runner, inst);
-            }
+        int32_t snapBase = Runner_pushInstancesOfObject(runner, id);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            Instance* inst = runner->instanceSnapshots[i];
+            if (inst->active) Runner_destroyInstance(runner, inst);
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
     } else {
         Instance* inst = hmget(runner->instancesToId, id);
         if (inst != nullptr && inst->active) Runner_destroyInstance(runner, inst);
@@ -3755,9 +3760,13 @@ static RValue builtinInstanceChange(VMContext* ctx, RValue* args, int32_t argCou
         Runner_executeEvent(runner, inst, EVENT_DESTROY, 0);
     }
 
+    // Move the instance between per-object lists before mutating objectIndex so the remove walks the old parent chain and the add walks the new one.
+    Runner_removeInstanceFromObjectLists(runner, inst);
+
     // Change object index and copy properties from new object definition
     GameObject* newObjDef = &runner->dataWin->objt.objects[objectIndex];
     inst->objectIndex = objectIndex;
+    Runner_addInstanceToObjectLists(runner, inst);
     inst->spriteIndex = newObjDef->spriteId;
     inst->visible = newObjDef->visible;
     inst->solid = newObjDef->solid;
@@ -3801,29 +3810,32 @@ static RValue builtinInstanceActivateAll(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUS
 
 static RValue builtinInstanceActivateObject(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
     int32_t objIndex = RValue_toInt32(args[0]);
 
-    int instances = arrlen(ctx->runner->instances);
-    repeat(instances, i) {
-        Instance* instance = ctx->runner->instances[i];
-        if (!instance->active && !instance->destroyed && (objIndex == INSTANCE_ALL || VM_isObjectOrDescendant(ctx->dataWin, instance->objectIndex, objIndex))) {
-            instance->active = true;
-        }
+    // Per-object buckets retain inactive (deactivated) instances since we only remove on destroy-cleanup, so this still finds them. INSTANCE_ALL falls back to the full instances list.
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, objIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* instance = runner->instanceSnapshots[i];
+        if (!instance->active && !instance->destroyed) instance->active = true;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
 }
 
 static RValue builtinInstanceDeactivateObject(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
     int32_t objIndex = RValue_toInt32(args[0]);
 
-    int instances = arrlen(ctx->runner->instances);
-    repeat(instances, i) {
-        Instance* instance = ctx->runner->instances[i];
-        if (instance->active && !instance->destroyed && (objIndex == INSTANCE_ALL || VM_isObjectOrDescendant(ctx->dataWin, instance->objectIndex, objIndex))) {
-            instance->active = false;
-        }
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, objIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* instance = runner->instanceSnapshots[i];
+        if (instance->active && !instance->destroyed) instance->active = false;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
 }
 
@@ -5327,11 +5339,11 @@ static RValue builtinPlaceMeeting(VMContext* ctx, RValue* args, int32_t argCount
     bool found = false;
 
     if (callerBBox.valid) {
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        repeat(instanceCount, i) {
-            Instance* other = runner->instances[i];
+        int32_t snapBase = Runner_pushInstancesForTarget(runner, target);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            Instance* other = runner->instanceSnapshots[i];
             if (!other->active || other == caller) continue;
-            if (!Collision_matchesTarget(runner->dataWin, other, target)) continue;
 
             InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
             if (!otherBBox.valid) continue;
@@ -5341,6 +5353,7 @@ static RValue builtinPlaceMeeting(VMContext* ctx, RValue* args, int32_t argCount
                 break;
             }
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
     }
 
     // Restore original position
@@ -5363,14 +5376,14 @@ static RValue builtinCollisionLine(VMContext* ctx, RValue* args, int32_t argCoun
     int32_t notme = RValue_toInt32(args[6]);
 
     Instance* self = (Instance*) ctx->currentInstance;
-    int32_t count = (int32_t) arrlen(runner->instances);
 
-    repeat(count, i) {
-        Instance* inst = runner->instances[i];
+    int32_t resultId = INSTANCE_NOONE;
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+        Instance* inst = runner->instanceSnapshots[snapIdx];
         if (!inst->active) continue;
         if (notme && inst == self) continue;
-
-        if (!Collision_matchesTarget(ctx->dataWin, inst, targetObjIndex)) continue;
 
         InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
         if (!bbox.valid) continue;
@@ -5419,14 +5432,16 @@ static RValue builtinCollisionLine(VMContext* ctx, RValue* args, int32_t argCoun
 
         // Bbox-only mode: collision confirmed
         if (prec == 0) {
-            return RValue_makeReal((GMLReal) inst->instanceId);
+            resultId = inst->instanceId;
+            break;
         }
 
         // Precise mode: walk line pixel-by-pixel within bbox
         Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
         if (spr == nullptr || spr->sepMasks != 1 || spr->masks == nullptr || spr->maskCount == 0) {
             // No precise mask available, treat as bbox hit
-            return RValue_makeReal((GMLReal) inst->instanceId);
+            resultId = inst->instanceId;
+            break;
         }
 
         // Recompute dx/dy for the clipped segment
@@ -5462,10 +5477,12 @@ static RValue builtinCollisionLine(VMContext* ctx, RValue* args, int32_t argCoun
         }
 
         if (!found) continue;
-        return RValue_makeReal((GMLReal) inst->instanceId);
+        resultId = inst->instanceId;
+        break;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
 
-    return RValue_makeReal((GMLReal) INSTANCE_NOONE);
+    return RValue_makeReal((GMLReal) resultId);
 }
 
 // rectangle_in_rectangle(px1, py1, px2, py2, x1, y1, x2, y2)
@@ -5549,14 +5566,14 @@ static RValue builtinCollisionRectangle(VMContext* ctx, RValue* args, int32_t ar
     if (y1 > y2) { GMLReal tmp = y1; y1 = y2; y2 = tmp; }
 
     Instance* self = (Instance*) ctx->currentInstance;
-    int32_t count = (int32_t) arrlen(runner->instances);
 
-    repeat(count, i) {
-        Instance* inst = runner->instances[i];
+    int32_t resultId = INSTANCE_NOONE;
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+        Instance* inst = runner->instanceSnapshots[snapIdx];
         if (!inst->active) continue;
         if (notme && inst == self) continue;
-
-        if (!Collision_matchesTarget(ctx->dataWin, inst, targetObjIndex)) continue;
 
         InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
         if (!bbox.valid) continue;
@@ -5591,10 +5608,12 @@ static RValue builtinCollisionRectangle(VMContext* ctx, RValue* args, int32_t ar
             }
         }
 
-        return RValue_makeReal((GMLReal) inst->instanceId);
+        resultId = inst->instanceId;
+        break;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
 
-    return RValue_makeReal((GMLReal) INSTANCE_NOONE);
+    return RValue_makeReal((GMLReal) resultId);
 }
 
 // collision_point(x, y, obj, prec, notme)
@@ -5609,14 +5628,14 @@ static RValue builtinCollisionPoint(VMContext* ctx, RValue* args, int32_t argCou
     int32_t notme = RValue_toInt32(args[4]);
 
     Instance* self = (Instance*) ctx->currentInstance;
-    int32_t count = (int32_t) arrlen(runner->instances);
 
-    repeat(count, i) {
-        Instance* inst = runner->instances[i];
+    int32_t resultId = INSTANCE_NOONE;
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+        Instance* inst = runner->instanceSnapshots[snapIdx];
         if (!inst->active) continue;
         if (notme && inst == self) continue;
-
-        if (!Collision_matchesTarget(ctx->dataWin, inst, targetObjIndex)) continue;
 
         InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
         if (!bbox.valid) continue;
@@ -5632,10 +5651,12 @@ static RValue builtinCollisionPoint(VMContext* ctx, RValue* args, int32_t argCou
             }
         }
 
-        return RValue_makeReal((GMLReal) inst->instanceId);
+        resultId = inst->instanceId;
+        break;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
 
-    return RValue_makeReal((GMLReal) INSTANCE_NOONE);
+    return RValue_makeReal((GMLReal) resultId);
 }
 
 // instance_place(x, y, obj) - returns colliding instance id at (x, y), or noone
@@ -5659,11 +5680,11 @@ static RValue builtinInstancePlace(VMContext* ctx, RValue* args, int32_t argCoun
     int32_t resultId = INSTANCE_NOONE;
 
     if (callerBBox.valid) {
-        int32_t instanceCount = (int32_t) arrlen(runner->instances);
-        repeat(instanceCount, i) {
-            Instance* other = runner->instances[i];
+        int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+        int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+        for (int32_t i = snapBase; snapEnd > i; i++) {
+            Instance* other = runner->instanceSnapshots[i];
             if (!other->active || other == caller) continue;
-            if (!Collision_matchesTarget(runner->dataWin, other, targetObjIndex)) continue;
 
             InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
             if (!otherBBox.valid) continue;
@@ -5673,6 +5694,7 @@ static RValue builtinInstancePlace(VMContext* ctx, RValue* args, int32_t argCoun
                 break;
             }
         }
+        Runner_popInstanceSnapshot(runner, snapBase);
     }
 
     caller->x = savedX;
@@ -5689,13 +5711,12 @@ static RValue builtinInstancePosition(VMContext* ctx, RValue* args, int32_t argC
     GMLReal py = RValue_toReal(args[1]);
     int32_t targetObjIndex = RValue_toInt32(args[2]);
 
-    int32_t count = (int32_t) arrlen(runner->instances);
-
-    repeat(count, i) {
-        Instance* inst = runner->instances[i];
+    int32_t resultId = INSTANCE_NOONE;
+    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+    for (int32_t i = snapBase; snapEnd > i; i++) {
+        Instance* inst = runner->instanceSnapshots[i];
         if (!inst->active) continue;
-
-        if (!Collision_matchesTarget(ctx->dataWin, inst, targetObjIndex)) continue;
 
         InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
         if (!bbox.valid) continue;
@@ -5703,10 +5724,12 @@ static RValue builtinInstancePosition(VMContext* ctx, RValue* args, int32_t argC
         // Point-in-AABB test (no precise, no notme)
         if (bbox.left > px || px >= bbox.right || bbox.top > py || py >= bbox.bottom) continue;
 
-        return RValue_makeReal((GMLReal) inst->instanceId);
+        resultId = inst->instanceId;
+        break;
     }
+    Runner_popInstanceSnapshot(runner, snapBase);
 
-    return RValue_makeReal((GMLReal) INSTANCE_NOONE);
+    return RValue_makeReal((GMLReal) resultId);
 }
 
 // Misc stubs

@@ -82,6 +82,92 @@ static int32_t findEventCodeIdAndOwner(DataWin* dataWin, int32_t objectIndex, in
     return -1;
 }
 
+// ===[ Per-Object Instance Lists ]===
+// Each instance lives in the list of its own object and every ancestor object (descendant-inclusive).
+// This mirrors the native runner and lets collision dispatch iterate only the candidate instances for a target object, instead of scanning the whole room per collision event.
+// The difference is that the native runner uses a linked list, while we move things manually with memmove.
+
+void Runner_addInstanceToObjectLists(Runner* runner, Instance* inst) {
+    DataWin* dataWin = runner->dataWin;
+    int32_t currentObj = inst->objectIndex;
+    int32_t depth = 0;
+    while (currentObj >= 0 && dataWin->objt.count > (uint32_t) currentObj && 32 > depth) {
+        arrput(runner->instancesByObject[currentObj], inst);
+        currentObj = dataWin->objt.objects[currentObj].parentId;
+        depth++;
+    }
+}
+
+void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
+    DataWin* dataWin = runner->dataWin;
+    int32_t currentObj = inst->objectIndex;
+    int32_t depth = 0;
+    while (currentObj >= 0 && dataWin->objt.count > (uint32_t) currentObj && 32 > depth) {
+        Instance** list = runner->instancesByObject[currentObj];
+        int32_t n = (int32_t) arrlen(list);
+        repeat(n, i) {
+            if (list[i] == inst) {
+                // Stable remove: shift the tail down by one so surviving instances keep their creation order. GML semantics (with, instance_find, obj.var reads) depend on this order.
+                if (n - 1 > i) memmove(&list[i], &list[i + 1], (size_t) (n - 1 - i) * sizeof(Instance*));
+                arrsetlen(runner->instancesByObject[currentObj], n - 1);
+                break;
+            }
+        }
+        currentObj = dataWin->objt.objects[currentObj].parentId;
+        depth++;
+    }
+}
+
+void Runner_clearAllObjectLists(Runner* runner) {
+    if (runner->instancesByObject == nullptr) return;
+    uint32_t count = runner->dataWin->objt.count;
+    repeat(count, i) {
+        arrsetlen(runner->instancesByObject[i], 0);
+    }
+}
+
+int32_t Runner_pushInstancesOfObject(Runner* runner, int32_t targetObjIndex) {
+    int32_t base = (int32_t) arrlen(runner->instanceSnapshots);
+
+    if (0 > targetObjIndex || (uint32_t) targetObjIndex >= runner->dataWin->objt.count)
+        return base;
+
+    Instance** source = runner->instancesByObject[targetObjIndex];
+    int32_t sourceCount = (int32_t) arrlen(source);
+
+    if (0 >= sourceCount)
+        return base;
+
+    arrsetlen(runner->instanceSnapshots, base + sourceCount);
+    memcpy(&runner->instanceSnapshots[base], source, (size_t) sourceCount * sizeof(Instance*));
+    return base;
+}
+
+void Runner_popInstanceSnapshot(Runner* runner, int32_t base) {
+    arrsetlen(runner->instanceSnapshots, base);
+}
+
+int32_t Runner_pushInstancesForTarget(Runner* runner, int32_t target) {
+    int32_t base = (int32_t) arrlen(runner->instanceSnapshots);
+    if (target >= 0 && 100000 > target) {
+        return Runner_pushInstancesOfObject(runner, target);
+    }
+    if (target == INSTANCE_ALL) {
+        int32_t total = (int32_t) arrlen(runner->instances);
+        if (0 >= total)
+            return base;
+        arrsetlen(runner->instanceSnapshots, base + total);
+        memcpy(&runner->instanceSnapshots[base], runner->instances, (size_t) total * sizeof(Instance*));
+        return base;
+    }
+    if (target >= 100000) {
+        Instance* inst = hmget(runner->instancesToId, target);
+        if (inst != nullptr) arrput(runner->instanceSnapshots, inst);
+        return base;
+    }
+    return base;
+}
+
 // ===[ Event Execution ]===
 
 static void setVMInstanceContext(VMContext* vm, Instance* instance) {
@@ -768,6 +854,7 @@ static Instance* createAndInitInstance(Runner* runner, int32_t instanceId, int32
 
     hmput(runner->instancesToId, instanceId, inst);
     arrput(runner->instances, inst);
+    Runner_addInstanceToObjectLists(runner, inst);
 
 #ifdef ENABLE_VM_TRACING
     if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, objDef->name) != -1) {
@@ -812,6 +899,10 @@ static Instance** takePersistentInstances(Runner* runner) {
     arrfree(runner->instances);
     runner->instances = nullptr;
 
+    // The per-object lists referenced both the freed non-persistents and the carried persistents; clear them entirely.
+    // Persistents are re-added when they return via returnPersistentInstances, and room-local instances are added as they get created.
+    Runner_clearAllObjectLists(runner);
+
     return carriedPersistent;
 }
 
@@ -819,6 +910,7 @@ static Instance** takePersistentInstances(Runner* runner) {
 static void returnPersistentInstances(Runner* runner, Instance** carriedPersistent) {
     repeat(arrlen(carriedPersistent), i) {
         arrput(runner->instances, carriedPersistent[i]);
+        Runner_addInstanceToObjectLists(runner, carriedPersistent[i]);
     }
     arrfree(carriedPersistent);
 }
@@ -892,6 +984,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         int32_t savedCount = (int32_t) arrlen(savedState->instances);
         repeat(savedCount, i) {
             arrput(runner->instances, savedState->instances[i]);
+            Runner_addInstanceToObjectLists(runner, savedState->instances[i]);
         }
         arrfree(savedState->instances);
         savedState->instances = nullptr;
@@ -1071,6 +1164,9 @@ static void cleanupState(Runner* runner) {
     arrfree(runner->instances);
     runner->instances = nullptr;
 
+    // Empty the per-object lists. We keep the outer instancesByObject array allocated so Runner_reset can be reused; Runner_free releases it.
+    Runner_clearAllObjectLists(runner);
+
     // Free saved room states
     if (runner->savedRoomStates != nullptr) {
         repeat(runner->dataWin->room.count, i) {
@@ -1179,6 +1275,12 @@ void Runner_reset(Runner* runner) {
     runner->savedRoomStates = safeCalloc(runner->dataWin->room.count, sizeof(SavedRoomState));
     runner->nextLayerId = 1;
     runner->audioSystem->vtable->stopAll(runner->audioSystem);
+
+    // Allocate the per-object instance list array once.
+    // We don't need to reinitialize the list because the objt.count is fixed for this data.win.
+    if (runner->instancesByObject == nullptr) {
+        runner->instancesByObject = safeCalloc(runner->dataWin->objt.count, sizeof(Instance**));
+    }
 
     // Create the instance used for "self" in GLOB scripts
     Instance_free(runner->globalScopeInstance);
@@ -1318,6 +1420,7 @@ void Runner_cleanupDestroyedInstances(Runner* runner) {
         if (!inst->destroyed) {
             runner->instances[writeIdx++] = inst;
         } else {
+            Runner_removeInstanceFromObjectLists(runner, inst);
             hmdel(runner->instancesToId, inst->instanceId);
             Instance_free(inst);
         }
@@ -1421,12 +1524,13 @@ static void dispatchCollisionEvents(Runner* runner) {
 
                 if (evt->actionCount == 0 || 0 > evt->actions[0].codeId) continue;
 
-                // Check all instances of the target object
-                repeat(count, j) {
-                    Instance* other = runner->instances[j];
+                // Iterate only the descendant-inclusive list for the target object via a snapshot, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots above ours without corrupting this iteration.
+                int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
+                int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+                for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+                    Instance* other = runner->instanceSnapshots[snapIdx];
                     if (!other->active) continue;
                     if (other == self) continue;
-                    if (!VM_isObjectOrDescendant(dataWin, other->objectIndex, targetObjIndex)) continue;
 
                     // Compute bboxes
                     if (selfDirty) {
@@ -1461,6 +1565,7 @@ static void dispatchCollisionEvents(Runner* runner) {
                     // The collision event may have moved our instance, so we'll need to regenerate our self attributes!
                     selfDirty = true;
                 }
+                Runner_popInstanceSnapshot(runner, snapBase);
             }
 
             currentObj = obj->parentId;
@@ -1504,12 +1609,14 @@ static void updateViews(Runner* runner) {
         RuntimeView* view = &runner->views[vi];
         if (!view->enabled || 0 > view->objectId) continue;
 
-        // Find first active instance of the target object
+        // Find first active instance of the target object.
         Instance* target = nullptr;
-        int32_t count = (int32_t) arrlen(runner->instances);
-        repeat(count, i) {
-            Instance* inst = runner->instances[i];
-            if (inst->active && VM_isObjectOrDescendant(runner->dataWin, inst->objectIndex, view->objectId)) { target = inst; break; };
+        if (view->objectId >= 0 && runner->dataWin->objt.count > (uint32_t) view->objectId) {
+            Instance** bucket = runner->instancesByObject[view->objectId];
+            int32_t bucketCount = (int32_t) arrlen(bucket);
+            repeat(bucketCount, i) {
+                if (bucket[i]->active) { target = bucket[i]; break; }
+            }
         }
 
         if (target != nullptr) {
@@ -1701,6 +1808,12 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
     arrfree(runner->instances);
     runner->instances = keptInstances;
 
+    // The per-object lists referenced the full pre-transition instance set (persistents, saved-to-state, and soon-to-be-freed). Only the kept persistents remain live, so rebuild from scratch from the final runner->instances.
+    Runner_clearAllObjectLists(runner);
+    repeat((int32_t) arrlen(runner->instances), i) {
+        Runner_addInstanceToObjectLists(runner, runner->instances[i]);
+    }
+
     // Save room visual state
     memcpy(state->backgrounds, runner->backgrounds, sizeof(runner->backgrounds));
     memcpy(state->views, runner->views, sizeof(runner->views));
@@ -1719,6 +1832,9 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
 }
 
 void Runner_step(Runner* runner) {
+    // The snapshot arena is stack-like and every push must be matched with a pop within the same frame. Assert that invariant at the top of each step: a non-zero length here means some site below pushed without popping, and we want a loud failure with the offending length so we can find it instead of silently leaking until the next frame.
+    requireMessageFormatted(arrlen(runner->instanceSnapshots) == 0, "instanceSnapshots arena was not fully popped at end of previous frame (length=%td)", arrlen(runner->instanceSnapshots));
+
     // Save xprevious/yprevious and path_positionprevious for all active instances
     int32_t prevCount = (int32_t) arrlen(runner->instances);
     repeat(prevCount, i) {
@@ -2260,6 +2376,17 @@ void Runner_free(Runner* runner) {
     if (runner == nullptr) return;
 
     cleanupState(runner);
+
+    if (runner->instancesByObject != nullptr) {
+        uint32_t objectCount = runner->dataWin->objt.count;
+        repeat(objectCount, i) {
+            arrfree(runner->instancesByObject[i]);
+        }
+        free(runner->instancesByObject);
+        runner->instancesByObject = nullptr;
+    }
+    arrfree(runner->instanceSnapshots);
+    runner->instanceSnapshots = nullptr;
 
     RunnerKeyboard_free(runner->keyboard);
     Instance_free(runner->globalScopeInstance);
