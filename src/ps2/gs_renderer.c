@@ -685,6 +685,13 @@ static bool ensureAtlasLoaded(GsRenderer* gs, uint16_t atlasId) {
         int16_t firstChunk = gs->atlasToChunk[atlasId];
         uint8_t bpp = gs->atlasBpp[atlasId];
         int chunksUsed = (bpp == 8) ? 2 : 1;
+
+        // Track unique atlases per frame (first touch = lastUsed hasn't been updated yet)
+        if (gs->chunks[firstChunk].lastUsed != gs->frameCounter) {
+            gs->uniqueAtlasesThisFrame++;
+            gs->chunksNeededThisFrame += (uint16_t) chunksUsed;
+        }
+
         repeat(chunksUsed, i) {
             gs->chunks[firstChunk + i].lastUsed = gs->frameCounter;
         }
@@ -698,6 +705,10 @@ static bool ensureAtlasLoaded(GsRenderer* gs, uint16_t atlasId) {
         return false;
     }
     int chunksNeeded = (bpp == 8) ? 2 : 1;
+
+    // Fresh load is always a new unique atlas this frame
+    gs->uniqueAtlasesThisFrame++;
+    gs->chunksNeededThisFrame += (uint16_t) chunksNeeded;
 
     // Allocate chunks (may evict or defrag)
     int32_t chunkIdx = allocateChunks(gs, chunksNeeded);
@@ -882,6 +893,8 @@ static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_U
     GsRenderer* gs = (GsRenderer*) renderer;
     gs->frameCounter++;
     gs->evictedAtlasUsedInCurrentFrame = false;
+    gs->uniqueAtlasesThisFrame = 0;
+    gs->chunksNeededThisFrame = 0;
 }
 
 static void gsEndFrame(MAYBE_UNUSED Renderer* renderer) {

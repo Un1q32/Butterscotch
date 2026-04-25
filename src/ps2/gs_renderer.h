@@ -115,6 +115,8 @@ typedef struct {
     uint8_t* atlasBpp;         // Bits per pixel per atlas (4 or 8), from ATLAS.BIN [atlasCount]
     uint64_t frameCounter;     // Incremented each frame for LRU tracking
     bool evictedAtlasUsedInCurrentFrame; // Used for debugging, true if a atlas that was used on the current frame was evicted (VRAM thrashing)
+    uint16_t uniqueAtlasesThisFrame;     // Number of distinct atlases touched this frame
+    uint16_t chunksNeededThisFrame;      // Total VRAM chunks needed by all atlases touched this frame
 
     // EE RAM atlas cache (stores uncompressed atlas pixel data for zero-copy VRAM uploads)
     uint8_t* eeCache;                  // Contiguous buffer with uncompressed texture data
