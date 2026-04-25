@@ -38,7 +38,7 @@ void SpatialGrid_free(SpatialGrid* grid) {
     free(grid);
 }
 
-void removeInstanceFromGridCells(SpatialGrid* grid, Instance* instance) {
+static void removeInstanceFromGridCells(SpatialGrid* grid, Instance* instance) {
     repeat(arrlen(instance->collisionCells), i) {
         uint32_t gridCoordinates = instance->collisionCells[i];
         int32_t gridX = SpatialGrid_unpackGridX(gridCoordinates);
