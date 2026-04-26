@@ -2078,6 +2078,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     }
 
     // Slow path: unknown function (not cached as builtin or script)
+#ifdef ENABLE_VM_STUB_LOGS
     const char* unknownFuncName = ctx->dataWin->func.functions[funcIndex].name;
 
     // Log once per (callingCode, funcName) pair
@@ -2090,6 +2091,7 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     } else {
         free(dedupKey);
     }
+#endif
 
     // Free arguments and push undefined
     if (args != nullptr) {
@@ -2152,6 +2154,7 @@ static void handleCallV(VMContext* ctx, uint32_t instr) {
     } else if (builtin != nullptr) {
         result = builtin(ctx, args, argCount);
     } else if (unresolvedName != nullptr) {
+#ifdef ENABLE_VM_STUB_LOGS
         const char* callerName = VM_getCallerName(ctx);
         char* dedupKey = VM_createDedupKey(callerName, unresolvedName);
         if (ctx->alwaysLogUnknownFunctions || 0 > shgeti(ctx->loggedUnknownFuncs, dedupKey)) {
@@ -2160,6 +2163,7 @@ static void handleCallV(VMContext* ctx, uint32_t instr) {
         } else {
             free(dedupKey);
         }
+#endif
         result = RValue_makeUndefined();
     } else {
         fprintf(stderr, "VM: [%s] CALLV with unresolvable function reference (type=%d, codeIndex=%d)\n", ctx->currentCodeName, function.type, codeIndex);

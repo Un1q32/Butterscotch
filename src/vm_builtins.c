@@ -26,6 +26,7 @@
 
 // ===[ STUB LOGGING ]===
 
+#ifdef ENABLE_VM_STUB_LOGS
 static void logStubbedFunction(VMContext* ctx, const char* funcName) {
     const char* callerName = VM_getCallerName(ctx);
     char* dedupKey = VM_createDedupKey(callerName, funcName);
@@ -51,6 +52,10 @@ static void logSemiStubbedFunction(VMContext* ctx, const char* funcName) {
         free(dedupKey);
     }
 }
+#else
+#define logStubbedFunction(ctx, funcName) ((void) 0)
+#define logSemiStubbedFunction(ctx, funcName) ((void) 0)
+#endif
 
 // ===[ DS_MAP SYSTEM ]===
 

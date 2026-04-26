@@ -64,6 +64,12 @@ if(PLATFORM STREQUAL "glfw")
         add_compile_definitions(ENABLE_SPATIAL_GRID_LOGS)
     endif()
 
+    # VM unknown/stubbed function logs
+    option(ENABLE_VM_STUB_LOGS "Enable VM unknown/stubbed function logs" ON)
+    if(ENABLE_VM_STUB_LOGS)
+        add_compile_definitions(ENABLE_VM_STUB_LOGS)
+    endif()
+
     # GLAD
     add_library(glad STATIC vendor/glad/src/glad.c)
     target_include_directories(glad PUBLIC vendor/glad/include)
@@ -133,6 +139,12 @@ elseif(PLATFORM STREQUAL "ps2")
     option(ENABLE_SPATIAL_GRID_LOGS "Enable Spatial Grid logs" OFF)
     if(ENABLE_SPATIAL_GRID_LOGS)
         add_compile_definitions(ENABLE_SPATIAL_GRID_LOGS)
+    endif()
+
+    # VM unknown/stubbed function logs
+    option(ENABLE_VM_STUB_LOGS "Enable VM unknown/stubbed function logs" OFF)
+    if(ENABLE_VM_STUB_LOGS)
+        add_compile_definitions(ENABLE_VM_STUB_LOGS)
     endif()
 
     # Platform identifier for PS2-specific code paths (e.g., scratchpad allocation)
