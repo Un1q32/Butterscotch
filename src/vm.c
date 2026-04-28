@@ -1923,19 +1923,6 @@ static void handleDup(VMContext* ctx, uint32_t instr) {
     }
 }
 
-static void handleBranch(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
-    int32_t offset = instrJumpOffset(instr);
-    ctx->ip = instrAddr + offset;
-}
-
-static void handleConditionalBranch(VMContext* ctx, uint32_t instr, uint32_t instrAddr, bool expected) {
-    bool condition = stackPopInt32(ctx) != 0;
-    if (condition == expected) {
-        int32_t offset = instrJumpOffset(instr);
-        ctx->ip = instrAddr + offset;
-    }
-}
-
 // ===[ Function Call Handler ]===
 
 static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData) {
@@ -2482,27 +2469,33 @@ static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
 }
 #endif
 
+#define VM_SYNC_IP()    do { ctx->ip = ip; } while (0)
+#define VM_RELOAD_IP()  do { ip = ctx->ip; } while (0)
+
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
     // reload the values at the end of every iteration.
     const uint32_t codeEnd = ctx->codeEnd;
     const uint8_t* const bytecodeBase = ctx->bytecodeBase;
+    // If you just joined the stream: ip is short for instruction pointer chat
+    // The ip is mutable, so we need to use VM_SYNC_IP and VM_RELOAD_IP every time an opcode handler may access it or write to it
+    uint32_t ip = ctx->ip;
 
-    while (codeEnd > ctx->ip) {
+    while (codeEnd > ip) {
 #ifdef ENABLE_VM_PROFILER
         if (ctx->profiler != nullptr)
             Profiler_tickInstruction(ctx->profiler);
 #endif
-        uint32_t instrAddr = ctx->ip;
-        uint32_t instr = BinaryUtils_readUint32Aligned(bytecodeBase + ctx->ip);
-        ctx->ip += 4;
+        uint32_t instrAddr = ip;
+        uint32_t instr = BinaryUtils_readUint32Aligned(bytecodeBase + ip);
+        ip += 4;
 
         // extraData pointer (may not be used depending on opcode)
-        const uint8_t* extraData = bytecodeBase + ctx->ip;
+        const uint8_t* extraData = bytecodeBase + ip;
 
         // If instruction has extra data (bit 30 set), advance IP past it
         if (instrHasExtraData(instr)) {
-            ctx->ip += extraDataSize(instrType1(instr));
+            ip += extraDataSize(instrType1(instr));
         }
 
         uint8_t opcode = instrOpcode(instr);
@@ -2586,22 +2579,38 @@ static RValue executeLoop(VMContext* ctx) {
                 break;
 
             // Branches
-            case OP_B:
-                handleBranch(ctx, instr, instrAddr);
+            // The reason why these (the branches opcodes) are inlined is because they access ctx->ip
+            // So, because they are short n' sweet, we prefer to keep them inlined to avoid any reloading shenanigans that the compiler may do
+            case OP_B: {
+                int32_t offset = instrJumpOffset(instr);
+                ip = instrAddr + offset;
                 break;
-            case OP_BT:
-                handleConditionalBranch(ctx, instr, instrAddr, true);
+            }
+            case OP_BT: {
+                bool condition = stackPopInt32(ctx) != 0;
+                if (condition == true) {
+                    int32_t offset = instrJumpOffset(instr);
+                    ip = instrAddr + offset;
+                }
                 break;
-            case OP_BF:
-                handleConditionalBranch(ctx, instr, instrAddr, false);
+            }
+            case OP_BF: {
+                bool condition = stackPopInt32(ctx) != 0;
+                if (condition == false) {
+                    int32_t offset = instrJumpOffset(instr);
+                    ip = instrAddr + offset;
+                }
                 break;
+            }
 
             // Function call
             case OP_CALL:
+                VM_SYNC_IP();
                 handleCall(ctx, instr, extraData);
                 break;
 #if IS_BC17_OR_HIGHER_ENABLED
             case OP_CALLV:
+                VM_SYNC_IP();
                 handleCallV(ctx, instr);
                 break;
 #endif
@@ -2618,10 +2627,14 @@ static RValue executeLoop(VMContext* ctx) {
 
             // Environment (with-statements)
             case OP_PUSHENV:
+                VM_SYNC_IP();
                 handlePushEnv(ctx, instr, instrAddr);
+                VM_RELOAD_IP();
                 break;
             case OP_POPENV:
+                VM_SYNC_IP();
                 handlePopEnv(ctx, instr, instrAddr);
+                VM_RELOAD_IP();
                 break;
 
             // Break (extended opcodes in V17+, no-op/debug in V16)
