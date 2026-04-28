@@ -1007,14 +1007,6 @@ static void glDrawText(Renderer* renderer, const char* text, float x, float y, f
 }
 
 static void glDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t _c1, int32_t _c2, int32_t _c3, int32_t _c4, float alpha) {
-    if (_c1 == _c2 && _c2 == _c3 && _c3 == _c4) {
-        fprintf(stderr, "glDrawTextColor: Same colors!\n");
-    }
-
-    if (_c1 == _c2 || _c3 == _c4) {
-        fprintf(stderr, "glDrawTextColor: Vertical gradient only!\n");
-    }
-
     GLRenderer* gl = (GLRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
 
