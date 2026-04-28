@@ -1265,8 +1265,10 @@ static void cleanupState(Runner* runner) {
         }
     }
 
-    if (runner->spatialGrid != nullptr)
+    if (runner->spatialGrid != nullptr) {
         SpatialGrid_free(runner->spatialGrid);
+        runner->spatialGrid = nullptr;
+    }
 }
 
 // ===[ Public API ]===
