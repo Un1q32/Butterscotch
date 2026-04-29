@@ -7911,7 +7911,6 @@ static RValue builtinAssetGetIndex(VMContext* ctx, RValue* args, int32_t argCoun
 
 static RValue builtin_Gpu_Set_BlendMode(VMContext* ctx, RValue* args, int32_t argCount) {
     int mode = RValue_toReal(args[0]);
-    printf("gpu_set_blendmode(%i);\n", mode);
     ctx->runner->renderer->vtable->gpuSetBlendMode(ctx->runner->renderer, mode);
     return RValue_makeUndefined();
 }
@@ -7919,7 +7918,6 @@ static RValue builtin_Gpu_Set_BlendMode(VMContext* ctx, RValue* args, int32_t ar
 static RValue builtin_Gpu_Set_BlendModeExt(VMContext* ctx, RValue* args, int32_t argCount) {
     int sfactor = RValue_toReal(args[0]);
     int dfactor = RValue_toReal(args[1]);
-    printf("gpu_set_blendmode_ext(%i, %i);\n", sfactor, dfactor);
     ctx->runner->renderer->vtable->gpuSetBlendModeExt(ctx->runner->renderer, sfactor, dfactor);
     return RValue_makeUndefined();
 }
