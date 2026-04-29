@@ -58,7 +58,7 @@ typedef struct {
 // ===[ VRAM Chunk (buddy system unit) ]===
 // Each chunk is 128KB of VRAM (fits one 4bpp 512x512 atlas).
 // An 8bpp atlas uses 2 consecutive chunks.
-#define VRAM_CHUNK_SIZE 32768 // 128KB = gsKit_texture_size(512, 512, GS_PSM_T4)
+#define VRAM_CHUNK_SIZE 131072 // 128KB = gsKit_texture_size(512, 512, GS_PSM_T4)
 
 typedef struct {
     int16_t atlasId;    // Which atlas occupies this chunk (-1 = free)

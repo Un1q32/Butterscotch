@@ -777,7 +777,7 @@ int main(int argc, char* argv[]) {
         if (RunnerKeyboard_checkPressed(runner->keyboard, VK_PAGEDOWN)) {
             DataWin* dw = runner->dataWin;
             forEachIndexed(Room, room, i, dw->room.rooms, dw->room.count) {
-                if (strcmp(room->name, "room_board_1") == 0) {
+                if (strcmp(room->name, "room_asrielappears") == 0) {
                     runner->pendingRoom = i;
                     runner->audioSystem->vtable->stopAll(runner->audioSystem);
                     break;

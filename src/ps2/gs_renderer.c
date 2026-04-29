@@ -20,8 +20,8 @@
 #endif
 
 // ===[ Constants ]===
-#define ATLAS_WIDTH 256
-#define ATLAS_HEIGHT 256
+#define ATLAS_WIDTH 512
+#define ATLAS_HEIGHT 512
 #define PS2_SCREEN_WIDTH 640.0f
 #define PS2_SCREEN_HEIGHT 448.0f
 #define TEX_HEADER_SIZE 128
