@@ -554,7 +554,9 @@ static void installCrashHandlers(void) {
 #endif
     signal(SIGSEGV, crashSignalHandler);
     signal(SIGABRT, crashSignalHandler);
+#ifdef SIGBUS
     signal(SIGBUS,  crashSignalHandler);
+#endif
     signal(SIGFPE,  crashSignalHandler);
     signal(SIGILL,  crashSignalHandler);
 }
