@@ -6321,6 +6321,103 @@ static RValue builtinCollisionRectangle(VMContext* ctx, RValue* args, int32_t ar
     return RValue_makeReal((GMLReal) resultId);
 }
 
+// collision_circle(x, y, radius, obj, prec, notme)
+static RValue builtinCollisionCircle(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (6 > argCount) return RValue_makeReal((GMLReal) INSTANCE_NOONE);
+
+    Runner* runner = (Runner*) ctx->runner;
+    GMLReal cx = RValue_toReal(args[0]);
+    GMLReal cy = RValue_toReal(args[1]);
+    GMLReal radius = RValue_toReal(args[2]);
+    int32_t targetObjIndex = RValue_toInt32(args[3]);
+    int32_t prec = RValue_toInt32(args[4]);
+    int32_t notme = RValue_toInt32(args[5]);
+
+    if (0 > radius) radius = -radius;
+    GMLReal radiusSq = radius * radius;
+
+    Instance* self = (Instance*) ctx->currentInstance;
+
+    GMLReal qx1 = cx - radius;
+    GMLReal qy1 = cy - radius;
+    GMLReal qx2 = cx + radius;
+    GMLReal qy2 = cy + radius;
+
+    SpatialGrid_syncGrid(runner, runner->spatialGrid);
+    SpatialGridRange range = SpatialGrid_computeCellRange(runner->spatialGrid, qx1, qy1, qx2, qy2);
+    bool filterByObject = targetObjIndex >= 0 && 100000 > targetObjIndex;
+    bool filterByInstanceId = targetObjIndex >= 100000;
+    uint32_t queryId = ++runner->collisionQueryCounter;
+
+    int32_t resultId = INSTANCE_NOONE;
+    for (int32_t gx = range.minGridX; range.maxGridX >= gx && resultId == INSTANCE_NOONE; gx++) {
+        for (int32_t gy = range.minGridY; range.maxGridY >= gy && resultId == INSTANCE_NOONE; gy++) {
+            Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
+            int32_t cellLen = (int32_t) arrlen(cell);
+            for (int32_t ci = 0; cellLen > ci; ci++) {
+                Instance* inst = cell[ci];
+                if (!inst->active) continue;
+                if (notme && inst == self) continue;
+                if (inst->lastCollisionQueryId == queryId) continue;
+                inst->lastCollisionQueryId = queryId;
+
+                if (filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, targetObjIndex)) continue;
+                if (filterByInstanceId && inst->instanceId != (uint32_t) targetObjIndex) continue;
+                if (!filterByObject && !filterByInstanceId && targetObjIndex != INSTANCE_ALL) continue;
+
+                InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
+                if (!bbox.valid) continue;
+
+                // Circle vs AABB: closest point on bbox to circle center
+                GMLReal closestX = cx;
+                if (bbox.left > closestX) closestX = bbox.left;
+                if (closestX > bbox.right) closestX = bbox.right;
+                GMLReal closestY = cy;
+                if (bbox.top > closestY) closestY = bbox.top;
+                if (closestY > bbox.bottom) closestY = bbox.bottom;
+                GMLReal dx = closestX - cx;
+                GMLReal dy = closestY - cy;
+                if (dx * dx + dy * dy > radiusSq) continue;
+
+                if (prec != 0) {
+                    Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+                    if (Collision_hasFrameMasks(spr)) {
+                        GMLReal iLeft   = GMLReal_fmax(qx1, bbox.left);
+                        GMLReal iRight  = GMLReal_fmin(qx2, bbox.right);
+                        GMLReal iTop    = GMLReal_fmax(qy1, bbox.top);
+                        GMLReal iBottom = GMLReal_fmin(qy2, bbox.bottom);
+
+                        bool found = false;
+                        int32_t startX = (int32_t) GMLReal_floor(iLeft);
+                        int32_t endX   = (int32_t) GMLReal_ceil(iRight);
+                        int32_t startY = (int32_t) GMLReal_floor(iTop);
+                        int32_t endY   = (int32_t) GMLReal_ceil(iBottom);
+
+                        for (int32_t py = startY; endY > py && !found; py++) {
+                            for (int32_t px = startX; endX > px && !found; px++) {
+                                GMLReal wpx = (GMLReal) px + 0.5;
+                                GMLReal wpy = (GMLReal) py + 0.5;
+                                GMLReal ddx = wpx - cx;
+                                GMLReal ddy = wpy - cy;
+                                if (ddx * ddx + ddy * ddy > radiusSq) continue;
+                                if (Collision_pointInInstance(spr, inst, wpx, wpy)) {
+                                    found = true;
+                                }
+                            }
+                        }
+                        if (!found) continue;
+                    }
+                }
+
+                resultId = inst->instanceId;
+                break;
+            }
+        }
+    }
+
+    return RValue_makeReal((GMLReal) resultId);
+}
+
 // collision_rectangle_list(x1, y1, x2, y2, obj, prec, notme, list, ordered) -> count
 static RValue builtinCollisionRectangleList(VMContext* ctx, RValue* args, int32_t argCount) {
     if (8 > argCount) return RValue_makeReal(0.0);
@@ -8647,6 +8744,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "rectangle_in_rectangle", builtinRectangleInRectangle);
     VM_registerBuiltin(ctx, "collision_line", builtinCollisionLine);
     VM_registerBuiltin(ctx, "collision_point", builtinCollisionPoint);
+    VM_registerBuiltin(ctx, "collision_circle", builtinCollisionCircle);
     VM_registerBuiltin(ctx, "instance_place", builtinInstancePlace);
     VM_registerBuiltin(ctx, "instance_position", builtinInstancePosition);
     VM_registerBuiltin(ctx, "position_meeting", builtinPositionMeeting);
