@@ -39,9 +39,12 @@ static const char* fragmentShaderSource =
     "in vec2 vTexCoord;\n"
     "in vec4 vColor;\n"
     "uniform sampler2D uTexture;\n"
+    "uniform float uAlphaTestRef;\n" // negative = disabled
     "out vec4 fragColor;\n"
     "void main() {\n"
-    "    fragColor = texture(uTexture, vTexCoord) * vColor;\n"
+    "    vec4 c = texture(uTexture, vTexCoord) * vColor;\n"
+    "    if (uAlphaTestRef >= c.a) discard;\n"
+    "    fragColor = c;\n"
     "}\n";
 
 // ===[ Shader Compilation ]===
@@ -115,6 +118,11 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
 
     gl->uProjection = glGetUniformLocation(gl->shaderProgram, "uProjection");
     gl->uTexture = glGetUniformLocation(gl->shaderProgram, "uTexture");
+    gl->uAlphaTestRef = glGetUniformLocation(gl->shaderProgram, "uAlphaTestRef");
+    gl->alphaTestEnable = false;
+    gl->alphaTestRef = 0.0f;
+    glUseProgram(gl->shaderProgram);
+    glUniform1f(gl->uAlphaTestRef, -1.0f);
 
     // Create VAO/VBO/EBO
     glGenVertexArrays(1, &gl->vao);
@@ -1376,13 +1384,24 @@ static void glGpuSetBlendEnable(Renderer* renderer, bool enable) {
 }
 
 static void glGpuSetAlphaTestEnable(Renderer* renderer, bool enable) {
-    flushBatch((GLRenderer*)renderer);
-    enable ? glEnable(GL_ALPHA_TEST) : glDisable(GL_ALPHA_TEST);
+    GLRenderer* gl = (GLRenderer*) renderer;
+    if (gl->alphaTestEnable == enable) return;
+    flushBatch(gl);
+    gl->alphaTestEnable = enable;
+    glUseProgram(gl->shaderProgram);
+    glUniform1f(gl->uAlphaTestRef, enable ? gl->alphaTestRef : -1.0f);
 }
 
 static void glGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {
-    flushBatch((GLRenderer*)renderer);
-    glAlphaFunc(GL_GREATER, ref/255.0f);
+    GLRenderer* gl = (GLRenderer*) renderer;
+    float refF = ref / 255.0f;
+    if (gl->alphaTestRef == refF) return;
+    flushBatch(gl);
+    gl->alphaTestRef = refF;
+    if (gl->alphaTestEnable) {
+        glUseProgram(gl->shaderProgram);
+        glUniform1f(gl->uAlphaTestRef, refF);
+    }
 }
 
 static void glGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {
