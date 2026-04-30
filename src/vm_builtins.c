@@ -7978,13 +7978,22 @@ static RValue builtinGpuSetAlphaTestRef(VMContext* ctx, RValue* args, int32_t ar
 }
 
 static RValue builtinGpuSetColorWriteEnable(VMContext* ctx, RValue* args, int32_t argCount) {
-    ctx->runner->renderer->vtable->gpuSetColorWriteEnable(
-        ctx->runner->renderer, 
-        RValue_toBool(args[0]), 
-        RValue_toBool(args[1]), 
-        RValue_toBool(args[2]), 
-        RValue_toBool(args[3])
-    );
+    bool r, g, b, a;
+    if (argCount == 1 && args[0].type == RVALUE_ARRAY && args[0].array != nullptr && GMLArray_length1D(args[0].array) >= 4) {
+        GMLArray* arr = args[0].array;
+        r = RValue_toBool(*GMLArray_slot(arr, 0));
+        g = RValue_toBool(*GMLArray_slot(arr, 1));
+        b = RValue_toBool(*GMLArray_slot(arr, 2));
+        a = RValue_toBool(*GMLArray_slot(arr, 3));
+    } else if (argCount >= 4) {
+        r = RValue_toBool(args[0]);
+        g = RValue_toBool(args[1]);
+        b = RValue_toBool(args[2]);
+        a = RValue_toBool(args[3]);
+    } else {
+        return RValue_makeUndefined();
+    }
+    ctx->runner->renderer->vtable->gpuSetColorWriteEnable(ctx->runner->renderer, r, g, b, a);
     return RValue_makeUndefined();
 }
 
