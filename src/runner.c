@@ -856,7 +856,7 @@ static Instance* createAndInitInstance(Runner* runner, int32_t instanceId, int32
 
 #ifdef ENABLE_VM_TRACING
     if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, objDef->name) != -1) {
-        fprintf(stderr, "VM: Instance %s (%d) created at (%f, %f)\n", objDef->name, instanceId, x, y);
+        fprintf(stderr, "VM: Instance %s (instanceId=%d,objectIndex=%d) created at (%f, %f)\n", objDef->name, instanceId, inst->objectIndex, x, y);
     }
 #endif
 
@@ -876,7 +876,7 @@ static Instance** takePersistentInstances(Runner* runner) {
 #ifdef ENABLE_VM_TRACING
             GameObject* gameObject = &runner->dataWin->objt.objects[inst->objectIndex];
             if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, gameObject->name) != -1) {
-                fprintf(stderr, "VM: Instance %s (%d) has been persisted at (%f, %f) due to room change\n", gameObject->name, inst->instanceId, inst->x, inst->y);
+                fprintf(stderr, "VM: Instance %s (instanceId=%d,objectIndex=%d) has been persisted at (%f, %f) due to room change\n", gameObject->name, inst->instanceId, inst->objectIndex, inst->x, inst->y);
             }
 #endif
 
@@ -885,7 +885,7 @@ static Instance** takePersistentInstances(Runner* runner) {
 #ifdef ENABLE_VM_TRACING
             GameObject* gameObject = &runner->dataWin->objt.objects[inst->objectIndex];
             if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, gameObject->name) != -1) {
-                fprintf(stderr, "VM: Instance %s (%d) destroyed at (%f, %f) due to room change\n", gameObject->name, inst->instanceId, inst->x, inst->y);
+                fprintf(stderr, "VM: Instance %s (instanceId=%d,objectIndex=%d) destroyed at (%f, %f) due to room change\n", gameObject->name, inst->instanceId, inst->objectIndex, , inst->x, inst->y);
             }
 #endif
 
@@ -1436,7 +1436,7 @@ void Runner_destroyInstance(MAYBE_UNUSED Runner* runner, Instance* inst) {
 #ifdef ENABLE_VM_TRACING
     GameObject* gameObject = &runner->dataWin->objt.objects[inst->objectIndex];
     if (shgeti(runner->vmContext->instanceLifecyclesToBeTraced, "*") != -1 || shgeti(runner->vmContext->instanceLifecyclesToBeTraced, gameObject->name) != -1) {
-        fprintf(stderr, "VM: Instance %s (%d) destroyed\n", gameObject->name, inst->instanceId);
+        fprintf(stderr, "VM: Instance %s (instanceId=%d,objectIndex=%d) destroyed\n", gameObject->name, inst->instanceId, inst->objectIndex);
     }
 #endif
 }
