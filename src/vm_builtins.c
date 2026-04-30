@@ -75,14 +75,25 @@ static DsMapEntry** dsMapGet(Runner* runner, int32_t id) {
 // ===[ DS_LIST SYSTEM ]===
 
 static int32_t dsListCreate(Runner* runner) {
-    DsList newList = { .items = nullptr };
-    int32_t id = (int32_t) arrlen(runner->dsListPool);
+    // Reuse a freed slot if available, matching native GameMaker behavior.
+    // Yes, some games (example: DELTARUNE Chapter 3's obj_board_playercamera_Other_10) rely on ds_list_create reusing the id of a list just destroyed.
+    int32_t poolSize = (int32_t) arrlen(runner->dsListPool);
+    repeat(poolSize, i) {
+        if (runner->dsListPool[i].freed) {
+            runner->dsListPool[i].freed = false;
+            runner->dsListPool[i].items = nullptr;
+            return i;
+        }
+    }
+    DsList newList = { .items = nullptr, .freed = false };
+    int32_t id = poolSize;
     arrput(runner->dsListPool, newList);
     return id;
 }
 
 static DsList* dsListGet(Runner* runner, int32_t id) {
-    if (0 > id || id > (int32_t) arrlen(runner->dsListPool)) return nullptr;
+    if (0 > id || id >= (int32_t) arrlen(runner->dsListPool)) return nullptr;
+    if (runner->dsListPool[id].freed) return nullptr;
     return &runner->dsListPool[id];
 }
 
@@ -2602,6 +2613,30 @@ static RValue builtinDsListAdd(VMContext* ctx, RValue* args, int32_t argCount) {
         arrput(list->items, RValue_makeIndependent(args[i + 1]));
     }
     return RValue_makeUndefined();
+}
+
+static RValue builtinDsListDestroy(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    DsList* list = dsListGet(runner, id);
+    if (list == nullptr) return RValue_makeUndefined();
+    repeat(arrlen(list->items), i) {
+        RValue_free(&list->items[i]);
+    }
+    arrfree(list->items);
+    list->items = nullptr;
+    list->freed = true;
+    return RValue_makeUndefined();
+}
+
+static RValue builtinDsListFindValue(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    int32_t pos = RValue_toInt32(args[1]);
+    DsList* list = dsListGet(runner, id);
+    if (list == nullptr) return RValue_makeUndefined();
+    if (0 > pos || pos >= (int32_t) arrlen(list->items)) return RValue_makeUndefined();
+    return RValue_makeIndependent(list->items[pos]);
 }
 
 static RValue builtinDsListSize(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -6275,6 +6310,88 @@ static RValue builtinCollisionRectangle(VMContext* ctx, RValue* args, int32_t ar
     return RValue_makeReal((GMLReal) resultId);
 }
 
+// collision_rectangle_list(x1, y1, x2, y2, obj, prec, notme, list, ordered) -> count
+static RValue builtinCollisionRectangleList(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (8 > argCount) return RValue_makeReal(0.0);
+
+    Runner* runner = (Runner*) ctx->runner;
+    GMLReal x1 = RValue_toReal(args[0]);
+    GMLReal y1 = RValue_toReal(args[1]);
+    GMLReal x2 = RValue_toReal(args[2]);
+    GMLReal y2 = RValue_toReal(args[3]);
+    int32_t target = RValue_toInt32(args[4]);
+    int32_t prec = RValue_toInt32(args[5]);
+    int32_t notme = RValue_toInt32(args[6]);
+    int32_t listId = RValue_toInt32(args[7]);
+    // arg 8 (ordered) is currently ignored; instances are appended in iteration order
+
+    DsList* list = dsListGet(runner, listId);
+    if (list == nullptr) return RValue_makeReal(0.0);
+
+    if (x1 > x2) { GMLReal tmp = x1; x1 = x2; x2 = tmp; }
+    if (y1 > y2) { GMLReal tmp = y1; y1 = y2; y2 = tmp; }
+
+    Instance* self = (Instance*) ctx->currentInstance;
+    int32_t count = 0;
+
+    SpatialGrid_syncGrid(runner, runner->spatialGrid);
+    SpatialGridRange range = SpatialGrid_computeCellRange(runner->spatialGrid, x1, y1, x2, y2);
+    bool filterByObject = target >= 0 && 100000 > target;
+    bool filterByInstanceId = target >= 100000;
+    uint32_t queryId = ++runner->collisionQueryCounter;
+
+    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++) {
+        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++) {
+            Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
+            int32_t cellLen = (int32_t) arrlen(cell);
+            repeat(cellLen, ci) {
+                Instance* inst = cell[ci];
+                if (!inst->active) continue;
+                if (notme && inst == self) continue;
+                if (inst->lastCollisionQueryId == queryId) continue;
+                inst->lastCollisionQueryId = queryId;
+
+                if (filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, target)) continue;
+                if (filterByInstanceId && inst->instanceId != (uint32_t) target) continue;
+
+                InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
+                if (!bbox.valid) continue;
+                if (x1 >= bbox.right || bbox.left >= x2 || y1 >= bbox.bottom || bbox.top >= y2) continue;
+
+                if (prec != 0) {
+                    Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+                    if (Collision_hasFrameMasks(spr)) {
+                        GMLReal iLeft   = GMLReal_fmax(x1, bbox.left);
+                        GMLReal iRight  = GMLReal_fmin(x2, bbox.right);
+                        GMLReal iTop    = GMLReal_fmax(y1, bbox.top);
+                        GMLReal iBottom = GMLReal_fmin(y2, bbox.bottom);
+
+                        bool found = false;
+                        int32_t startX = (int32_t) GMLReal_floor(iLeft);
+                        int32_t endX   = (int32_t) GMLReal_ceil(iRight);
+                        int32_t startY = (int32_t) GMLReal_floor(iTop);
+                        int32_t endY   = (int32_t) GMLReal_ceil(iBottom);
+
+                        for (int32_t py = startY; endY > py && !found; py++) {
+                            for (int32_t px = startX; endX > px && !found; px++) {
+                                if (Collision_pointInInstance(spr, inst, (GMLReal) px + 0.5, (GMLReal) py + 0.5)) {
+                                    found = true;
+                                }
+                            }
+                        }
+                        if (!found) continue;
+                    }
+                }
+
+                arrput(list->items, RValue_makeReal((GMLReal) inst->instanceId));
+                count++;
+            }
+        }
+    }
+
+    return RValue_makeReal((GMLReal) count);
+}
+
 // collision_point(x, y, obj, prec, notme)
 static RValue builtinCollisionPoint(VMContext* ctx, RValue* args, int32_t argCount) {
     if (5 > argCount) return RValue_makeReal((GMLReal) INSTANCE_NOONE);
@@ -8225,9 +8342,11 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 
     // ds_list stubs
     VM_registerBuiltin(ctx, "ds_list_create", builtinDsListCreate);
+    VM_registerBuiltin(ctx, "ds_list_destroy", builtinDsListDestroy);
     VM_registerBuiltin(ctx, "ds_list_add", builtinDsListAdd);
     VM_registerBuiltin(ctx, "ds_list_size", builtinDsListSize);
     VM_registerBuiltin(ctx, "ds_list_find_index", builtinDsListFindIndex);
+    VM_registerBuiltin(ctx, "ds_list_find_value", builtinDsListFindValue);
 
     // Array
     VM_registerBuiltin(ctx, "array_length_1d", builtinArrayLength1d);
@@ -8512,6 +8631,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     // Collision
     VM_registerBuiltin(ctx, "place_meeting", builtinPlaceMeeting);
     VM_registerBuiltin(ctx, "collision_rectangle", builtinCollisionRectangle);
+    VM_registerBuiltin(ctx, "collision_rectangle_list", builtinCollisionRectangleList);
     VM_registerBuiltin(ctx, "rectangle_in_rectangle", builtinRectangleInRectangle);
     VM_registerBuiltin(ctx, "collision_line", builtinCollisionLine);
     VM_registerBuiltin(ctx, "collision_point", builtinCollisionPoint);

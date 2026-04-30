@@ -211,6 +211,7 @@ typedef struct {
 // ds_list: dynamic array of RValues
 typedef struct {
     RValue* items; // stb_ds dynamic array of RValues
+    bool freed;    // true when the slot is destroyed and available for reuse by ds_list_create (matches native GMS)
 } DsList;
 
 // ===[ GML Buffer System ]===
