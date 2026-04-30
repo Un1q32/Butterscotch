@@ -2645,26 +2645,7 @@ static RValue builtinArrayPush(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_
             RValue* slot = GMLArray_slot(arr, startLen + i);
             RValue val = args[1 + i];
             RValue_free(slot);
-            if (val.type == RVALUE_STRING && val.string != nullptr) {
-                *slot = RValue_makeOwnedString(safeStrdup(val.string));
-            } else if (val.type == RVALUE_ARRAY && val.array != nullptr) {
-                GMLArray_incRef(val.array);
-                val.ownsReference = true;
-                *slot = val;
-#if IS_BC17_OR_HIGHER_ENABLED
-            } else if (val.type == RVALUE_METHOD && val.method != nullptr) {
-                GMLMethod_incRef(val.method);
-                val.ownsReference = true;
-                *slot = val;
-#endif
-            } else if (val.type == RVALUE_STRUCT && val.structInst != nullptr) {
-                Instance_structIncRef(val.structInst);
-                val.ownsReference = true;
-                *slot = val;
-            } else {
-                val.ownsReference = false;
-                *slot = val;
-            }
+            *slot = RValue_makeIndependent(val);
         }
     }
     return RValue_makeUndefined();
