@@ -2670,6 +2670,43 @@ static RValue builtinArrayPush(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_
     return RValue_makeUndefined();
 }
 
+// array_insert(array, index, values...) - insert one or more values at "index", shifting the tail up. If "index" is past the end, fill the gap with real 0 (see the yyVariable.js for reference).
+static RValue builtinArrayInsert(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeUndefined();
+    GMLArray* arr = args[0].array;
+    int32_t index = (int32_t) RValue_toReal(args[1]);
+    if (0 > index) index = 0;
+    int32_t toInsert = argCount - 2;
+    int32_t oldLen = (arr->rowCount == 0) ? 0 : arr->rows[0].length;
+
+    // Pad with real 0 if index is past the current end
+    if (index > oldLen) {
+        GMLArray_growTo(arr, index);
+        GMLArrayRow* row = &arr->rows[0];
+        for (int32_t i = oldLen; index > i; i++) {
+            RValue_free(&row->data[i]);
+            row->data[i] = RValue_makeReal(0.0);
+        }
+        oldLen = index;
+    }
+
+    if (0 >= toInsert) return RValue_makeUndefined();
+
+    GMLArray_growTo(arr, oldLen + toInsert);
+    GMLArrayRow* row = &arr->rows[0];
+
+    // Shift tail up by toInsert
+    int32_t tailLen = oldLen - index;
+    if (tailLen > 0) memmove(&row->data[index + toInsert], &row->data[index], (size_t) tailLen * sizeof(RValue));
+
+    // Write inserted values
+    repeat(toInsert, i) {
+        row->data[index + i] = RValue_makeIndependent(args[2 + i]);
+    }
+    return RValue_makeUndefined();
+}
+
 // array_resize(array, newSize) - resize row 0 to newSize. Growth fills with undefined, shrinking frees truncated entries.
 static RValue builtinArrayResize(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeUndefined();
@@ -8199,6 +8236,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "array_push", builtinArrayPush);
     VM_registerBuiltin(ctx, "array_resize", builtinArrayResize);
     VM_registerBuiltin(ctx, "array_delete", builtinArrayDelete);
+    VM_registerBuiltin(ctx, "array_insert", builtinArrayInsert);
 
     // Steam stubs
     VM_registerBuiltin(ctx, "steam_initialised", builtin_steam_initialised);
