@@ -128,6 +128,7 @@ typedef struct {
 
     // GPU state (mirrors what was last sent to GS so we can re-apply after sync_flip clobbers FRAME)
     uint32_t fbmsk;          // Current FRAME register FBMSK (0 = all channels writable)
+    uint8_t fba;             // Current FBA_1 register value (1 = force FB.A bit to 1 on writeback, 0 = pass through)
     bool blendModeWarned;    // Set the first time an unsupported blend factor pair is seen
 
     // gsKit packs PrimAlphaEnable into BOTH the PRIM.ABE bit AND TEX0.TCC.

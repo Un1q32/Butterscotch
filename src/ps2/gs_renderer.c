@@ -14,12 +14,6 @@
 #include "ps2_utils.h"
 #include "matrix_math.h"
 
-// GMS scripts treat the alpha channel as scratch space that's preserved unless explicitly written via gpu_set_colorwriteenable.
-// On PC the GL backbuffer often has 0 alpha bits, so writes silently no-op and reads return 1.0, which makes "alpha is preserved by default" the natural behavior.
-// On PS2 the CT16 framebuffer DOES store an alpha bit, so we have to enforce that convention ourselves: mask the alpha bit by default, only unmask it when the script asks for alpha-only writes
-// Without this, every BG tile and normal sprite clobbers FB.A with whatever its source alpha is post-MODULATE, killing any sprites that want to be drawn to a mask.
-#define FBMSK_DEFAULT_PRESERVE_ALPHA 0xFF000000u
-
 #ifdef ENABLE_PS2_RENDERER_LOGS
 #define rendererPrintf(...) fprintf(stderr, __VA_ARGS__)
 #else
@@ -841,6 +835,11 @@ static bool setupTextureForTile(GsRenderer* gs, GSTEXTURE* tex, AtlasTileEntry* 
 
 // ===[ Vtable Implementations ]===
 
+// Identity blend - source passes through unchanged. Used when GML disables blending but we still need PrimAlphaEnable=ON for TCC.
+// Equation: (Cs - 0) * 128/128 + 0 = Cs.
+// We do this because disabling blending (setting PrimAlphaEnable to OFF) makes GS stop honoring alpha writes from textures, which breaks masks.
+#define GS_ALPHA_NO_BLEND GS_SETREG_ALPHA(0, 2, 2, 2, 0x80)
+
 // Re-emits the FRAME_1 register with the current FBMSK. Called whenever the color write mask changes.
 static void gsApplyFBMask(GsRenderer* gs, u32 fbmsk) {
     GSGLOBAL* g = gs->gsGlobal;
@@ -850,6 +849,23 @@ static void gsApplyFBMask(GsRenderer* gs, u32 fbmsk) {
     *p++ = GS_SETREG_FRAME(g->ScreenBuffer[g->ActiveBuffer & 1] / 8192, g->Width / 64, g->PSM, fbmsk);
     *p++ = GS_FRAME_1 + g->PrimContext;
     gs->fbmsk = fbmsk;
+}
+
+// Re-emits the FBA_1 (Framebuffer Alpha) register. fba=1 forces bit 7 of the alpha to 1 at framebuffer writeback (after the blend equation has consumed As, so blending is unaffected).
+// fba=0 passes alpha through unchanged - required while the script is in alpha-only write mode so the intended mask value lands in FB.A verbatim.
+static void gsApplyFBA(GsRenderer* gs, uint8_t fba) {
+    if (gs->fba == fba) return;
+    GSGLOBAL* g = gs->gsGlobal;
+    u64* p = (u64*) gsKit_heap_alloc(g, 1, 16, GIF_AD);
+    *p++ = GIF_TAG_AD(1);
+    *p++ = GIF_AD;
+    *p++ = (u64) (fba & 1);
+    *p++ = GS_FBA_1 + g->PrimContext;
+    gs->fba = fba;
+}
+
+static void gsCommitBlend(GsRenderer* gs) {
+    gsKit_set_primalpha(gs->gsGlobal, gs->blendEnabled ? gs->currentBlendAlpha : GS_ALPHA_NO_BLEND, 0);
 }
 
 static void gsInit(Renderer* renderer, DataWin* dataWin) {
@@ -862,9 +878,7 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
     renderer->drawHalign = 0;
     renderer->drawValign = 0;
 
-    // Keep PrimAlphaEnable always ON so gsKit emits TEX0.TCC=1 (texture's per-pixel alpha is
-    // honored). Blend disable is emulated in gsGpuSetBlendEnable by switching ALPHA to an
-    // identity equation, NOT by toggling PrimAlphaEnable.
+    // Enable alpha blending
     gs->gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gs->blendEnabled = true;
     gs->currentBlendAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0);
@@ -875,11 +889,12 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
     gs->gsGlobal->Test->ATST = 6; // GREATER (matches GMS semantics)
     gs->gsGlobal->Test->AFAIL = 0; // KEEP
 
-    // Alpha blend: (Cs - Cd) * As / 128 + Cd (standard source-over)
-    gsKit_set_primalpha(gs->gsGlobal, gs->currentBlendAlpha, 0);
+    // Force FB.A bit = 1 on every writeback via the GS FBA register so bm_dest_alpha / bm_inv_dest_alpha see opaque alpha for normal sprites.
+    // This mimicks how OpenGL works
+    gsApplyFBA(gs, 1);
 
-    // Apply the default FBMSK that preserves the alpha bit. Done after gsKit_set_primalpha so the FRAME register write is queued in a sensible order at startup.
-    gsApplyFBMask(gs, FBMSK_DEFAULT_PRESERVE_ALPHA);
+    // Alpha blend: (Cs - Cd) * As / 128 + Cd (standard source-over)
+    gsKit_set_primalpha(gs->gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
 
     // Load atlas metadata
     loadAtlas(gs);
@@ -935,10 +950,10 @@ static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_U
     gs->chunksNeededThisFrame = 0;
     gs->diskLoadsThisFrame = 0;
 
-    // gsKit_setactive (called by sync_flip) re-emits FRAME with FBMSK=0 each frame.
-    // We always need to re-apply our intended FBMSK here, because the default (FBMSK_DEFAULT_PRESERVE_ALPHA) is non-zero.
-    // Leaving FBMSK at 0 would cause every BG tile and normal sprite to clobber FB.A, breaking dest-alpha mask scripts.
-    gsApplyFBMask(gs, gs->fbmsk);
+    // gsKit_setactive (called by sync_flip) re-emits FRAME with FBMSK=0, so any color-write mask we set last frame is gone. Re-apply it here for cases where GML leaves it asserted across frames.
+    if (gs->fbmsk != 0) {
+        gsApplyFBMask(gs, gs->fbmsk);
+    }
 }
 
 static void gsEndFrame(MAYBE_UNUSED Renderer* renderer) {
@@ -1996,14 +2011,6 @@ static u64 gmsBlendModeToGSAlpha(int32_t mode) {
     }
 }
 
-// Identity blend - source passes through unchanged. Used when GML disables blending but we still
-// need PrimAlphaEnable=ON for TCC. Equation: (Cs - 0) * 128/128 + 0 = Cs.
-#define GS_ALPHA_IDENTITY GS_SETREG_ALPHA(0, 2, 2, 2, 0x80)
-
-static void gsCommitBlend(GsRenderer* gs) {
-    gsKit_set_primalpha(gs->gsGlobal, gs->blendEnabled ? gs->currentBlendAlpha : GS_ALPHA_IDENTITY, 0);
-}
-
 static void gsGpuSetBlendMode(Renderer* renderer, int32_t mode) {
     GsRenderer* gs = (GsRenderer*) renderer;
     gs->currentBlendAlpha = gmsBlendModeToGSAlpha(mode);
@@ -2023,6 +2030,8 @@ static void gsGpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t df
 
 static void gsGpuSetBlendEnable(Renderer* renderer, bool enable) {
     GsRenderer* gs = (GsRenderer*) renderer;
+    // PrimAlphaEnable is OR'd into the PRIM bits gsKit emits with each primitive,
+    // so toggling it affects every subsequent draw without needing to flush.
     if (gs->blendEnabled == enable) return;
     gs->blendEnabled = enable;
     gsCommitBlend(gs);
@@ -2054,18 +2063,17 @@ static void gsGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, b
     GsRenderer* gs = (GsRenderer*) renderer;
     // FBMSK: bit=1 means MASK that bit (don't write). Layout is the conceptual RGBA8888 mapping
     // even when the framebuffer is CT16 - the GS remaps the relevant bits internally.
-    //
-    // We start the alpha bit MASKED (preserve FB.A), and only unmask it if the script asked for alpha-only mode (red=green=blue=false, alpha=true).
-    // Asking for "all four channels" is treated as "RGB only, leave alpha alone", matching how GMS PC behaves when the backbuffer has no real alpha storage.
-    // Without this, every textured draw clobbers FB.A and the dest-alpha mask trick cannot work.
-    u32 fbmsk = FBMSK_DEFAULT_PRESERVE_ALPHA;
+    u32 fbmsk = 0;
     if (!red)   fbmsk |= 0x000000FF;
     if (!green) fbmsk |= 0x0000FF00;
     if (!blue)  fbmsk |= 0x00FF0000;
-    // Alpha is unmasked only in the explicit "alpha-only write" pattern used by mask-build scripts:
-    // colorwriteenable(false, false, false, true).
-    if (alpha && !red && !green && !blue) fbmsk &= ~0xFF000000u;
+    if (!alpha) fbmsk |= 0xFF000000;
     gsApplyFBMask(gs, fbmsk);
+
+    // Alpha-only write mode (color writes off, alpha on) is the dest-alpha mask write half: the script wants the source alpha to land in FB.A verbatim, so disable FBA.
+    // Anything else keeps FBA=1 so normal blended sprites leave FB.A=1 and the mask read half (bm_dest_alpha / bm_inv_dest_alpha) sees opaque pixels.
+    bool alphaOnly = !red && !green && !blue && alpha;
+    gsApplyFBA(gs, alphaOnly ? 0 : 1);
 }
 
 static void gsDrawTile(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY) {
