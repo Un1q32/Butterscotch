@@ -39,6 +39,12 @@ file(GLOB SOURCES src/*.c)
 # Platform specific files builds
 file(GLOB PLATFORM_SOURCES src/${PLATFORM}/*.c)
 
+# OpenGL ES 3.0 / WebGL2 compatibility
+option(ENABLE_GLES "Build the gl_renderer against OpenGL ES 3.0 / WebGL2 instead of desktop GL 4.1 Core" OFF)
+if(PLATFORM STREQUAL "glfw" AND ENABLE_GLES)
+    list(REMOVE_ITEM PLATFORM_SOURCES ${CMAKE_SOURCE_DIR}/src/glfw/gl_legacy_renderer.c)
+endif()
+
 add_executable(butterscotch ${SOURCES} ${PLATFORM_SOURCES})
 target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -81,8 +87,14 @@ if(PLATFORM STREQUAL "glfw")
     endif()
 
     # GLAD
-    add_library(glad STATIC vendor/glad/src/glad.c)
-    target_include_directories(glad PUBLIC vendor/glad/include)
+    if(ENABLE_GLES)
+        add_compile_definitions(ENABLE_GLES)
+        add_library(glad STATIC vendor/glad-gles/src/glad.c)
+        target_include_directories(glad PUBLIC vendor/glad-gles/include)
+    else()
+        add_library(glad STATIC vendor/glad/src/glad.c)
+        target_include_directories(glad PUBLIC vendor/glad/include)
+    endif()
 
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)

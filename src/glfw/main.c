@@ -36,6 +36,7 @@ static void glfwErrorCallback(int code, const char* description) {
     fprintf(stderr, "GLFW error 0x%x: %s\n", code, description);
 }
 
+#ifndef ENABLE_GLES
 static void APIENTRY glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, MAYBE_UNUSED GLsizei length, const GLchar* message, MAYBE_UNUSED const void* userParam) {
     const char* sourceStr;
     switch (source) {
@@ -85,6 +86,7 @@ static void installGLDebugCallback(void) {
     glDebugMessageCallbackKHR(glDebugCallback, nullptr);
     glDebugMessageControlKHR(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
 }
+#endif // !ENABLE_GLES
 
 // ===[ COMMAND LINE ARGUMENTS ]===
 typedef struct {
@@ -780,11 +782,17 @@ int main(int argc, char* argv[]) {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 1);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
     } else {
+#ifdef ENABLE_GLES
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#else
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+#endif
     }
 
     // Load SDL gamecontroller mappings
@@ -825,7 +833,11 @@ int main(int argc, char* argv[]) {
     glfwSwapInterval(0); // Disable v-sync, we control timing ourselves
 
     // Load OpenGL function pointers via GLAD
+#ifdef ENABLE_GLES
+    if (!gladLoadGLES2Loader((GLADloadproc) glfwGetProcAddress)) {
+#else
     if (!gladLoadGLLoader((GLADloadproc) glfwGetProcAddress)) {
+#endif
         fprintf(stderr, "Failed to initialize GLAD\n");
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -835,15 +847,24 @@ int main(int argc, char* argv[]) {
     }
 
     // Install the OpenGL debug message callback
+#ifndef ENABLE_GLES
     if (modernGL)
         installGLDebugCallback();
+#endif
 
     // Initialize the renderer
     Renderer* renderer = nullptr;
+#ifdef ENABLE_GLES
+    if (strcmp(args.renderer, "legacy-gl") == 0) {
+        fprintf(stderr, "--renderer legacy-gl is not available in GLES builds; falling back to gl\n");
+    }
+    renderer = GLRenderer_create();
+#else
     if(strcmp(args.renderer, "legacy-gl") == 0)
         renderer = GLLegacyRenderer_create();
     else
         renderer = GLRenderer_create();
+#endif
 
     // Initialize the audio system
     AudioSystem* audioSystem = nullptr;

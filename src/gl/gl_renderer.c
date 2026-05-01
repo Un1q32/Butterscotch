@@ -20,8 +20,19 @@
 #define INDICES_PER_QUAD 6
 
 // ===[ Shader Sources ]===
+#ifdef ENABLE_GLES
+    #define GLSL_VERSION_DIRECTIVE "#version 300 es\n"
+    #define GLSL_VERTEX_PRECISION  "precision highp float;\n"
+    #define GLSL_FRAGMENT_PRECISION "precision mediump float;\n"
+#else
+    #define GLSL_VERSION_DIRECTIVE "#version 410 core\n"
+    #define GLSL_VERTEX_PRECISION  ""
+    #define GLSL_FRAGMENT_PRECISION ""
+#endif
+
 static const char* vertexShaderSource =
-    "#version 410 core\n"
+    GLSL_VERSION_DIRECTIVE
+    GLSL_VERTEX_PRECISION
     "layout(location = 0) in vec2 aPos;\n"
     "layout(location = 1) in vec2 aTexCoord;\n"
     "layout(location = 2) in vec4 aColor;\n"
@@ -35,7 +46,8 @@ static const char* vertexShaderSource =
     "}\n";
 
 static const char* fragmentShaderSource =
-    "#version 410 core\n"
+    GLSL_VERSION_DIRECTIVE
+    GLSL_FRAGMENT_PRECISION
     "in vec2 vTexCoord;\n"
     "in vec4 vColor;\n"
     "uniform sampler2D uTexture;\n"
