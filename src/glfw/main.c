@@ -86,7 +86,7 @@ static void installGLDebugCallback(void) {
     glDebugMessageCallbackKHR(glDebugCallback, nullptr);
     glDebugMessageControlKHR(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
 }
-#endif // !ENABLE_GLES
+#endif
 
 // ===[ COMMAND LINE ARGUMENTS ]===
 typedef struct {
