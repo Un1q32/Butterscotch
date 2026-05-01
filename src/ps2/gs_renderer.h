@@ -125,6 +125,10 @@ typedef struct {
     uint32_t eeCacheBumpPtr;           // End of live data
     EeAtlasCacheEntry* eeCacheEntries; // Per-atlas cache state [atlasCount]
     uint32_t* atlasDataSizes;          // On-disk size per atlas (header + compressed data) [atlasCount]
+
+    // GPU state (mirrors what was last sent to GS so we can re-apply after sync_flip clobbers FRAME)
+    uint32_t fbmsk;          // Current FRAME register FBMSK (0 = all channels writable)
+    bool blendModeWarned;    // Set the first time an unsupported blend factor pair is seen
 } GsRenderer;
 
 Renderer* GsRenderer_create(GSGLOBAL* gsGlobal);

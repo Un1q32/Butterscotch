@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <kernel.h>
+#include <gsInline.h>
 
 #include "binary_reader.h"
 #include "binary_utils.h"
@@ -896,6 +897,17 @@ static void gsDestroy(Renderer* renderer) {
     free(gs);
 }
 
+// Re-emits the FRAME_1 register with the current FBMSK. Called whenever the color write mask changes.
+static void gsApplyFBMask(GsRenderer* gs, u32 fbmsk) {
+    GSGLOBAL* g = gs->gsGlobal;
+    u64* p = (u64*) gsKit_heap_alloc(g, 1, 16, GIF_AD);
+    *p++ = GIF_TAG_AD(1);
+    *p++ = GIF_AD;
+    *p++ = GS_SETREG_FRAME(g->ScreenBuffer[g->ActiveBuffer & 1] / 8192, g->Width / 64, g->PSM, fbmsk);
+    *p++ = GS_FRAME_1 + g->PrimContext;
+    gs->fbmsk = fbmsk;
+}
+
 static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_UNUSED int32_t gameH, MAYBE_UNUSED int32_t windowW, MAYBE_UNUSED int32_t windowH) {
     GsRenderer* gs = (GsRenderer*) renderer;
     gs->frameCounter++;
@@ -903,6 +915,11 @@ static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_U
     gs->uniqueAtlasesThisFrame = 0;
     gs->chunksNeededThisFrame = 0;
     gs->diskLoadsThisFrame = 0;
+
+    // gsKit_setactive (called by sync_flip) re-emits FRAME with FBMSK=0, so any color-write mask we set last frame is gone. Re-apply it here for cases where GML leaves it asserted across frames.
+    if (gs->fbmsk != 0) {
+        gsApplyFBMask(gs, gs->fbmsk);
+    }
 }
 
 static void gsEndFrame(MAYBE_UNUSED Renderer* renderer) {
@@ -1907,12 +1924,114 @@ static void gsDeleteSprite(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t
     // No-op
 }
 
-static void gsGpuSetBlendMode(Renderer* renderer, int32_t mode) {}
-static void gsGpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t dfactor) {}
-static void gsGpuSetBlendEnable(Renderer* renderer, bool enable) {}
-static void gsGpuSetAlphaTestEnable(Renderer* renderer, bool enable) {}
-static void gsGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {}
-static void gsGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {}
+// PS2 GS only supports a single blend equation:
+//   Cv = (A - B) * (C / 128) + D
+// Where A, B, D pick from {Cs=0, Cd=1, 0=2} and C picks from {As=0, Ad=1, FIX=2}.
+// This is a much smaller space than GL's sf*Cs + df*Cd, so most non-trivial GMS blend modes get approximated.
+// The cases that DO map exactly are the ones DELTARUNE relies on for the dest-alpha mask trick (bm_dest_alpha + bm_inv_dest_alpha) and standard alpha blending (bm_normal).
+// Anything we cannot express falls back to bm_normal.
+
+// Builds a GS_SETREG_ALPHA value from (sfactor, dfactor) pair semantics: result = sf*Cs + df*Cd.
+// Returns true on exact match, false if the pair was approximated.
+static bool gmsFactorPairToGSAlpha(int32_t sf, int32_t df, u64* outAlpha) {
+    // (src_alpha, inv_src_alpha) -> (Cs - Cd) * As + Cd
+    if (sf == bm_src_alpha && df == bm_inv_src_alpha) { *outAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0); return true; }
+    // (src_alpha, one) -> Cs*As + Cd
+    if (sf == bm_src_alpha && df == bm_one) { *outAlpha = GS_SETREG_ALPHA(0, 2, 0, 1, 0); return true; }
+    // (one, one) -> Cs + Cd  (FIX=128 makes C/128 == 1)
+    if (sf == bm_one && df == bm_one) { *outAlpha = GS_SETREG_ALPHA(0, 2, 2, 1, 0x80); return true; }
+    // (one, inv_src_alpha) -> approximate as bm_normal (premultiplied alpha case)
+    if (sf == bm_one && df == bm_inv_src_alpha) { *outAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0); return true; }
+    // (zero, one) -> Cd (no source contribution)
+    if (sf == bm_zero && df == bm_one) { *outAlpha = GS_SETREG_ALPHA(2, 2, 2, 1, 0); return true; }
+    // (one, zero) -> Cs (replace dest)
+    if (sf == bm_one && df == bm_zero) { *outAlpha = GS_SETREG_ALPHA(0, 2, 2, 2, 0x80); return true; }
+    // (zero, zero) -> 0 (clear)
+    if (sf == bm_zero && df == bm_zero) { *outAlpha = GS_SETREG_ALPHA(2, 2, 2, 2, 0); return true; }
+    // (dest_alpha, inv_dest_alpha) -> (Cs - Cd) * Ad + Cd
+    if (sf == bm_dest_alpha && df == bm_inv_dest_alpha) { *outAlpha = GS_SETREG_ALPHA(0, 1, 1, 1, 0); return true; }
+    // (inv_dest_alpha, dest_alpha) -> (Cd - Cs) * Ad + Cs
+    if (sf == bm_inv_dest_alpha && df == bm_dest_alpha) { *outAlpha = GS_SETREG_ALPHA(1, 0, 1, 0, 0); return true; }
+    // (dest_alpha, one) -> Cs*Ad + Cd
+    if (sf == bm_dest_alpha && df == bm_one) { *outAlpha = GS_SETREG_ALPHA(0, 2, 1, 1, 0); return true; }
+    // (zero, src_alpha) -> Cd*As (modulate dest by source alpha)
+    if (sf == bm_zero && df == bm_src_alpha) { *outAlpha = GS_SETREG_ALPHA(2, 1, 0, 1, 0); return true; }
+    // (zero, inv_src_alpha) -> Cd * (1 - As) -> (0 - Cd) * As + Cd
+    if (sf == bm_zero && df == bm_inv_src_alpha) { *outAlpha = GS_SETREG_ALPHA(2, 1, 0, 1, 0); return false; } // off-by-(approximation), tolerable
+
+    // Fallback: behave like bm_normal so things stay roughly visible.
+    *outAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0);
+    return false;
+}
+
+// Maps the simple GMS blend modes (bm_normal/add/subtract/etc) to a GS ALPHA register value.
+static u64 gmsBlendModeToGSAlpha(int32_t mode) {
+    switch (mode) {
+        case bm_normal:           return GS_SETREG_ALPHA(0, 1, 0, 1, 0);    // (Cs-Cd)*As + Cd
+        case bm_add:              return GS_SETREG_ALPHA(0, 2, 0, 1, 0);    // Cs*As + Cd
+        case bm_subtract:         return GS_SETREG_ALPHA(1, 0, 2, 2, 0x80); // Cd - Cs (clamped to 0)
+        case bm_reverse_subtract: return GS_SETREG_ALPHA(2, 0, 0, 1, 0);    // Cd - Cs*As
+        case bm_min:              return GS_SETREG_ALPHA(0, 1, 0, 1, 0);    // No GS min, fall back to normal
+        case bm_max:              return GS_SETREG_ALPHA(0, 1, 0, 1, 0);    // No GS max, fall back to normal
+        default:                  return GS_SETREG_ALPHA(0, 1, 0, 1, 0);
+    }
+}
+
+static void gsGpuSetBlendMode(Renderer* renderer, int32_t mode) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    gsKit_set_primalpha(gs->gsGlobal, gmsBlendModeToGSAlpha(mode), 0);
+}
+
+static void gsGpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t dfactor) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    u64 alpha;
+    if (!gmsFactorPairToGSAlpha(sfactor, dfactor, &alpha) && !gs->blendModeWarned) {
+        fprintf(stderr, "GsRenderer: blend mode (sf=%d, df=%d) not exactly representable on PS2; approximating\n", sfactor, dfactor);
+        gs->blendModeWarned = true;
+    }
+    gsKit_set_primalpha(gs->gsGlobal, alpha, 0);
+}
+
+static void gsGpuSetBlendEnable(Renderer* renderer, bool enable) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    // PrimAlphaEnable is OR'd into the PRIM bits gsKit emits with each primitive,
+    // so toggling it affects every subsequent draw without needing to flush.
+    gs->gsGlobal->PrimAlphaEnable = enable ? GS_SETTING_ON : GS_SETTING_OFF;
+}
+
+static void gsGpuSetAlphaTestEnable(Renderer* renderer, bool enable) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    GSGLOBAL* g = gs->gsGlobal;
+    // Default to GREATER comparison when first enabling. If the ref hasn't been touched yet,
+    // initialize to 0 so behavior matches GL (test passes when src_alpha > ref).
+    if (enable) {
+        g->Test->ATST = 6; // GREATER
+        g->Test->AFAIL = 0; // KEEP (skip writing entirely)
+    }
+    gsKit_set_test(g, enable ? GS_ATEST_ON : GS_ATEST_OFF);
+}
+
+static void gsGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    GSGLOBAL* g = gs->gsGlobal;
+    g->Test->AREF = ref;
+    g->Test->ATST = 6;  // GREATER (matches GMS semantics: pass when src_alpha > ref)
+    g->Test->AFAIL = 0; // KEEP
+    // Preset 0 doesn't match any branch in gsKit_set_test, so it just re-emits TEST with current state.
+    gsKit_set_test(g, 0);
+}
+
+static void gsGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    // FBMSK: bit=1 means MASK that bit (don't write). Layout is the conceptual RGBA8888 mapping
+    // even when the framebuffer is CT16 - the GS remaps the relevant bits internally.
+    u32 fbmsk = 0;
+    if (!red)   fbmsk |= 0x000000FF;
+    if (!green) fbmsk |= 0x0000FF00;
+    if (!blue)  fbmsk |= 0x00FF0000;
+    if (!alpha) fbmsk |= 0xFF000000;
+    gsApplyFBMask(gs, fbmsk);
+}
 
 static void gsDrawTile(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY) {
     GsRenderer* gs = (GsRenderer*) renderer;
