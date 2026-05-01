@@ -1094,6 +1094,7 @@ int main(int argc, char* argv[]) {
         // And the Port W/Port H are scaled by the window size too (set by the GEN8 chunk)
         float displayScaleX = 1.0f;
         float displayScaleY = 1.0f;
+
         bool viewsEnabled = (activeRoom->flags & 1) != 0;
         if (viewsEnabled) {
             int32_t minLeft = INT32_MAX, minTop = INT32_MAX;
@@ -1127,62 +1128,7 @@ int main(int argc, char* argv[]) {
         }
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Render each enabled view (or a default full-screen view if views are disabled)
-        bool anyViewRendered = false;
-
-        if (viewsEnabled) {
-            repeat(MAX_VIEWS, vi) {
-                RuntimeView* view = &runner->views[vi];
-                if (!view->enabled) continue;
-
-                int32_t viewX = view->viewX;
-                int32_t viewY = view->viewY;
-                int32_t viewW = view->viewWidth;
-                int32_t viewH = view->viewHeight;
-                int32_t portX = (int32_t) ((float) view->portX * displayScaleX + 0.5f);
-                int32_t portY = (int32_t) ((float) view->portY * displayScaleY + 0.5f);
-                int32_t portW = (int32_t) ((float) view->portWidth * displayScaleX + 0.5f);
-                int32_t portH = (int32_t) ((float) view->portHeight * displayScaleY + 0.5f);
-                float viewAngle = view->viewAngle;
-
-                runner->viewCurrent = vi;
-                renderer->vtable->beginView(renderer, viewX, viewY, viewW, viewH, portX, portY, portW, portH, viewAngle);
-
-                Runner_draw(runner);
-
-                if (debugShowCollisionMasks) DebugOverlay_drawCollisionMasks(runner);
-
-                renderer->vtable->endView(renderer);
-
-                int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : portW;
-                int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : portH;
-                renderer->vtable->beginGUI(renderer, guiW, guiH, portX, portY, portW, portH);
-                Runner_drawGUI(runner);
-                renderer->vtable->endGUI(renderer);
-
-                anyViewRendered = true;
-            }
-        }
-
-        if (!anyViewRendered) {
-            // No views enabled or views disabled: render with default full-screen view
-            runner->viewCurrent = 0;
-            renderer->vtable->beginView(renderer, 0, 0, gameW, gameH, 0, 0, gameW, gameH, 0.0f);
-            Runner_draw(runner);
-
-            if (debugShowCollisionMasks) DebugOverlay_drawCollisionMasks(runner);
-
-            renderer->vtable->endView(renderer);
-
-            int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : gameW;
-            int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : gameH;
-            renderer->vtable->beginGUI(renderer, guiW, guiH, 0, 0, gameW, gameH);
-            Runner_drawGUI(runner);
-            renderer->vtable->endGUI(renderer);
-        }
-
-        // Reset view_current to 0 so non-Draw events (Step, Alarm, Create) see view_current = 0
-        runner->viewCurrent = 0;
+        Runner_drawViews(runner, gameW, gameH, displayScaleX, displayScaleY, debugShowCollisionMasks);
 
         renderer->vtable->endFrame(renderer);
 

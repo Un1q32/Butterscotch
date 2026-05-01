@@ -13,6 +13,7 @@
 #include <string.h>
 #include <math.h>
 
+#include "debug_overlay.h"
 #include "stb_ds.h"
 
 // ===[ Runtime Layer Teardown Helpers ]===
@@ -828,6 +829,68 @@ void Runner_drawGUI(Runner* runner) {
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI_BEGIN);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI_END);
+}
+
+void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks) {
+    Renderer* renderer = runner->renderer;
+    Room* activeRoom = runner->currentRoom;
+    bool anyViewRendered = false;
+
+    bool viewsEnabled = (activeRoom->flags & 1) != 0;
+
+    if (viewsEnabled) {
+        repeat(MAX_VIEWS, vi) {
+            RuntimeView* view = &runner->views[vi];
+            if (!view->enabled) continue;
+
+            int32_t viewX = view->viewX;
+            int32_t viewY = view->viewY;
+            int32_t viewW = view->viewWidth;
+            int32_t viewH = view->viewHeight;
+            int32_t portX = (int32_t) ((float) view->portX * displayScaleX + 0.5f);
+            int32_t portY = (int32_t) ((float) view->portY * displayScaleY + 0.5f);
+            int32_t portW = (int32_t) ((float) view->portWidth * displayScaleX + 0.5f);
+            int32_t portH = (int32_t) ((float) view->portHeight * displayScaleY + 0.5f);
+            float viewAngle = view->viewAngle;
+
+            runner->viewCurrent = (int32_t) vi;
+            renderer->vtable->beginView(renderer, viewX, viewY, viewW, viewH, portX, portY, portW, portH, viewAngle);
+
+            Runner_draw(runner);
+
+            if (debugShowCollisionMasks) DebugOverlay_drawCollisionMasks(runner);
+
+            renderer->vtable->endView(renderer);
+
+            int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : portW;
+            int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : portH;
+            renderer->vtable->beginGUI(renderer, guiW, guiH, portX, portY, portW, portH);
+            Runner_drawGUI(runner);
+            renderer->vtable->endGUI(renderer);
+
+            anyViewRendered = true;
+        }
+    }
+
+    if (!anyViewRendered) {
+        // No views enabled: render with default full-screen view
+        runner->viewCurrent = 0;
+        renderer->vtable->beginView(renderer, 0, 0, gameW, gameH, 0, 0, gameW, gameH, 0.0f);
+        Runner_draw(runner);
+
+        if (debugShowCollisionMasks) DebugOverlay_drawCollisionMasks(runner);
+
+        renderer->vtable->endView(renderer);
+
+        int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : gameW;
+        int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : gameH;
+        renderer->vtable->beginGUI(renderer, guiW, guiH, 0, 0, gameW, gameH);
+        Runner_drawGUI(runner);
+        renderer->vtable->endGUI(renderer);
+    }
+
+    // Reset view_current to 0 so non-Draw events (Step, Alarm, Create) see view_current = 0
+    runner->viewCurrent = 0;
 }
 
 // ===[ Instance Creation Helper ]===

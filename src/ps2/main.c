@@ -824,56 +824,7 @@ int main(int argc, char* argv[]) {
 
         // Render views
         u64 drawStartTime = GetTimerSystemTime();
-        Room* activeRoom = runner->currentRoom;
-        bool anyViewRendered = false;
-
-        bool viewsEnabled = (activeRoom->flags & 1) != 0;
-
-        if (viewsEnabled) {
-            repeat(MAX_VIEWS, vi) {
-                RuntimeView* view = &runner->views[vi];
-                if (!view->enabled) continue;
-
-                int32_t viewX = view->viewX;
-                int32_t viewY = view->viewY;
-                int32_t viewW = view->viewWidth;
-                int32_t viewH = view->viewHeight;
-                int32_t portX = view->portX;
-                int32_t portY = view->portY;
-                int32_t portW = view->portWidth;
-                int32_t portH = view->portHeight;
-                float viewAngle = view->viewAngle;
-
-                runner->viewCurrent = (int32_t) vi;
-                renderer->vtable->beginView(renderer, viewX, viewY, viewW, viewH, portX, portY, portW, portH, viewAngle);
-
-                Runner_draw(runner);
-
-                renderer->vtable->endView(renderer);
-
-                int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : portW;
-                int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : portH;
-                renderer->vtable->beginGUI(renderer, guiW, guiH, portX, portY, portW, portH);
-                Runner_drawGUI(runner);
-                renderer->vtable->endGUI(renderer);
-
-                anyViewRendered = true;
-            }
-        }
-
-        if (!anyViewRendered) {
-            // No views enabled: render with default full-screen view
-            runner->viewCurrent = 0;
-            renderer->vtable->beginView(renderer, 0, 0, gameW, gameH, 0, 0, gameW, gameH, 0.0f);
-            Runner_draw(runner);
-            renderer->vtable->endView(renderer);
-
-            int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : gameW;
-            int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : gameH;
-            renderer->vtable->beginGUI(renderer, guiW, guiH, 0, 0, gameW, gameH);
-            Runner_drawGUI(runner);
-            renderer->vtable->endGUI(renderer);
-        }
+        Runner_drawViews(runner, gameW, gameH, 1.0f, 1.0f, false);
         u64 drawEndTime = GetTimerSystemTime();
 
         runner->viewCurrent = 0;
