@@ -831,6 +831,32 @@ void Runner_drawGUI(Runner* runner) {
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI_END);
 }
 
+void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY) {
+    *outScaleX = 1.0f;
+    *outScaleY = 1.0f;
+    
+    Room* activeRoom = runner->currentRoom;
+    bool viewsEnabled = (activeRoom->flags & 1) != 0;
+    if (viewsEnabled) {
+        int32_t minLeft = INT32_MAX, minTop = INT32_MAX;
+        int32_t maxRight = INT32_MIN, maxBottom = INT32_MIN;
+        repeat(MAX_VIEWS, vi) {
+            RuntimeView* view = &runner->views[vi];
+            if (!view->enabled) continue;
+            if (minLeft > view->portX) minLeft = view->portX;
+            if (minTop > view->portY) minTop = view->portY;
+            int32_t right = view->portX + view->portWidth;
+            int32_t bottom = view->portY + view->portHeight;
+            if (right > maxRight) maxRight = right;
+            if (bottom > maxBottom) maxBottom = bottom;
+        }
+        if (maxRight > minLeft && maxBottom > minTop) {
+            *outScaleX = (float) gameW / (float) (maxRight - minLeft);
+            *outScaleY = (float) gameH / (float) (maxBottom - minTop);
+        }
+    }
+}
+
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks) {
     Renderer* renderer = runner->renderer;
     Room* activeRoom = runner->currentRoom;

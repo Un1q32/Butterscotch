@@ -1071,8 +1071,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        Room* activeRoom = runner->currentRoom;
-
         // Query actual framebuffer size (differs from window size on Wayland with fractional scaling)
         int fbWidth, fbHeight;
         glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
@@ -1092,28 +1090,10 @@ int main(int argc, char* argv[]) {
         // The Port W/Port H controls the size of the game viewport within the application surface.
         // Think of it like if you had an image (or... well, a framebuffer) and you are "pasting" it over the application surface.
         // And the Port W/Port H are scaled by the window size too (set by the GEN8 chunk)
-        float displayScaleX = 1.0f;
-        float displayScaleY = 1.0f;
+        float displayScaleX;
+        float displayScaleY;
 
-        bool viewsEnabled = (activeRoom->flags & 1) != 0;
-        if (viewsEnabled) {
-            int32_t minLeft = INT32_MAX, minTop = INT32_MAX;
-            int32_t maxRight = INT32_MIN, maxBottom = INT32_MIN;
-            repeat(MAX_VIEWS, vi) {
-                RuntimeView* view = &runner->views[vi];
-                if (!view->enabled) continue;
-                if (minLeft > view->portX) minLeft = view->portX;
-                if (minTop > view->portY) minTop = view->portY;
-                int32_t right = view->portX + view->portWidth;
-                int32_t bottom = view->portY + view->portHeight;
-                if (right > maxRight) maxRight = right;
-                if (bottom > maxBottom) maxBottom = bottom;
-            }
-            if (maxRight > minLeft && maxBottom > minTop) {
-                displayScaleX = (float) gameW / (float) (maxRight - minLeft);
-                displayScaleY = (float) gameH / (float) (maxBottom - minTop);
-            }
-        }
+        Runner_computeViewDisplayScale(runner, gameW, gameH, &displayScaleX, &displayScaleY);
 
         renderer->vtable->beginFrame(renderer, gameW, gameH, fbWidth, fbHeight);
 
