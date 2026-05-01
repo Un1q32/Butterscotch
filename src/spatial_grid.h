@@ -74,3 +74,12 @@ void SpatialGrid_free(SpatialGrid* grid);
 
 void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid);
 void SpatialGrid_markInstanceAsDirty(SpatialGrid* grid, Instance* instance);
+
+typedef struct {
+    SpatialGridRange range;
+    bool filterByObject;
+    bool filterByInstanceId;
+    uint32_t queryId;
+} SpatialGridQuery;
+
+SpatialGridQuery SpatialGrid_prepareQuery(Runner* runner, GMLReal x1, GMLReal y1, GMLReal x2, GMLReal y2, int32_t target);

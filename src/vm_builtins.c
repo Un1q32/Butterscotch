@@ -6031,23 +6031,20 @@ static RValue builtinPlaceMeeting(VMContext* ctx, RValue* args, int32_t argCount
     SpatialGrid_syncGrid(runner, runner->spatialGrid);
 
     if (callerBBox.valid) {
-        SpatialGridRange callerRange = SpatialGrid_computeCellRange(runner->spatialGrid, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom);
-        bool filterByObject = target >= 0 && 100000 > target;
-        bool filterByInstanceId = target >= 100000;
-        uint32_t queryId = ++runner->collisionQueryCounter;
+        SpatialGridQuery query = SpatialGrid_prepareQuery(runner, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom, target);
 
-        for (int32_t gx = callerRange.minGridX; callerRange.maxGridX >= gx && !found; gx++) {
-            for (int32_t gy = callerRange.minGridY; callerRange.maxGridY >= gy && !found; gy++) {
+        for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx && !found; gx++) {
+            for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy && !found; gy++) {
                 Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
                 int32_t cellLen = (int32_t) arrlen(cell);
                 repeat(cellLen, ci) {
                     Instance* other = cell[ci];
                     if (!other->active || other == caller) continue;
-                    if (other->lastCollisionQueryId == queryId) continue;
-                    other->lastCollisionQueryId = queryId;
+                    if (other->lastCollisionQueryId == query.queryId) continue;
+                    other->lastCollisionQueryId = query.queryId;
 
-                    if (filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, target)) continue;
-                    if (filterByInstanceId && other->instanceId != (uint32_t) target) continue;
+                    if (query.filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, target)) continue;
+                    if (query.filterByInstanceId && other->instanceId != (uint32_t) target) continue;
 
                     InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
                     if (!otherBBox.valid) continue;
@@ -6344,26 +6341,23 @@ static RValue builtinCollisionCircle(VMContext* ctx, RValue* args, int32_t argCo
     GMLReal qy2 = cy + radius;
 
     SpatialGrid_syncGrid(runner, runner->spatialGrid);
-    SpatialGridRange range = SpatialGrid_computeCellRange(runner->spatialGrid, qx1, qy1, qx2, qy2);
-    bool filterByObject = targetObjIndex >= 0 && 100000 > targetObjIndex;
-    bool filterByInstanceId = targetObjIndex >= 100000;
-    uint32_t queryId = ++runner->collisionQueryCounter;
+    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, qx1, qy1, qx2, qy2, targetObjIndex);
 
     int32_t resultId = INSTANCE_NOONE;
-    for (int32_t gx = range.minGridX; range.maxGridX >= gx && resultId == INSTANCE_NOONE; gx++) {
-        for (int32_t gy = range.minGridY; range.maxGridY >= gy && resultId == INSTANCE_NOONE; gy++) {
+    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx && resultId == INSTANCE_NOONE; gx++) {
+        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy && resultId == INSTANCE_NOONE; gy++) {
             Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
             int32_t cellLen = (int32_t) arrlen(cell);
-            for (int32_t ci = 0; cellLen > ci; ci++) {
+            repeat(cellLen, ci) {
                 Instance* inst = cell[ci];
                 if (!inst->active) continue;
                 if (notme && inst == self) continue;
-                if (inst->lastCollisionQueryId == queryId) continue;
-                inst->lastCollisionQueryId = queryId;
+                if (inst->lastCollisionQueryId == query.queryId) continue;
+                inst->lastCollisionQueryId = query.queryId;
 
-                if (filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, targetObjIndex)) continue;
-                if (filterByInstanceId && inst->instanceId != (uint32_t) targetObjIndex) continue;
-                if (!filterByObject && !filterByInstanceId && targetObjIndex != INSTANCE_ALL) continue;
+                if (query.filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, targetObjIndex)) continue;
+                if (query.filterByInstanceId && inst->instanceId != (uint32_t) targetObjIndex) continue;
+                if (!query.filterByObject && !query.filterByInstanceId && targetObjIndex != INSTANCE_ALL) continue;
 
                 InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
                 if (!bbox.valid) continue;
@@ -6443,24 +6437,21 @@ static RValue builtinCollisionRectangleList(VMContext* ctx, RValue* args, int32_
     int32_t count = 0;
 
     SpatialGrid_syncGrid(runner, runner->spatialGrid);
-    SpatialGridRange range = SpatialGrid_computeCellRange(runner->spatialGrid, x1, y1, x2, y2);
-    bool filterByObject = target >= 0 && 100000 > target;
-    bool filterByInstanceId = target >= 100000;
-    uint32_t queryId = ++runner->collisionQueryCounter;
+    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, x1, y1, x2, y2, target);
 
-    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++) {
-        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++) {
+    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
+        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
             Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
             int32_t cellLen = (int32_t) arrlen(cell);
             repeat(cellLen, ci) {
                 Instance* inst = cell[ci];
                 if (!inst->active) continue;
                 if (notme && inst == self) continue;
-                if (inst->lastCollisionQueryId == queryId) continue;
-                inst->lastCollisionQueryId = queryId;
+                if (inst->lastCollisionQueryId == query.queryId) continue;
+                inst->lastCollisionQueryId = query.queryId;
 
-                if (filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, target)) continue;
-                if (filterByInstanceId && inst->instanceId != (uint32_t) target) continue;
+                if (query.filterByObject && !VM_isObjectOrDescendant(ctx->dataWin, inst->objectIndex, target)) continue;
+                if (query.filterByInstanceId && inst->instanceId != (uint32_t) target) continue;
 
                 InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, inst);
                 if (!bbox.valid) continue;
@@ -6566,23 +6557,20 @@ static RValue builtinInstancePlace(VMContext* ctx, RValue* args, int32_t argCoun
     SpatialGrid_syncGrid(runner, runner->spatialGrid);
 
     if (callerBBox.valid) {
-        SpatialGridRange callerRange = SpatialGrid_computeCellRange(runner->spatialGrid, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom);
-        bool filterByObject = targetObjIndex >= 0 && 100000 > targetObjIndex;
-        bool filterByInstanceId = targetObjIndex >= 100000;
-        uint32_t queryId = ++runner->collisionQueryCounter;
+        SpatialGridQuery query = SpatialGrid_prepareQuery(runner, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom, targetObjIndex);
 
-        for (int32_t gx = callerRange.minGridX; callerRange.maxGridX >= gx && resultId == INSTANCE_NOONE; gx++) {
-            for (int32_t gy = callerRange.minGridY; callerRange.maxGridY >= gy && resultId == INSTANCE_NOONE; gy++) {
+        for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx && resultId == INSTANCE_NOONE; gx++) {
+            for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy && resultId == INSTANCE_NOONE; gy++) {
                 Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
                 int32_t cellLen = (int32_t) arrlen(cell);
                 repeat(cellLen, ci) {
                     Instance* other = cell[ci];
                     if (!other->active || other == caller) continue;
-                    if (other->lastCollisionQueryId == queryId) continue;
-                    other->lastCollisionQueryId = queryId;
+                    if (other->lastCollisionQueryId == query.queryId) continue;
+                    other->lastCollisionQueryId = query.queryId;
 
-                    if (filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, targetObjIndex)) continue;
-                    if (filterByInstanceId && other->instanceId != (uint32_t) targetObjIndex) continue;
+                    if (query.filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, targetObjIndex)) continue;
+                    if (query.filterByInstanceId && other->instanceId != (uint32_t) targetObjIndex) continue;
 
                     InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
                     if (!otherBBox.valid) continue;
@@ -6640,28 +6628,24 @@ static RValue builtinPositionMeeting(VMContext* ctx, RValue* args, int32_t argCo
     GMLReal py = RValue_toReal(args[1]);
     int32_t target = RValue_toInt32(args[2]);
 
-    bool found = false;
-    bool filterByObject = target >= 0 && 100000 > target;
-    bool filterByInstanceId = target >= 100000;
 
     SpatialGrid_syncGrid(runner, runner->spatialGrid);
+    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, px, py, px, py, target);
+    bool found = false;
 
-    SpatialGridRange range = SpatialGrid_computeCellRange(runner->spatialGrid, px, py, px, py);
-    uint32_t queryId = ++runner->collisionQueryCounter;
-
-    for (int32_t gx = range.minGridX; range.maxGridX >= gx && !found; gx++) {
-        for (int32_t gy = range.minGridY; range.maxGridY >= gy && !found; gy++) {
+    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx && !found; gx++) {
+        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy && !found; gy++) {
             Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
             int32_t cellLen = (int32_t) arrlen(cell);
             repeat(cellLen, ci) {
                 Instance* other = cell[ci];
                 // Keep in mind that we DO NOT skip "self"
                 if (!other->active) continue;
-                if (other->lastCollisionQueryId == queryId) continue;
-                other->lastCollisionQueryId = queryId;
+                if (other->lastCollisionQueryId == query.queryId) continue;
+                other->lastCollisionQueryId = query.queryId;
 
-                if (filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, target)) continue;
-                if (filterByInstanceId && other->instanceId != (uint32_t) target) continue;
+                if (query.filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, target)) continue;
+                if (query.filterByInstanceId && other->instanceId != (uint32_t) target) continue;
 
                 InstanceBBox bbox = Collision_computeBBox(ctx->dataWin, other);
                 if (!bbox.valid) continue;
