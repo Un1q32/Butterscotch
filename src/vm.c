@@ -3195,7 +3195,8 @@ VMContext* VM_create(DataWin* dataWin) {
     uint32_t maxGlobalVarID = 0;
     forEach(Variable, v, dataWin->vari.variables, dataWin->vari.variableCount) {
         if (0 > v->varID) continue;
-        if (v->instanceType == INSTANCE_GLOBAL) {
+        // In BC17 any varID can be used as a global variable
+        if (IS_BC17_OR_HIGHER(ctx) || v->instanceType == INSTANCE_GLOBAL) {
             if ((uint32_t) v->varID + 1 > maxGlobalVarID) maxGlobalVarID = (uint32_t) v->varID + 1;
         }
     }
