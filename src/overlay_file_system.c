@@ -7,6 +7,13 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#define overlayMkdir(path) _mkdir(path)
+#else
+#define overlayMkdir(path) mkdir((path), 0777)
+#endif
+
 // ===[ Helpers ]===
 
 // Replaces all backslashes (\) with forward slashes (/) in a path string. (dealing with windows paths)
@@ -85,11 +92,11 @@ static void ensureParentDir(const char* fullPath) {
     for (size_t i = 1; len > i; i++) {
         if (buf[i] == '/') {
             buf[i] = '\0';
-            mkdir(buf, 0777);
+            overlayMkdir(buf);
             buf[i] = '/';
         }
     }
-    mkdir(buf, 0777);
+    overlayMkdir(buf);
 }
 
 // ===[ Vtable Implementations ]===
