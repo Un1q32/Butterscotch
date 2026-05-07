@@ -319,6 +319,12 @@ typedef struct Runner {
     // For each event type, the deduplicated list of object indices that respond to ANY subtype of that event (including via inheritance). Derived from the event table; used by collision dispatch to skip non-collision objects in the outer loop.
     // Length = OBJT_EVENT_TYPE_COUNT.
     int32_t** objectsWithAnyEventOfType;
+    // Per-object flattened collision event list (one ObjectEventList per objectIndex, length = dataWin->objt.count).
+    // Flattens parent-chain collision inheritance: each child's list contains its own collision events plus
+    // every ancestor target the child does not override, deduplicated. Lets collision dispatch iterate one flat
+    // list per object with no parent-chain walk and no per-target dedup. Owned by the Runner; dataWin->objt is
+    // left untouched so the parsed file remains the source of truth.
+    ObjectEventList* flattenedCollisionEvents;
     // Reusable scratch array for Runner_executeEventForAll. Pre-grown to avoid stb_ds arrput overhead and repeated allocations on the per-frame dispatch path. Owned via stb_ds; truncated at the start of each call.
     Instance** eventDispatchInstances;
     // LIFO arena used to snapshot per-object instance lists before iteration.
