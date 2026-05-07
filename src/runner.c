@@ -845,7 +845,7 @@ void Runner_drawGUI(Runner* runner) {
 void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY) {
     *outScaleX = 1.0f;
     *outScaleY = 1.0f;
-    
+
     Room* activeRoom = runner->currentRoom;
     bool viewsEnabled = (activeRoom->flags & 1) != 0;
     if (viewsEnabled) {
@@ -2215,14 +2215,14 @@ void Runner_step(Runner* runner) {
             DsMapEntry* map = nullptr;
             arrput(runner->dsMapPool, map);
             int32_t mapId = arrlen(runner->dsMapPool) - 1;
-            
+
             DsMapEntry** mapPtr = &runner->dsMapPool[mapId];
             shput(*mapPtr, safeStrdup("event_type"), RValue_makeOwnedString(safeStrdup(slot->connected ? "gamepad discovered" : "gamepad lost")));
             shput(*mapPtr, safeStrdup("pad_index"), RValue_makeReal((GMLReal) i));
-            
+
             runner->asyncLoadMapId = mapId;
             Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_ASYNC_SYSTEM);
-            
+
             // Clean up ds_map
             mapPtr = &runner->dsMapPool[mapId];
             if (*mapPtr != nullptr) {
@@ -2826,7 +2826,7 @@ void Runner_free(Runner* runner) {
 
     cleanupState(runner);
 
-    if (runner->instancesByObject != nullptr) {
+    {
         uint32_t objectCount = runner->dataWin->objt.count;
         repeat(objectCount, i) {
             arrfree(runner->instancesByObject[i]);
@@ -2834,7 +2834,8 @@ void Runner_free(Runner* runner) {
         free(runner->instancesByObject);
         runner->instancesByObject = nullptr;
     }
-    if (runner->instancesByExactObject != nullptr) {
+
+    {
         uint32_t objectCount = runner->dataWin->objt.count;
         repeat(objectCount, i) {
             arrfree(runner->instancesByExactObject[i]);
@@ -2842,20 +2843,23 @@ void Runner_free(Runner* runner) {
         free(runner->instancesByExactObject);
         runner->instancesByExactObject = nullptr;
     }
-    if (runner->objectsWithAnyEventOfType != nullptr) {
+
+    {
         repeat(OBJT_EVENT_TYPE_COUNT, t) {
             arrfree(runner->objectsWithAnyEventOfType[t]);
         }
         free(runner->objectsWithAnyEventOfType);
         runner->objectsWithAnyEventOfType = nullptr;
     }
-    if (runner->flattenedCollisionEvents != nullptr) {
+
+    {
         repeat(runner->dataWin->objt.count, i) {
             free(runner->flattenedCollisionEvents[i].events);
         }
         free(runner->flattenedCollisionEvents);
         runner->flattenedCollisionEvents = nullptr;
     }
+    
     arrfree(runner->cachedDrawables);
     runner->cachedDrawables = nullptr;
     arrfree(runner->instanceSnapshots);
