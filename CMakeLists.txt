@@ -146,6 +146,44 @@ if(PLATFORM STREQUAL "glfw")
             ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
             $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
     )
+elseif(PLATFORM STREQUAL "web")
+    file(GLOB GL_SOURCES src/gl/*.c)
+    target_sources(butterscotch PRIVATE ${GL_SOURCES})
+    add_compile_definitions(ENABLE_GLES)
+
+    # stb_image
+    target_include_directories(butterscotch PUBLIC vendor/stb/image)
+
+    # stb_vorbis (for miniaudio's OGG decoding)
+    target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
+
+    # miniaudio (used in noDevice mode; see src/web/web_audio_system.c)
+    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
+
+    set_target_properties(butterscotch PROPERTIES SUFFIX ".mjs")
+
+    target_link_options(
+            butterscotch
+            PRIVATE
+            "-sMODULARIZE=1"
+            "-sEXPORT_ES6=1"
+            "-sENVIRONMENT=worker"
+            "-sWASMFS=1"
+            "-sEXPORTED_RUNTIME_METHODS=['HEAP8', 'HEAPU8', 'HEAPF32', 'ccall', 'cwrap', 'specialHTMLTargets', 'UTF8ToString']"
+            "-sEXPORTED_FUNCTIONS=['_main', '_mountOpfs', '_startRunner', '_stopRunner', '_malloc', '_free', '_getKeyDownPtr', '_getKeyUpPtr', '_getKeyCount', '_setAudioSampleRate', '_pullAudioFrames']"
+            "-sOFFSCREENCANVAS_SUPPORT=1"
+            "-sOFFSCREEN_FRAMEBUFFER=1"
+            "-sMIN_WEBGL_VERSION=2"
+            "-sMAX_WEBGL_VERSION=2"
+            "-sFULL_ES3=1"
+            "-sALLOW_MEMORY_GROWTH"
+            "-sSHARED_MEMORY=1"
+            "-sPTHREAD_POOL_SIZE=4"
+            "--use-port=bzip2"
+            "-pthread"
+    )
+
+    target_compile_options(butterscotch PRIVATE "--use-port=bzip2" "-pthread")
 elseif(PLATFORM STREQUAL "ps2")
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)
