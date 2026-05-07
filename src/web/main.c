@@ -109,6 +109,12 @@ void* loop() {
 
         emscripten_webgl_make_context_current(ctx);
 
+        double nowMs = emscripten_get_now();
+        float audioDt = (float) ((nowMs - lastFrameTimeMs) / 1000.0);
+        if (0.0f > audioDt) audioDt = 0.0f;
+        if (audioDt > 0.1f) audioDt = 0.1f;
+        gRunner->audioSystem->vtable->update(gRunner->audioSystem, audioDt);
+
         // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
         Runner_step(gRunner);
 
