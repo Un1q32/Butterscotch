@@ -35,7 +35,15 @@ if(ENABLE_BC17)
     add_compile_definitions(ENABLE_BC17)
 endif()
 
-file(GLOB SOURCES src/*.c)
+if(PLATFORM STREQUAL "web-meta")
+    # Metadata-only build: just the data.win parser and its direct deps. No VM, no runner, no I/O subsystems.
+    set(SOURCES
+        src/data_win.c
+        src/binary_reader.c
+    )
+else()
+    file(GLOB SOURCES src/*.c)
+endif()
 # Platform specific files builds
 file(GLOB PLATFORM_SOURCES src/${PLATFORM}/*.c)
 
@@ -184,6 +192,23 @@ elseif(PLATFORM STREQUAL "web")
     )
 
     target_compile_options(butterscotch PRIVATE "--use-port=bzip2" "-pthread")
+elseif(PLATFORM STREQUAL "web-meta")
+    set_target_properties(butterscotch PROPERTIES
+        SUFFIX ".mjs"
+        OUTPUT_NAME "butterscotch-meta"
+    )
+
+    target_link_options(
+            butterscotch
+            PRIVATE
+            "-sMODULARIZE=1"
+            "-sEXPORT_ES6=1"
+            "-sENVIRONMENT=web"
+            "-sEXPORTED_RUNTIME_METHODS=['HEAPU8', 'ccall', 'cwrap', 'UTF8ToString', 'FS']"
+            "-sEXPORTED_FUNCTIONS=['_main', '_parseDataWin', '_freeDataWin', '_getGameName', '_getGameDisplayName', '_getMajorVersion', '_getMinorVersion', '_getRelease', '_getBuild', '_getDefaultWindowWidth', '_getDefaultWindowHeight', '_malloc', '_free']"
+            "-sALLOW_MEMORY_GROWTH=1"
+            "-sFORCE_FILESYSTEM=1"
+    )
 elseif(PLATFORM STREQUAL "ps2")
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)
