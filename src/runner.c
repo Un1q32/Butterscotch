@@ -1907,96 +1907,96 @@ static void dispatchCollisionEvents(Runner* runner) {
             Instance* self = runner->instanceSnapshots[selfSnapBase + si];
             if (!self->active) continue;
 
-        InstanceBBox bboxSelf;
-        Sprite* sprSelf;
-        bool selfDirty = true;
+            InstanceBBox bboxSelf;
+            Sprite* sprSelf;
+            bool selfDirty = true;
 
-        // Walk the parent chain to find all collision event handlers for this object
-        int32_t currentObj = self->objectIndex;
-        int depth = 0;
-        while (currentObj >= 0 && dataWin->objt.count > (uint32_t) currentObj && 32 > depth) {
-            GameObject* obj = &dataWin->objt.objects[currentObj];
+            // Walk the parent chain to find all collision event handlers for this object
+            int32_t currentObj = self->objectIndex;
+            int depth = 0;
+            while (currentObj >= 0 && dataWin->objt.count > (uint32_t) currentObj && 32 > depth) {
+                GameObject* obj = &dataWin->objt.objects[currentObj];
 
-            ObjectEventList* eventList = &obj->eventLists[EVENT_COLLISION];
-            repeat(eventList->eventCount, evtIdx) {
-                ObjectEvent* evt = &eventList->events[evtIdx];
-                int32_t targetObjIndex = (int32_t) evt->eventSubtype;
+                ObjectEventList* eventList = &obj->eventLists[EVENT_COLLISION];
+                repeat(eventList->eventCount, evtIdx) {
+                    ObjectEvent* evt = &eventList->events[evtIdx];
+                    int32_t targetObjIndex = (int32_t) evt->eventSubtype;
 
-                if (evt->actionCount == 0 || 0 > evt->actions[0].codeId) continue;
+                    if (evt->actionCount == 0 || 0 > evt->actions[0].codeId) continue;
 
-                // Iterate only the descendant-inclusive list for the target object via a snapshot, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots above ours without corrupting this iteration.
-                int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
-                int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
-                for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
-                    Instance* other = runner->instanceSnapshots[snapIdx];
-                    if (!other->active) continue;
-                    if (other == self) continue;
+                    // Iterate only the descendant-inclusive list for the target object via a snapshot, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots above ours without corrupting this iteration.
+                    int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
+                    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+                    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+                        Instance* other = runner->instanceSnapshots[snapIdx];
+                        if (!other->active) continue;
+                        if (other == self) continue;
 
-                    // Compute bboxes
-                    if (selfDirty) {
-                        bboxSelf = Collision_computeBBox(dataWin, self);
-                        sprSelf = Collision_getSprite(dataWin, self);
-                        selfDirty = false;
-                    }
-                    InstanceBBox bboxOther = Collision_computeBBox(dataWin, other);
-                    if (!bboxSelf.valid || !bboxOther.valid) continue;
-
-                    // AABB overlap test
-                    if (bboxSelf.left >= bboxOther.right || bboxOther.left >= bboxSelf.right || bboxSelf.top >= bboxOther.bottom || bboxOther.top >= bboxSelf.bottom)
-                        continue;
-
-                    // Precise collision check if either sprite needs it (per-pixel for sepMasks==1, OBB SAT for rotated sepMasks==2).
-                    Sprite* sprOther = Collision_getSprite(dataWin, other);
-                    bool needsPrecise = (sprSelf != nullptr && sprSelf->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
-
-                    if (needsPrecise) {
-                        if (!Collision_instancesOverlapPrecise(dataWin, runner->collisionCompatibilityMode, self, other, bboxSelf, bboxOther)) continue;
-                    }
-
-                    // Collision detected! If either instance is solid, restore both to xprevious/yprevious.
-                    bool hadSolid = self->solid || other->solid;
-                    if (hadSolid) {
-                        self->x = self->xprevious;
-                        self->y = self->yprevious;
-                        if (self->pathIndex >= 0) self->pathPosition = self->pathPositionPrevious;
-                        other->x = other->xprevious;
-                        other->y = other->yprevious;
-                        if (other->pathIndex >= 0) other->pathPosition = other->pathPositionPrevious;
-                        SpatialGrid_markInstanceAsDirty(runner->spatialGrid, self);
-                        SpatialGrid_markInstanceAsDirty(runner->spatialGrid, other);
-                    }
-
-                    // We don't need to call "SpatialGrid_markInstanceAsDirty" here because *technically* just because a collision happened, doesn't mean that the instances have moved
-                    // And if it DOES move via GML, the variable write handlers will set it to dirty
-
-                    executeCollisionEvent(runner, self, other, targetObjIndex);
-
-                    // Native parity for solids: collision event can alter path state, so run one
-                    // post-event path adaptation and apply its hspeed/vspeed step.
-                    if (hadSolid && self->active && other->active) {
-                        adaptPath(runner, self);
-                        adaptPath(runner, other);
-                        if (self->hspeed != 0.0f || self->vspeed != 0.0f) {
-                            self->x += self->hspeed;
-                            self->y += self->vspeed;
-                            SpatialGrid_markInstanceAsDirty(runner->spatialGrid, self);
+                        // Compute bboxes
+                        if (selfDirty) {
+                            bboxSelf = Collision_computeBBox(dataWin, self);
+                            sprSelf = Collision_getSprite(dataWin, self);
+                            selfDirty = false;
                         }
-                        if (other->hspeed != 0.0f || other->vspeed != 0.0f) {
-                            other->x += other->hspeed;
-                            other->y += other->vspeed;
+                        InstanceBBox bboxOther = Collision_computeBBox(dataWin, other);
+                        if (!bboxSelf.valid || !bboxOther.valid) continue;
+
+                        // AABB overlap test
+                        if (bboxSelf.left >= bboxOther.right || bboxOther.left >= bboxSelf.right || bboxSelf.top >= bboxOther.bottom || bboxOther.top >= bboxSelf.bottom)
+                            continue;
+
+                        // Precise collision check if either sprite needs it (per-pixel for sepMasks==1, OBB SAT for rotated sepMasks==2).
+                        Sprite* sprOther = Collision_getSprite(dataWin, other);
+                        bool needsPrecise = (sprSelf != nullptr && sprSelf->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
+
+                        if (needsPrecise) {
+                            if (!Collision_instancesOverlapPrecise(dataWin, runner->collisionCompatibilityMode, self, other, bboxSelf, bboxOther)) continue;
+                        }
+
+                        // Collision detected! If either instance is solid, restore both to xprevious/yprevious.
+                        bool hadSolid = self->solid || other->solid;
+                        if (hadSolid) {
+                            self->x = self->xprevious;
+                            self->y = self->yprevious;
+                            if (self->pathIndex >= 0) self->pathPosition = self->pathPositionPrevious;
+                            other->x = other->xprevious;
+                            other->y = other->yprevious;
+                            if (other->pathIndex >= 0) other->pathPosition = other->pathPositionPrevious;
+                            SpatialGrid_markInstanceAsDirty(runner->spatialGrid, self);
                             SpatialGrid_markInstanceAsDirty(runner->spatialGrid, other);
                         }
+
+                        // We don't need to call "SpatialGrid_markInstanceAsDirty" here because *technically* just because a collision happened, doesn't mean that the instances have moved
+                        // And if it DOES move via GML, the variable write handlers will set it to dirty
+
+                        executeCollisionEvent(runner, self, other, targetObjIndex);
+
+                        // Native parity for solids: collision event can alter path state, so run one
+                        // post-event path adaptation and apply its hspeed/vspeed step.
+                        if (hadSolid && self->active && other->active) {
+                            adaptPath(runner, self);
+                            adaptPath(runner, other);
+                            if (self->hspeed != 0.0f || self->vspeed != 0.0f) {
+                                self->x += self->hspeed;
+                                self->y += self->vspeed;
+                                SpatialGrid_markInstanceAsDirty(runner->spatialGrid, self);
+                            }
+                            if (other->hspeed != 0.0f || other->vspeed != 0.0f) {
+                                other->x += other->hspeed;
+                                other->y += other->vspeed;
+                                SpatialGrid_markInstanceAsDirty(runner->spatialGrid, other);
+                            }
+                        }
+
+                        // The collision event may have moved our instance, so we'll need to regenerate our self attributes!
+                        selfDirty = true;
                     }
-
-                    // The collision event may have moved our instance, so we'll need to regenerate our self attributes!
-                    selfDirty = true;
+                    Runner_popInstanceSnapshot(runner, snapBase);
                 }
-                Runner_popInstanceSnapshot(runner, snapBase);
-            }
 
-            currentObj = obj->parentId;
-            depth++;
-        }
+                currentObj = obj->parentId;
+                depth++;
+            }
         }
 
         arrsetlen(runner->instanceSnapshots, selfSnapBase);
