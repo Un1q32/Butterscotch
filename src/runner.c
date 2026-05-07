@@ -725,9 +725,20 @@ void Runner_draw(Runner* runner) {
             if (parsedLayer == nullptr) continue;
             if (parsedLayer->type == RoomLayerType_Assets) {
                 RoomLayerAssetsData* data = parsedLayer->assetsData;
+                size_t tileElementCount = arrlenu(runtimeLayer->elements);
                 repeat(data->legacyTileCount, j) {
                     if (runner->renderer != nullptr) {
                         RoomTile* tile = &data->legacyTiles[j];
+                        // Find the matching RuntimeLayerElement so we can honor per-element visibility
+                        RuntimeLayerElement* tileEl = nullptr;
+                        repeat(tileElementCount, k) {
+                            RuntimeLayerElement* candidate = &runtimeLayer->elements[k];
+                            if (candidate->type == RuntimeLayerElementType_Tile && candidate->tileElement == tile) {
+                                tileEl = candidate;
+                                break;
+                            }
+                        }
+                        if (tileEl != nullptr && !tileEl->visible) continue;
                         // Check if this tile's layer is hidden via tile_layer_hide()
                         ptrdiff_t layerIdx = hmgeti(runner->tileLayerMap, tile->tileDepth);
                         if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) continue;
@@ -1155,8 +1166,23 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
             RuntimeLayerElement el = {
                 .id = Runner_getNextLayerId(runner),
                 .type = RuntimeLayerElementType_Sprite,
+                .visible = true,
                 .backgroundElement = nullptr,
                 .spriteElement = spriteElement,
+                .tileElement = nullptr,
+            };
+            arrput(runtimeLayer->elements, el);
+        }
+        // Expose legacy tiles as RuntimeLayerElements so GML scripts can find them via layer_get_all_elements and toggle them via layer_tile_visible
+        repeat(assets->legacyTileCount, j) {
+            RoomTile* tile = &assets->legacyTiles[j];
+            RuntimeLayerElement el = {
+                .id = Runner_getNextLayerId(runner),
+                .type = RuntimeLayerElementType_Tile,
+                .visible = true,
+                .backgroundElement = nullptr,
+                .spriteElement = nullptr,
+                .tileElement = tile,
             };
             arrput(runtimeLayer->elements, el);
         }

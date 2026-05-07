@@ -158,13 +158,16 @@ typedef struct {
 typedef enum {
     RuntimeLayerElementType_Background = 1,
     RuntimeLayerElementType_Sprite = 4,
+    RuntimeLayerElementType_Tile = 7,
 } RuntimeLayerElementType;
 
 typedef struct {
     uint32_t id;
     RuntimeLayerElementType type;
+    bool visible;
     RuntimeBackgroundElement* backgroundElement; // owned; nullptr if type != Background
     RuntimeSpriteElement* spriteElement; // owned; nullptr if type != Sprite
+    RoomTile* tileElement; // borrowed, points into RoomLayerAssetsData->legacyTiles; nullptr if type != Tile
 } RuntimeLayerElement;
 
 // Runtime-mutable state for a GMS2 room layer. Parsed layers are populated at room load from RoomLayer and share IDs with the parsed data.
