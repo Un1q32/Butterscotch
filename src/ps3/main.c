@@ -80,8 +80,7 @@ bool shouldExit = false;
 
 // ===[ MAIN ]===
 
-static void sys_callback(uint64_t status, uint64_t param, void* userdata)
-{
+static void sys_callback(uint64_t status, uint64_t param, void* userdata) {
     switch (status) {
         case SYSUTIL_EXIT_GAME:
             shouldExit = true;
@@ -175,7 +174,6 @@ int main(int argc, char* argv[]) {
     // Initialize the renderer
     Renderer* renderer = GLLegacyRenderer_create();
 
-
     // Initialize the audio system
     AudioSystem* audioSystem = (AudioSystem*) AlAudioSystem_create();
 
@@ -218,21 +216,17 @@ int main(int argc, char* argv[]) {
             // So we'll check if there WAS a change before trying to process the keys, to avoid releasing the keys on every frame.
             // -ioPadGetData
             if (paddata.len > 0) {
-                for (int i = 0; i < PAD_MAPPING_COUNT; i++)
-                {
-                    uint8_t byte = (uint8_t)paddata.button[PAD_MAPPINGS[i].digital];
+                repeat(PAD_MAPPING_COUNT, i) {
+                    uint8_t byte = (uint8_t) paddata.button[PAD_MAPPINGS[i].digital];
                     uint8_t mask = PAD_MAPPINGS[i].mask;
                     int32_t gmlKey = PAD_MAPPINGS[i].gmlKey;
 
                     bool isPressed = (byte & mask) != 0;
                     bool wasPressed = prevState[i];
 
-                    if (isPressed && !wasPressed)
-                    {
+                    if (isPressed && !wasPressed) {
                         RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
-                    }
-                    else if (!isPressed && wasPressed)
-                    {
+                    } else if (!isPressed && wasPressed) {
                         RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
                     }
 
@@ -247,12 +241,9 @@ int main(int argc, char* argv[]) {
                     bool wasPressed = prevStickState[i];
                     int32_t gmlKey = STICK_MAPPINGS[i].gmlKey;
 
-                    if (isPressed && !wasPressed)
-                    {
+                    if (isPressed && !wasPressed) {
                         RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
-                    }
-                    else if (!isPressed && wasPressed)
-                    {
+                    } else if (!isPressed && wasPressed) {
                         RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
                     }
 
@@ -263,7 +254,6 @@ int main(int argc, char* argv[]) {
 
         double frameStartTime = PS3_GET_TIME;
         if (shouldStep) {
-
             // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
             Runner_step(runner);
 
@@ -273,8 +263,6 @@ int main(int argc, char* argv[]) {
             if (dt > 0.1f) dt = 0.1f; // cap delta to avoid huge fades on lag spikes
             runner->audioSystem->vtable->update(runner->audioSystem, dt);
         }
-
-        Room* activeRoom = runner->currentRoom;
 
         // Query actual framebuffer size (differs from window size on Wayland with fractional scaling)
         int fbWidth = display_width, fbHeight = display_height;
@@ -329,8 +317,7 @@ int main(int argc, char* argv[]) {
         glDisable(GL_TEXTURE_2D);
         glColor3f(1.0f, 1.0f, 1.0f);
         glBegin(GL_QUADS);
-        for (int i = 0; i < num_quads * 4; i++)
-        {
+        for (int i = 0; i < num_quads * 4; i++) {
             glVertex2f(
                 *(float *)(buffer + i * 16),
                 *(float *)(buffer + i * 16 + 4)
