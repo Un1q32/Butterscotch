@@ -408,6 +408,22 @@ static void glRendererFlush(Renderer* renderer) {
     flushBatch((GLRenderer*) renderer);
 }
 
+static void glClearScreen(Renderer* renderer, uint32_t color) {
+    GLRenderer* gl = (GLRenderer*) renderer;
+    flushBatch(gl);
+
+    float r = (float) BGR_R(color) / 255.0f;
+    float g = (float) BGR_G(color) / 255.0f;
+    float b = (float) BGR_B(color) / 255.0f;
+
+    // GML draw_clear ignores the active scissor and clears the whole target. Disable scissor for the clear and restore it after.
+    GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissorWasEnabled) glDisable(GL_SCISSOR_TEST);
+    glClearColor(r, g, b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (scissorWasEnabled) glEnable(GL_SCISSOR_TEST);
+}
+
 // Lazily decodes and uploads a TXTR page on first access.
 // Returns true if the texture is ready, false if it failed to decode.
 static bool ensureTextureLoaded(GLRenderer* gl, uint32_t pageId) {
@@ -2058,6 +2074,7 @@ static RendererVtable glVtable = {
     .drawText = glDrawText,
     .drawTextColor = glDrawTextColor,
     .flush = glRendererFlush,
+    .clearScreen = glClearScreen,
     .createSpriteFromSurface = glCreateSpriteFromSurface,
     .deleteSprite = glDeleteSprite,
     .gpuSetBlendMode = glGpuSetBlendMode,

@@ -5451,6 +5451,15 @@ static RValue builtin_drawSetColor(VMContext* ctx, RValue* args, MAYBE_UNUSED in
     return RValue_makeUndefined();
 }
 
+static RValue builtin_drawClear(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner->renderer != nullptr) {
+        uint32_t color = (uint32_t) RValue_toInt32(args[0]);
+        runner->renderer->vtable->clearScreen(runner->renderer, color);
+    }
+    return RValue_makeUndefined();
+}
+
 static RValue builtin_drawSetAlpha(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = (Runner*) ctx->runner;
     if (runner->renderer != nullptr) {
@@ -8964,6 +8973,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "draw_healthbar", builtin_drawHealthbar);
     VM_registerBuiltin(ctx, "draw_set_color", builtin_drawSetColor);
     VM_registerBuiltin(ctx, "draw_set_alpha", builtin_drawSetAlpha);
+    VM_registerBuiltin(ctx, "draw_clear", builtin_drawClear);
     VM_registerBuiltin(ctx, "draw_set_font", builtin_drawSetFont);
     VM_registerBuiltin(ctx, "draw_set_halign", builtin_drawSetHalign);
     VM_registerBuiltin(ctx, "draw_set_valign", builtin_drawSetValign);
