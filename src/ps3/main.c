@@ -195,25 +195,31 @@ int main(int argc, char* argv[]) {
             padData paddata;
             ioPadGetData(0, &paddata);
 
-            for (int i = 0; i < PAD_MAPPING_COUNT; i++)
-            {
-                uint8_t byte = (uint8_t)paddata.button[PAD_MAPPINGS[i].digital];
-                uint8_t mask = PAD_MAPPINGS[i].mask;
-                int32_t gmlKey = PAD_MAPPINGS[i].gmlKey;
-
-                bool isPressed = (byte & mask) != 0;
-                bool wasPressed = prevState[i];
-
-                if (isPressed && !wasPressed)
+            // "The padData structure is only filled if there is a change in input since the last call.
+            // If there is no change, the structure is zero-filled. If the len member is zero, there was no new input."
+            // So we'll check if there WAS a change before trying to process the keys, to avoid releasing the keys on every frame.
+            // -ioPadGetData
+            if (paddata.len > 0) {
+                for (int i = 0; i < PAD_MAPPING_COUNT; i++)
                 {
-                    RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
-                }
-                else if (!isPressed && wasPressed)
-                {
-                    RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
-                }
+                    uint8_t byte = (uint8_t)paddata.button[PAD_MAPPINGS[i].digital];
+                    uint8_t mask = PAD_MAPPINGS[i].mask;
+                    int32_t gmlKey = PAD_MAPPINGS[i].gmlKey;
 
-                prevState[i] = isPressed;
+                    bool isPressed = (byte & mask) != 0;
+                    bool wasPressed = prevState[i];
+
+                    if (isPressed && !wasPressed)
+                    {
+                        RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
+                    }
+                    else if (!isPressed && wasPressed)
+                    {
+                        RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
+                    }
+
+                    prevState[i] = isPressed;
+                }
             }
         }
 
