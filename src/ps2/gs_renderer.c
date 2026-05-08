@@ -1955,7 +1955,7 @@ static void gsClearScreen(Renderer* renderer, uint32_t color, float alpha) {
     uint8_t r = BGR_R(color) >> 1;
     uint8_t g = BGR_G(color) >> 1;
     uint8_t b = BGR_B(color) >> 1;
-    uint8_t a = alphaToGS(a);
+    uint8_t a = alphaToGS(alpha);
     gsKit_clear(gs->gsGlobal, GS_SETREG_RGBAQ(r, g, b, a, 0x00));
 }
 
