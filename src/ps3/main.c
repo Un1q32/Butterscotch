@@ -74,7 +74,7 @@ static const char* dataWinPath = DATAWIN_PATH;
 
 // ===[ MAIN ]===
 static double freq = 0; 
-#define PS3_GET_TIME ((double)__builtin_ppc_get_timebase()/freq)
+#define PS3_GET_TIME ((double)__builtin_ppc_get_timebase() / (double)freq)
 bool shouldExit = false;
 
 // ===[ MAIN ]===
@@ -314,6 +314,7 @@ int main(int argc, char* argv[]) {
                 while (PS3_GET_TIME < nextFrameTime) {
                     __sync();
                     sysUtilCheckCallback();
+                    sysUsleep(5);
                 }
                 lastFrameTime = nextFrameTime;
             } else {
