@@ -9,6 +9,7 @@
 #include "utils.h"
 #include "profiler.h"
 #include "int_int_hashmap.h"
+#include "string_builder.h"
 
 // ===[ Instance Types (signed 16-bit) ]===
 #define INSTANCE_SELF      (-1)
@@ -319,5 +320,21 @@ static bool VM_shouldTraceVariable(StringBooleanEntry* traceMap, const char* sco
         if (shgeti(traceMap, altFormatted) != -1) return true;
     }
     return false;
+}
+
+static void VM_checkIfVariableShouldBeTracedAndLog(VMContext* ctx, const char* scopeName, const char* altScopeName, const char* name, RValue value, bool isWrite, int32_t arrayIndex, int32_t instanceId, const char* additional) {
+    StringBooleanEntry* varModificationsToBeTraced = isWrite ? ctx->varWritesToBeTraced : ctx->varReadsToBeTraced;
+    if (!VM_shouldTraceVariable(varModificationsToBeTraced, scopeName, altScopeName, name))
+        return;
+
+    char* rvalueAsString = RValue_toStringTyped(value);
+    const char* verb = isWrite ? "WRITE" : "READ";
+    const char* arrow = isWrite ? "=" : "->";
+    char indexBuf[16] = "";
+    if (arrayIndex >= 0) snprintf(indexBuf, sizeof(indexBuf), "[%d]", arrayIndex);
+    char instanceIdBuf[24] = "";
+    if (instanceId >= 0) snprintf(instanceIdBuf, sizeof(instanceIdBuf), " (instanceId=%d)", instanceId);
+    fprintf(stderr, "VM: [%s] %s %s.%s%s %s %s%s%s\n", ctx->currentCodeName, verb, scopeName, name, indexBuf, arrow, rvalueAsString, instanceIdBuf, additional);
+    free(rvalueAsString);
 }
 #endif

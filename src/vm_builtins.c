@@ -2246,11 +2246,7 @@ static RValue builtinVariableGlobalGet(VMContext* ctx, RValue* args, int32_t arg
     if (ctx->globalVarCount > (uint32_t) varID) {
         RValue val = ctx->globalVars[varID];
 #ifdef ENABLE_VM_TRACING
-        if (VM_shouldTraceVariable(ctx->varReadsToBeTraced, "global", nullptr, name)) {
-            char* rvalueAsString = RValue_toStringTyped(val);
-            fprintf(stderr, "VM: [%s] READ global.%s -> %s (variable_global_get)\n", ctx->currentCodeName, name, rvalueAsString);
-            free(rvalueAsString);
-        }
+        VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, name, val, false, -1, -1, " (variable_global_get)");
 #endif
         // Duplicate owned strings
         if (val.type == RVALUE_STRING && val.ownsReference && val.string != nullptr) {
@@ -2271,11 +2267,7 @@ static RValue builtinVariableGlobalSet(VMContext* ctx, RValue* args, int32_t arg
     int32_t varID = ctx->globalVarNameMap[idx].value;
     if (ctx->globalVarCount > (uint32_t) varID) {
 #ifdef ENABLE_VM_TRACING
-        if (VM_shouldTraceVariable(ctx->varWritesToBeTraced, "global", nullptr, name)) {
-            char* rvalueAsString = RValue_toStringTyped(args[1]);
-            fprintf(stderr, "VM: [%s] WRITE global.%s = %s (variable_global_set)\n", ctx->currentCodeName, name, rvalueAsString);
-            free(rvalueAsString);
-        }
+        VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, name, args[1], true, -1, -1, " (variable_global_set)");
 #endif
         RValue_free(&ctx->globalVars[varID]);
         ctx->globalVars[varID] = RValue_makeIndependent(args[1]);
@@ -2287,11 +2279,9 @@ static RValue builtinVariableGlobalSet(VMContext* ctx, RValue* args, int32_t arg
 
 static void variableInstanceSetOn(VMContext* ctx, Instance* target, const char* name, RValue val, MAYBE_UNUSED const char* originBuiltin) {
 #ifdef ENABLE_VM_TRACING
-    if (VM_shouldTraceVariable(ctx->varWritesToBeTraced, variableTraceObjectName(ctx, target), "self", name)) {
-        char* rvalueAsString = RValue_toStringTyped(val);
-        fprintf(stderr, "VM: [%s] WRITE %s.%s = %s (instanceId=%d) (%s)\n", ctx->currentCodeName, variableTraceObjectName(ctx, target), name, rvalueAsString, target->instanceId, originBuiltin);
-        free(rvalueAsString);
-    }
+    char additional[48];
+    snprintf(additional, sizeof(additional), " (%s)", originBuiltin);
+    VM_checkIfVariableShouldBeTracedAndLog(ctx, variableTraceObjectName(ctx, target), "self", name, val, true, -1, target->instanceId, additional);
 #endif
     int16_t builtinId = VMBuiltins_resolveBuiltinVarId(name);
     if (builtinId != BUILTIN_VAR_UNKNOWN) {
@@ -2318,11 +2308,9 @@ static RValue variableInstanceGetOn(VMContext* ctx, Instance* target, const char
         RValue val = VMBuiltins_getVariable(ctx, builtinId, name, -1);
         ctx->currentInstance = saved;
 #ifdef ENABLE_VM_TRACING
-        if (VM_shouldTraceVariable(ctx->varReadsToBeTraced, variableTraceObjectName(ctx, target), "self", name)) {
-            char* rvalueAsString = RValue_toStringTyped(val);
-            fprintf(stderr, "VM: [%s] READ %s.%s -> %s (instanceId=%d) (%s, builtin)\n", ctx->currentCodeName, variableTraceObjectName(ctx, target), name, rvalueAsString, target->instanceId, originBuiltin);
-            free(rvalueAsString);
-        }
+        char additional[48];
+        snprintf(additional, sizeof(additional), " (%s, builtin)", originBuiltin);
+        VM_checkIfVariableShouldBeTracedAndLog(ctx, variableTraceObjectName(ctx, target), "self", name, val, false, -1, target->instanceId, additional);
 #endif
         // Duplicate string so caller-owned args cleanup does not affect it
         if (val.type == RVALUE_STRING && val.string != nullptr && !val.ownsReference) {
@@ -2334,11 +2322,9 @@ static RValue variableInstanceGetOn(VMContext* ctx, Instance* target, const char
     if (0 > slot) return RValue_makeUndefined();
     RValue val = Instance_getSelfVar(target, ctx->selfVarNameMap[slot].value);
 #ifdef ENABLE_VM_TRACING
-    if (VM_shouldTraceVariable(ctx->varReadsToBeTraced, variableTraceObjectName(ctx, target), "self", name)) {
-        char* rvalueAsString = RValue_toStringTyped(val);
-        fprintf(stderr, "VM: [%s] READ %s.%s -> %s (instanceId=%d) (%s)\n", ctx->currentCodeName, variableTraceObjectName(ctx, target), name, rvalueAsString, target->instanceId, originBuiltin);
-        free(rvalueAsString);
-    }
+    char additional[48];
+    snprintf(additional, sizeof(additional), " (%s)", originBuiltin);
+    VM_checkIfVariableShouldBeTracedAndLog(ctx, variableTraceObjectName(ctx, target), "self", name, val, false, -1, target->instanceId, additional);
 #endif
     if (val.type == RVALUE_STRING && val.string != nullptr) {
         return RValue_makeOwnedString(safeStrdup(val.string));
