@@ -337,9 +337,8 @@ void Runner_executeEvent(Runner* runner, Instance* instance, int32_t eventType, 
     Runner_executeEventFromObject(runner, instance, instance->objectIndex, eventType, eventSubtype);
 }
 
-// Events that GMS 2.3+ routes through the per-object obj_has_event table instead of Perform_Event_All.
-// Anything else (BC16 ALWAYS; BC17 non-perObject) goes through Runner_executeEventForAll
-static bool eventUsesBC17PerObjectDispatch(int32_t eventType) {
+// Events that GameMaker routes through the per-object obj_has_event table instead of Perform_Event_All.
+static bool eventUsesPerObjectDispatch(int32_t eventType) {
     return eventType == EVENT_STEP || eventType == EVENT_ALARM || eventType == EVENT_KEYBOARD || eventType == EVENT_KEYPRESS || eventType == EVENT_KEYRELEASE;
 }
 
@@ -351,8 +350,7 @@ void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventS
     Instance** scratch = runner->eventDispatchInstances;
     arrsetlen(scratch, 0);
 
-    // On GMS 2.x, the native runner dispatches events in the eventUsesPerObjectDispatch set per-object. Route those through executeEventPerObject to match.
-    if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0) && eventUsesBC17PerObjectDispatch(eventType)) {
+    if (eventUsesPerObjectDispatch(eventType)) {
         ResolvedEventTable* table = &runner->eventTable;
         uint32_t entryCount;
         SlotResponderEntry* entries = ResolvedEventTable_slotEntries(table, slot, &entryCount);
