@@ -4129,6 +4129,7 @@ void VM_free(VMContext* ctx) {
     shfree(ctx->alarmsToBeTraced);
     shfree(ctx->instanceLifecyclesToBeTraced);
     shfree(ctx->eventsToBeTraced);
+    shfree(ctx->collisionsToBeTraced);
     shfree(ctx->opcodesToBeTraced);
     shfree(ctx->stackToBeTraced);
 #endif

@@ -234,6 +234,7 @@ typedef struct VMContext {
     StringBooleanEntry* alarmsToBeTraced;
     StringBooleanEntry* instanceLifecyclesToBeTraced;
     StringBooleanEntry* eventsToBeTraced;
+    StringBooleanEntry* collisionsToBeTraced;
     StringBooleanEntry* opcodesToBeTraced;
     StringBooleanEntry* stackToBeTraced;
     StringBooleanEntry* tilesToBeTraced;
