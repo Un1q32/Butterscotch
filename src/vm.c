@@ -785,17 +785,29 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
                 uint32_t localSlot = resolveLocalSlot(ctx, varDef->varID);
                 require(ctx->localVarCount > localSlot);
                 writeIntoSlot(&ctx->localVars[localSlot], val);
+#ifdef ENABLE_VM_TRACING
+                VM_checkIfVariableShouldBeTracedAndLog(ctx, "local", nullptr, varDef->name, ctx->localVars[localSlot], true, -1, -1, "");
+#endif
                 return;
             }
             case INSTANCE_GLOBAL: {
                 require(ctx->globalVarCount > (uint32_t) varDef->varID);
                 writeIntoSlot(&ctx->globalVars[varDef->varID], val);
+#ifdef ENABLE_VM_TRACING
+                VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, varDef->name, ctx->globalVars[varDef->varID], true, -1, -1, "");
+#endif
                 return;
             }
             case INSTANCE_SELF: {
                 Instance* inst = (Instance*) ctx->currentInstance;
                 if (inst != nullptr) {
                     Instance_setSelfVar(inst, varDef->varID, val);
+#ifdef ENABLE_VM_TRACING
+                    {
+                        RValue written = Instance_getSelfVar(inst, varDef->varID);
+                        VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, written, true, -1, inst->instanceId, "");
+                    }
+#endif
                     RValue_free(&val);
                     return;
                 }
@@ -805,6 +817,12 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
                 Instance* inst = (Instance*) ctx->otherInstance;
                 if (inst != nullptr) {
                     Instance_setSelfVar(inst, varDef->varID, val);
+#ifdef ENABLE_VM_TRACING
+                    {
+                        RValue written = Instance_getSelfVar(inst, varDef->varID);
+                        VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, written, true, -1, inst->instanceId, "");
+                    }
+#endif
                     RValue_free(&val);
                     return;
                 }
@@ -2669,6 +2687,26 @@ static RValue executeLoop(VMContext* ctx) {
                             RValue val;
                             if (tryFastVarRead(ctx, instanceType, varDef, &val)) {
                                 stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
+#ifdef ENABLE_VM_TRACING
+                                switch (instanceType) {
+                                    case INSTANCE_SELF: {
+                                        Instance* inst = (Instance*) ctx->currentInstance;
+                                        VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, val, false, -1, inst->instanceId, "");
+                                        break;
+                                    }
+                                    case INSTANCE_LOCAL:
+                                        VM_checkIfVariableShouldBeTracedAndLog(ctx, "local", nullptr, varDef->name, val, false, -1, -1, "");
+                                        break;
+                                    case INSTANCE_GLOBAL:
+                                        VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, varDef->name, val, false, -1, -1, "");
+                                        break;
+                                    case INSTANCE_OTHER: {
+                                        Instance* inst = (Instance*) ctx->otherInstance;
+                                        VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, val, false, -1, inst->instanceId, "");
+                                        break;
+                                    }
+                                }
+#endif
                                 break;
                             }
                         }
@@ -2696,6 +2734,9 @@ static RValue executeLoop(VMContext* ctx) {
                 RValue val = ctx->localVars[localSlot];
                 val.ownsReference = false;
                 stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
+#ifdef ENABLE_VM_TRACING
+                VM_checkIfVariableShouldBeTracedAndLog(ctx, "local", nullptr, varDef->name, val, false, -1, -1, "");
+#endif
                 break;
             }
             case OP_PUSHGLB: {
@@ -2714,6 +2755,9 @@ static RValue executeLoop(VMContext* ctx) {
                 RValue val = ctx->globalVars[varDef->varID];
                 val.ownsReference = false;
                 stackPushTyped(ctx, val, GML_TYPE_VARIABLE);
+#ifdef ENABLE_VM_TRACING
+                VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, varDef->name, val, false, -1, -1, "");
+#endif
                 break;
             }
             case OP_PUSHBLTN:
