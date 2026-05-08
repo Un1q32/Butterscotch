@@ -1547,36 +1547,25 @@ static void glDrawSurface(Renderer* renderer, int32_t surfaceID, float x, float 
 
     GLRenderer* gl = (GLRenderer*) renderer;
 
+    GLuint texId;
     int32_t texW = 0;
     int32_t texH = 0;
 
-
-
     if (surfaceID != -1) {
-    
         if (0 > surfaceID || gl->ssurfaceCount <= (uint32_t) surfaceID) return;
-        gl->currentTextureId = gl->surfaceTexture[surfaceID];  
-    
+        texId = gl->surfaceTexture[surfaceID];
         texW = gl->surfaceWidth[surfaceID];
-        texH = gl->surfaceHeight[surfaceID];    
+        texH = gl->surfaceHeight[surfaceID];
     } else {
-            gl->currentTextureId = gl->fboTexture;
-            texW = gl->fboWidth;
-            texH = gl->fboHeight;
-        }
-    //GLuint texId = gl->surfaceTexture[surfaceID];
-
-
-    // Flush if texture changed or batch full
-
-    flushBatch(gl);
-
-    if (gl->quadCount >= MAX_QUADS) {
-        flushBatch(gl);
+        texId = gl->fboTexture;
+        texW = gl->fboWidth;
+        texH = gl->fboHeight;
     }
 
-    //what a mess I think!
-
+    // Flush previous batch with the OLD texture before switching, so pending sprite quads aren't redrawn with the surface's pixels.
+    if (gl->quadCount > 0 && gl->currentTextureId != texId) flushBatch(gl);
+    if (gl->quadCount >= MAX_QUADS) flushBatch(gl);
+    gl->currentTextureId = texId;
 
     float u0 = (float) 0.0;
     float v0 = (float) 1.0;
@@ -1638,36 +1627,25 @@ static void glDrawSurfacePart(Renderer* renderer, int32_t surfaceID, int32_t x, 
 
     GLRenderer* gl = (GLRenderer*) renderer;
 
-    if (0 > surfaceID || gl->ssurfaceCount <= (uint32_t) surfaceID) return;
-
-    //GLuint texId = gl->surfaceTexture[surfaceID];
+    GLuint texId;
     int32_t texW = 0;
     int32_t texH = 0;
 
-
-
     if (surfaceID != -1) {
-    
         if (0 > surfaceID || gl->ssurfaceCount <= (uint32_t) surfaceID) return;
-        gl->currentTextureId = gl->surfaceTexture[surfaceID];  
-    
+        texId = gl->surfaceTexture[surfaceID];
         texW = gl->surfaceWidth[surfaceID];
-        texH = gl->surfaceHeight[surfaceID];    
+        texH = gl->surfaceHeight[surfaceID];
     } else {
-            gl->currentTextureId = gl->fboTexture;
-            texW = gl->fboWidth;
-            texH = gl->fboHeight;
-        }
-
-    // Flush if texture changed or batch full
-
-    flushBatch(gl);
-
-    if (gl->quadCount >= MAX_QUADS) {
-        flushBatch(gl);
+        texId = gl->fboTexture;
+        texW = gl->fboWidth;
+        texH = gl->fboHeight;
     }
 
-
+    // Flush previous batch with the OLD texture before switching, so pending sprite quads aren't redrawn with the surface's pixels.
+    if (gl->quadCount > 0 && gl->currentTextureId != texId) flushBatch(gl);
+    if (gl->quadCount >= MAX_QUADS) flushBatch(gl);
+    gl->currentTextureId = texId;
 
     float u0 = (float) left / (float) texW;
     float v0 = (float) (float) texH - (top / (float) texH);
@@ -1728,31 +1706,19 @@ static void glDrawSurfaceStretched(Renderer* renderer, int32_t surfaceID, float 
 
     GLRenderer* gl = (GLRenderer*) renderer;
 
-    if (0 > surfaceID || gl->ssurfaceCount <= (uint32_t) surfaceID) return;
-
-    //GLuint texId = gl->surfaceTexture[surfaceID];
-
-    flushBatch(gl);
-
+    GLuint texId;
 
     if (surfaceID != -1) {
-    
         if (0 > surfaceID || gl->ssurfaceCount <= (uint32_t) surfaceID) return;
-        gl->currentTextureId = gl->surfaceTexture[surfaceID];  
+        texId = gl->surfaceTexture[surfaceID];
     } else {
-            gl->currentTextureId = gl->fboTexture;
-
-        }
-
-    // Flush if texture changed or batch full
-
-    flushBatch(gl);
-
-    if (gl->quadCount >= MAX_QUADS) {
-        flushBatch(gl);
+        texId = gl->fboTexture;
     }
 
-
+    // Flush previous batch with the OLD texture before switching, so pending sprite quads aren't redrawn with the surface's pixels.
+    if (gl->quadCount > 0 && gl->currentTextureId != texId) flushBatch(gl);
+    if (gl->quadCount >= MAX_QUADS) flushBatch(gl);
+    gl->currentTextureId = texId;
 
     float u0 = (float) 0.0;
     float v0 = (float) 1.0;
