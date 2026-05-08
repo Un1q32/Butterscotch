@@ -563,11 +563,11 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
         }
     } else if (IS_BC17_OR_HIGHER(ctx) && instanceType == INSTANCE_ARG) {
         // BC17: argument0..argument15 via INSTANCE_ARG instance type (builtinVarId pre-resolved at parse time)
-        int16_t bid = varDef->builtinVarId;
+        int16_t builtinVarId = varDef->builtinVarId;
         RValue result;
-        if (bid == BUILTIN_VAR_ARGUMENT_COUNT) {
+        if (builtinVarId == BUILTIN_VAR_ARGUMENT_COUNT) {
             result = RValue_makeReal((GMLReal) ctx->scriptArgCount);
-        } else if (bid == BUILTIN_VAR_ARGUMENT) {
+        } else if (builtinVarId == BUILTIN_VAR_ARGUMENT) {
             // argument[N] array-style access
             int32_t idx = access.arrayIndex;
             if (ctx->scriptArgs != nullptr && ctx->scriptArgCount > idx && idx >= 0) {
@@ -576,8 +576,8 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             } else {
                 result = RValue_makeUndefined();
             }
-        } else if (bid >= BUILTIN_VAR_ARGUMENT0 && BUILTIN_VAR_ARGUMENT15 >= bid) {
-            int32_t argIndex = bid - BUILTIN_VAR_ARGUMENT0;
+        } else if (builtinVarId >= BUILTIN_VAR_ARGUMENT0 && BUILTIN_VAR_ARGUMENT15 >= builtinVarId) {
+            int32_t argIndex = builtinVarId - BUILTIN_VAR_ARGUMENT0;
             if (ctx->scriptArgs != nullptr && ctx->scriptArgCount > argIndex) {
                 result = ctx->scriptArgs[argIndex];
                 result.ownsReference = false;
@@ -594,7 +594,7 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
                 result = RValue_makeUndefined();
             }
         } else {
-            fprintf(stderr, "VM: [%s] INSTANCE_ARG read on unknown variable '%s' (builtinVarId=%d)\n", ctx->currentCodeName, varDef->name, bid);
+            fprintf(stderr, "VM: [%s] INSTANCE_ARG read on unknown variable '%s' (builtinVarId=%d)\n", ctx->currentCodeName, varDef->name, builtinVarId);
             result = RValue_makeUndefined();
         }
         return result;
