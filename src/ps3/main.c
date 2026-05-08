@@ -52,6 +52,24 @@ const PadMapping PAD_MAPPINGS[] = {
 static const int PAD_MAPPING_COUNT = sizeof(PAD_MAPPINGS) / sizeof(PAD_MAPPINGS[0]);
 static bool prevState[sizeof(PAD_MAPPINGS) / sizeof(PAD_MAPPINGS[0])] = {0};
 
+#define STICK_CENTER 0x80 // The center of the stick (range 0x00-0xFF)
+#define STICK_THRESHOLD 0x40 // The threshold for treating stick movement as a d-pad press
+
+typedef struct {
+    uint8_t axis;
+    int8_t  sign;
+    int32_t gmlKey;
+} StickMapping;
+
+const StickMapping STICK_MAPPINGS[] = {
+    { PAD_BUTTON_OFFSET_ANALOG_LEFT_X, -1, VK_LEFT  },
+    { PAD_BUTTON_OFFSET_ANALOG_LEFT_X, +1, VK_RIGHT },
+    { PAD_BUTTON_OFFSET_ANALOG_LEFT_Y, -1, VK_UP    },
+    { PAD_BUTTON_OFFSET_ANALOG_LEFT_Y, +1, VK_DOWN  },
+};
+static const int STICK_MAPPING_COUNT = sizeof(STICK_MAPPINGS) / sizeof(STICK_MAPPINGS[0]);
+static bool prevStickState[sizeof(STICK_MAPPINGS) / sizeof(STICK_MAPPINGS[0])] = {0};
+
 #define DATAWIN_PATH "/dev_hdd0/BUTTERSCOTCH/data.win"
 static const char* dataWinPath = DATAWIN_PATH;
 
@@ -219,6 +237,26 @@ int main(int argc, char* argv[]) {
                     }
 
                     prevState[i] = isPressed;
+                }
+
+                repeat(STICK_MAPPING_COUNT, i) {
+                    int axisValue = (int) paddata.button[STICK_MAPPINGS[i].axis];
+                    int signedDelta = STICK_MAPPINGS[i].sign * (axisValue - STICK_CENTER);
+
+                    bool isPressed = signedDelta > STICK_THRESHOLD;
+                    bool wasPressed = prevStickState[i];
+                    int32_t gmlKey = STICK_MAPPINGS[i].gmlKey;
+
+                    if (isPressed && !wasPressed)
+                    {
+                        RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
+                    }
+                    else if (!isPressed && wasPressed)
+                    {
+                        RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
+                    }
+
+                    prevStickState[i] = isPressed;
                 }
             }
         }
