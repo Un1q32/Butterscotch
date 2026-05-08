@@ -1457,17 +1457,21 @@ void Runner_reset(Runner* runner) {
 static void flattenCollisionEvents(Runner* runner) {
     DataWin* dataWin = runner->dataWin;
     int32_t count = (int32_t) dataWin->objt.count;
-    runner->flattenedCollisionEvents = safeCalloc((size_t) (count > 0 ? count : 1), sizeof(ObjectEventList));
+    runner->flattenedCollisionEvents = safeCalloc((size_t) (count > 0 ? count : 1), sizeof(FlattenedCollisionEventList));
     if (0 >= count) return;
 
     repeat(count, i) {
         GameObject* child = &dataWin->objt.objects[i];
         ObjectEventList* src = &child->eventLists[EVENT_COLLISION];
-        ObjectEventList* dst = &runner->flattenedCollisionEvents[i];
+        FlattenedCollisionEventList* dst = &runner->flattenedCollisionEvents[i];
 
         if (src->eventCount > 0) {
-            dst->events = safeMalloc(src->eventCount * sizeof(ObjectEvent));
-            memcpy(dst->events, src->events, src->eventCount * sizeof(ObjectEvent));
+            dst->events = safeMalloc(src->eventCount * sizeof(FlattenedCollisionEvent));
+            repeat(src->eventCount, e) {
+                ObjectEvent* srcEvt = &src->events[e];
+                int32_t srcCodeId = (srcEvt->actionCount > 0) ? srcEvt->actions[0].codeId : -1;
+                dst->events[e] = (FlattenedCollisionEvent) { .targetObjectIndex = srcEvt->eventSubtype, .codeId = srcCodeId, .ownerObjectIndex = i };
+            }
             dst->eventCount = src->eventCount;
         }
 
@@ -1482,13 +1486,14 @@ static void flattenCollisionEvents(Runner* runner) {
 
                 bool present = false;
                 repeat(dst->eventCount, c) {
-                    if (dst->events[c].eventSubtype == target) { present = true; break; }
+                    if (dst->events[c].targetObjectIndex == target) { present = true; break; }
                 }
                 if (present) continue;
 
+                int32_t ancCodeId = (ancEvt->actionCount > 0) ? ancEvt->actions[0].codeId : -1;
                 uint32_t newCount = dst->eventCount + 1;
-                dst->events = safeRealloc(dst->events, newCount * sizeof(ObjectEvent));
-                dst->events[newCount - 1] = *ancEvt; // alias actions pointer; dataWin owns it
+                dst->events = safeRealloc(dst->events, newCount * sizeof(FlattenedCollisionEvent));
+                dst->events[newCount - 1] = (FlattenedCollisionEvent) { .targetObjectIndex = target, .codeId = ancCodeId, .ownerObjectIndex = ancestor };
                 dst->eventCount = newCount;
             }
             ancestor = anc->parentId;
@@ -1780,7 +1785,34 @@ void Runner_initFirstRoom(Runner* runner) {
 
 // ===[ Collision Event Dispatch ]===
 
-static void executeCollisionEvent(Runner* runner, Instance* self, Instance* other, int32_t targetObjectIndex) {
+// Finds if the "instance" has a collision event handler for "collisionMatch"
+// Returns nullptr if no match (instance has no collision handler that applies to collisionMatch).
+static FlattenedCollisionEvent* findSymmetricCollisionEvent(Runner* runner, Instance* instance, Instance* collisionMatch) {
+    DataWin* dataWin = runner->dataWin;
+    FlattenedCollisionEventList* list = &runner->flattenedCollisionEvents[instance->objectIndex];
+    if (list->eventCount == 0)
+        return nullptr;
+
+    int32_t partnerObj = collisionMatch->objectIndex;
+    int32_t depth = 0;
+    while (partnerObj >= 0 && dataWin->objt.count > (uint32_t) partnerObj && 32 > depth) {
+        repeat(list->eventCount, e) {
+            FlattenedCollisionEvent* evt = &list->events[e];
+            if ((int32_t) evt->targetObjectIndex == partnerObj) {
+                if (0 > evt->codeId)
+                    return nullptr;
+
+                return evt;
+            }
+        }
+        partnerObj = dataWin->objt.objects[partnerObj].parentId;
+        depth++;
+    }
+
+    return nullptr;
+}
+
+static void executeCollisionEvent(Runner* runner, Instance* self, Instance* other, int32_t targetObjectIndex, int32_t codeId, int32_t ownerObjectIndex) {
     VMContext* vm = runner->vmContext;
 
     // Save event context
@@ -1793,10 +1825,6 @@ static void executeCollisionEvent(Runner* runner, Instance* self, Instance* othe
     vm->currentEventType = EVENT_COLLISION;
     vm->currentEventSubtype = targetObjectIndex;
     vm->otherInstance = other;
-
-    int32_t ownerObjectIndex = -1;
-    int32_t codeId = findEventCodeIdAndOwner(runner, self->objectIndex, EVENT_COLLISION, targetObjectIndex, &ownerObjectIndex);
-
     vm->currentEventObjectIndex = ownerObjectIndex;
 
 #ifdef ENABLE_VM_TRACING
@@ -1962,12 +1990,13 @@ static void dispatchCollisionEvents(Runner* runner) {
             Sprite* sprSelf;
             bool selfDirty = true;
 
-            ObjectEventList* eventList = &runner->flattenedCollisionEvents[self->objectIndex];
+            FlattenedCollisionEventList* eventList = &runner->flattenedCollisionEvents[self->objectIndex];
             repeat(eventList->eventCount, evtIdx) {
-                ObjectEvent* evt = &eventList->events[evtIdx];
-                int32_t targetObjIndex = (int32_t) evt->eventSubtype;
+                FlattenedCollisionEvent* evt = &eventList->events[evtIdx];
+                int32_t targetObjIndex = (int32_t) evt->targetObjectIndex;
 
-                if (evt->actionCount == 0 || 0 > evt->actions[0].codeId) continue;
+                if (0 > evt->codeId)
+                    continue;
 
                 // Iterate only the descendant-inclusive list for the target object via a snapshot, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots above ours without corrupting this iteration.
                 int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
@@ -2014,7 +2043,17 @@ static void dispatchCollisionEvents(Runner* runner) {
                     // We don't need to call "SpatialGrid_markInstanceAsDirty" here because *technically* just because a collision happened, doesn't mean that the instances have moved
                     // And if it DOES move via GML, the variable write handlers will set it to dirty
 
-                    executeCollisionEvent(runner, self, other, targetObjIndex);
+                    executeCollisionEvent(runner, self, other, targetObjIndex, evt->codeId, evt->ownerObjectIndex);
+
+                    // When both objects are colliding, we'll execute the SELF collision (which we already did) and THEN execute the OTHER collision too
+                    // Because if we don't, the OTHER collision may never happen again because
+                    // * GML code may have pushed it away
+                    // * Solid collision resolution may have also pushed it away
+                    if (other->active && self->active) {
+                        FlattenedCollisionEvent* reverseEvt = findSymmetricCollisionEvent(runner, other, self);
+                        if (reverseEvt != nullptr)
+                            executeCollisionEvent(runner, other, self, (int32_t) reverseEvt->targetObjectIndex, reverseEvt->codeId, reverseEvt->ownerObjectIndex);
+                    }
 
                     // Native parity for solids: collision event can alter path state, so run one
                     // post-event path adaptation and apply its hspeed/vspeed step.
