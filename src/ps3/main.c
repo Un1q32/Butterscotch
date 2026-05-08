@@ -301,30 +301,6 @@ int main(int argc, char* argv[]) {
 
         renderer->vtable->endFrame(renderer);
 
-        char debugText[512];
-        snprintf(debugText, sizeof(debugText),
-                "Step: %.2fms\n",
-                (double)((PS3_GET_TIME * 1000.0f) - (frameStartTime * 1000.0f)));
-        char buffer[99999];
-        int num_quads = stb_easy_font_print(
-            10.0f,
-            10.0f,
-            debugText,
-            NULL,
-            buffer,
-            sizeof(buffer)
-        );
-        glDisable(GL_TEXTURE_2D);
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glBegin(GL_QUADS);
-        for (int i = 0; i < num_quads * 4; i++) {
-            glVertex2f(
-                *(float *)(buffer + i * 16),
-                *(float *)(buffer + i * 16 + 4)
-            );
-        }
-        glEnd();
-        glEnable(GL_TEXTURE_2D);
         sysUtilCheckCallback();
         ps3glSwapBuffers();
 
