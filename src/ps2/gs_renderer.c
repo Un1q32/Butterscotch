@@ -877,6 +877,7 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
     renderer->drawFont = -1;
     renderer->drawHalign = 0;
     renderer->drawValign = 0;
+    renderer->circlePrecision = 24;
 
     // Enable alpha blending
     gs->gsGlobal->PrimAlphaEnable = GS_SETTING_ON;

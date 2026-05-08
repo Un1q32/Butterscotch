@@ -1270,5 +1270,6 @@ Renderer* GLLegacyRenderer_create(void) {
     gl->base.drawFont = -1;
     gl->base.drawHalign = 0;
     gl->base.drawValign = 0;
+    gl->base.circlePrecision = 24;
     return (Renderer*) gl;
 }

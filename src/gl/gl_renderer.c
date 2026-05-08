@@ -2109,6 +2109,7 @@ Renderer* GLRenderer_create(void) {
     gl->base.drawFont = -1;
     gl->base.drawHalign = 0;
     gl->base.drawValign = 0;
+    gl->base.circlePrecision = 24;
     memset(gl->surfaceStack, -1, 16 * sizeof(int32_t));
     return (Renderer*) gl;
 }
