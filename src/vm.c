@@ -1310,6 +1310,9 @@ static void handlePop(VMContext* ctx, uint32_t instr, uint8_t type1, uint8_t typ
                     if (!inst->active) continue;
                     ctx->currentInstance = inst;
                     VMBuiltins_setVariable(ctx, varDef->builtinVarId, varDef->name, val, arrayIndex);
+#ifdef ENABLE_VM_TRACING
+                    VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, val, true, arrayIndex, inst->instanceId, " (builtin, all-instances object write)");
+#endif
                 }
                 Runner_popInstanceSnapshot(runner, snapBase);
                 ctx->currentInstance = savedInstance;
@@ -1321,15 +1324,30 @@ static void handlePop(VMContext* ctx, uint32_t instr, uint8_t type1, uint8_t typ
                     ctx->currentInstance = target;
                     VMBuiltins_setVariable(ctx, varDef->builtinVarId, varDef->name, val, arrayIndex);
                     ctx->currentInstance = savedInstance;
+#ifdef ENABLE_VM_TRACING
+                    VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, target), "self", varDef->name, val, true, arrayIndex, target->instanceId, " (builtin)");
+#endif
                 }
             } else if (instanceType == INSTANCE_OTHER && ctx->otherInstance != nullptr) {
                 Instance* savedInstance = (Instance*) ctx->currentInstance;
-                ctx->currentInstance = (Instance*) ctx->otherInstance;
+                Instance* otherInst = (Instance*) ctx->otherInstance;
+                ctx->currentInstance = otherInst;
                 VMBuiltins_setVariable(ctx, varDef->builtinVarId, varDef->name, val, arrayIndex);
                 ctx->currentInstance = savedInstance;
+#ifdef ENABLE_VM_TRACING
+                VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, otherInst), "self", varDef->name, val, true, arrayIndex, otherInst->instanceId, " (builtin)");
+#endif
             } else {
                 // INSTANCE_SELF or other special types: use current instance
                 VMBuiltins_setVariable(ctx, varDef->builtinVarId, varDef->name, val, arrayIndex);
+#ifdef ENABLE_VM_TRACING
+                Instance* inst = (Instance*) ctx->currentInstance;
+                if (instanceType == INSTANCE_GLOBAL) {
+                    VM_checkIfVariableShouldBeTracedAndLog(ctx, "global", nullptr, varDef->name, val, true, arrayIndex, -1, " (builtin)");
+                } else if (inst != nullptr) {
+                    VM_checkIfVariableShouldBeTracedAndLog(ctx, instanceObjectName(ctx, inst), "self", varDef->name, val, true, arrayIndex, inst->instanceId, " (builtin)");
+                }
+#endif
             }
         } else {
             // Resolve slot for this scope: VM_arrayWriteAt handles CoW + materialisation + grow.
