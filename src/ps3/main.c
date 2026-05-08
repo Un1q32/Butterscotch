@@ -27,7 +27,6 @@
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
 #include <ppu_intrinsics.h>
-#include "stb_easy_font.h"
 
 typedef struct {
     uint8_t digital;
