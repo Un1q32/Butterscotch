@@ -5436,7 +5436,7 @@ static RValue builtin_drawHealthbar(VMContext* ctx, RValue* args, MAYBE_UNUSED i
     uint32_t backCol = (uint32_t) RValue_toInt32(args[5]);
     uint32_t minCol = (uint32_t) RValue_toInt32(args[6]);
     uint32_t maxCol = (uint32_t) RValue_toInt32(args[7]);
-    uint32_t intermediateColor = Renderer_mixColors(minCol,maxCol,amount);
+    uint32_t intermediateColor = (uint32_t) Color_lerp((int32_t) minCol, (int32_t) maxCol, amount);
 
     int32_t direction = RValue_toInt32(args[8]);
 
@@ -5901,22 +5901,8 @@ static RValue builtin_draw_get_alpha(VMContext* ctx, MAYBE_UNUSED RValue* args, 
 static RValue builtinMergeColor(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     int32_t col1 = RValue_toInt32(args[0]);
     int32_t col2 = RValue_toInt32(args[1]);
-    GMLReal amount = RValue_toReal(args[2]);
-
-    int32_t b1 = (col1 >> 16) & 0xFF;
-    int32_t g1 = (col1 >> 8) & 0xFF;
-    int32_t r1 = col1 & 0xFF;
-
-    int32_t b2 = (col2 >> 16) & 0xFF;
-    int32_t g2 = (col2 >> 8) & 0xFF;
-    int32_t r2 = col2 & 0xFF;
-
-    GMLReal inv = 1.0 - amount;
-    int32_t r = (int32_t) (r1 * inv + r2 * amount);
-    int32_t g = (int32_t) (g1 * inv + g2 * amount);
-    int32_t b = (int32_t) (b1 * inv + b2 * amount);
-
-    return RValue_makeReal((GMLReal) (((b << 16) & 0xFF0000) | ((g << 8) & 0xFF00) | (r & 0xFF)));
+    float amount = (float) RValue_toReal(args[2]);
+    return RValue_makeReal((GMLReal) Color_lerp(col1, col2, amount));
 }
 
 static RValue builtin_surface_create(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
