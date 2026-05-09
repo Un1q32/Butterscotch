@@ -2185,10 +2185,33 @@ static void handlePushEnv(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
         if (ctx->dataWin->objt.count > (uint32_t) target) {
             Instance** source = runner->instancesByObject[target];
             int32_t sourceCount = (int32_t) arrlen(source);
-            for (int32_t i = 0; sourceCount > i; i++) {
-                Instance* inst = source[i];
-                if (inst->active) arrput(frame->instanceList, inst);
+
+            Instance** activeInstances = nullptr;
+            repeat(sourceCount, i) {
+                if (source[i]->active) {
+                    arrput(activeInstances, source[i]);
+                }
             }
+
+            int32_t activeSourceCount = arrlen(activeInstances);
+
+            // You may be thinking "wow this looks extremely dumb", well, THAT'S HOW GAMEMAKER HANDLES IT FOR SOME REASON
+            // GameMaker is *quirky* like that
+            if (activeSourceCount == 1) {
+                arrput(frame->instanceList, activeInstances[0]);
+            } else if (activeSourceCount == 2) {
+                // Iterate in forward order
+                arrput(frame->instanceList, activeInstances[0]);
+                arrput(frame->instanceList, activeInstances[1]);
+            } else {
+                // Iterate in reverse order
+                for (int32_t i = activeSourceCount - 1; i >= 0; i--) {
+                    Instance* inst = activeInstances[i];
+                    arrput(frame->instanceList, inst);
+                }
+            }
+
+            arrfree(activeInstances);
         }
 
         if (arrlen(frame->instanceList) == 0) {
