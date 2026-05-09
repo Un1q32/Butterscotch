@@ -164,6 +164,8 @@ if(PLATFORM STREQUAL "glfw")
 elseif(PLATFORM STREQUAL "web")
     file(GLOB GL_SOURCES src/gl/*.c src/image/*.c)
     target_sources(butterscotch PRIVATE ${GL_SOURCES})
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
     add_compile_definitions(ENABLE_GLES)
 
     # stb_image
