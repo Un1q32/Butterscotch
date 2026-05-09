@@ -1493,12 +1493,12 @@ static void handleDiv(VMContext* ctx, uint32_t instr) {
 static void handleRem(VMContext* ctx, uint32_t instr) {
     RValue b = stackPop(ctx);
     RValue a = stackPop(ctx);
-    int32_t ib = RValue_toInt32(b);
-    requireMessageFormatted(ib != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
-    int32_t result = RValue_toInt32(a) % ib;
+    int64_t divisor = RValue_toInt64(b);
+    requireMessageFormatted(divisor != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
+    int64_t result = RValue_toInt64(a) / divisor;
     RValue_free(&a);
     RValue_free(&b);
-    stackPushTyped(ctx, RValue_makeInt32(result), instrType2(instr));
+    stackPushTyped(ctx, RValue_makeInt64(result), instrType2(instr));
 }
 
 static void handleMod(VMContext* ctx, uint32_t instr) {
