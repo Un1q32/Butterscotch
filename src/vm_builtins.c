@@ -7790,6 +7790,61 @@ static RValue builtinDrawTilemap(VMContext* ctx, RValue* args, MAYBE_UNUSED int3
     return RValue_makeUndefined();
 }
 
+// tilemap_x / tilemap_y set the runtime layer's draw offset for the tile layer identified by the tilemap element id.
+static RValue builtinTilemapX(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t tilemapElementId = RValue_toInt32(args[0]);
+    GMLReal x = RValue_toReal(args[1]);
+
+    RoomLayer* foundLayer = Runner_findRoomLayerById(runner, tilemapElementId);
+    if (foundLayer == nullptr || foundLayer->type != RoomLayerType_Tiles) return RValue_makeUndefined();
+
+    RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, tilemapElementId);
+    if (runtimeLayer != nullptr) runtimeLayer->xOffset = (float) x;
+    return RValue_makeUndefined();
+}
+
+static RValue builtinTilemapY(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t tilemapElementId = RValue_toInt32(args[0]);
+    GMLReal y = RValue_toReal(args[1]);
+
+    RoomLayer* foundLayer = Runner_findRoomLayerById(runner, tilemapElementId);
+    if (foundLayer == nullptr || foundLayer->type != RoomLayerType_Tiles) return RValue_makeUndefined();
+
+    RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, tilemapElementId);
+    if (runtimeLayer != nullptr) runtimeLayer->yOffset = (float) y;
+    return RValue_makeUndefined();
+}
+
+static RValue builtinTilemapGetX(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(-1.0);
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t tilemapElementId = RValue_toInt32(args[0]);
+
+    RoomLayer* foundLayer = Runner_findRoomLayerById(runner, tilemapElementId);
+    if (foundLayer == nullptr || foundLayer->type != RoomLayerType_Tiles) return RValue_makeReal(-1.0);
+
+    RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, tilemapElementId);
+    if (runtimeLayer == nullptr) return RValue_makeReal(-1.0);
+    return RValue_makeReal((GMLReal) runtimeLayer->xOffset);
+}
+
+static RValue builtinTilemapGetY(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(-1.0);
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t tilemapElementId = RValue_toInt32(args[0]);
+
+    RoomLayer* foundLayer = Runner_findRoomLayerById(runner, tilemapElementId);
+    if (foundLayer == nullptr || foundLayer->type != RoomLayerType_Tiles) return RValue_makeReal(-1.0);
+
+    RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, tilemapElementId);
+    if (runtimeLayer == nullptr) return RValue_makeReal(-1.0);
+    return RValue_makeReal((GMLReal) runtimeLayer->yOffset);
+}
+
 static RValue builtinLayerGetAll(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = (Runner*) ctx->runner;
     RValue arr = VM_createArray(ctx);
@@ -9216,6 +9271,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "layer_get_id_at_depth", builtinLayerGetIdAtDepth);
     VM_registerBuiltin(ctx, "layer_tilemap_get_id", builtinLayerTilemapGetId);
     VM_registerBuiltin(ctx, "draw_tilemap", builtinDrawTilemap);
+    VM_registerBuiltin(ctx, "tilemap_x", builtinTilemapX);
+    VM_registerBuiltin(ctx, "tilemap_y", builtinTilemapY);
+    VM_registerBuiltin(ctx, "tilemap_get_x", builtinTilemapGetX);
+    VM_registerBuiltin(ctx, "tilemap_get_y", builtinTilemapGetY);
 #endif
     VM_registerBuiltin(ctx, "layer_create", builtinLayerCreate);
     VM_registerBuiltin(ctx, "layer_destroy", builtinLayerDestroy);
