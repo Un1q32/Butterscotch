@@ -3855,7 +3855,7 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
             int32_t argCount = instr & 0xFFFF;
             uint32_t funcIdx = resolveFuncOperand(extraData);
             const char* funcName = (dw->func.functionCount > funcIdx) ? dw->func.functions[funcIdx].name : "???";
-            snprintf(operandStr, operandSize, "%s(%d)", funcName, argCount);
+            snprintf(operandStr, operandSize, "%s(argCount=%d)", funcName, argCount);
             if (argCount > 0) {
                 char argList[128] = "";
                 int32_t pos = 0;
@@ -3875,7 +3875,7 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
         case OP_CALLV: {
             int32_t argCount = instr & 0xFFFF;
             snprintf(opcodeStr, opcodeSize, "CallV.v");
-            snprintf(operandStr, operandSize, "%d", argCount);
+            snprintf(operandStr, operandSize, "argCount=%d", argCount);
             snprintf(commentStr, commentSize, "// pops: [func, instance, %d args] -> pushes: [result]", argCount);
             break;
         }
