@@ -298,6 +298,7 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "true", BUILTIN_VAR_TRUE },
     { "undefined", BUILTIN_VAR_UNDEFINED },
     { "view_angle", BUILTIN_VAR_VIEW_ANGLE },
+    { "view_camera", BUILTIN_VAR_CAMERA_VIEW },
     { "view_current", BUILTIN_VAR_VIEW_CURRENT },
     { "view_hborder", BUILTIN_VAR_VIEW_HBORDER },
     { "view_hport", BUILTIN_VAR_VIEW_HPORT },
@@ -632,6 +633,7 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
 
         // View properties
         case BUILTIN_VAR_VIEW_CURRENT:
+        case BUILTIN_VAR_CAMERA_VIEW:
             return RValue_makeReal((GMLReal) runner->viewCurrent);
         case BUILTIN_VAR_VIEW_XVIEW:
             if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) return RValue_makeReal((GMLReal) runner->views[arrayIndex].viewX);
@@ -1288,6 +1290,26 @@ static RValue builtinStringLength(MAYBE_UNUSED VMContext* ctx, RValue* args, int
     int32_t len = TextUtils_utf8CodepointCount(str, byteLen);
     free(str);
     return RValue_makeInt32(len);
+}
+
+// https://docs.vultr.com/clang/examples/remove-all-characters-in-a-string-except-alphabets
+void filterAlphabets(char *str) {
+    char result[strlen(str) + 1];
+    int j = 0;
+    for (int i = 0; str[i] != '\0'; i++) {
+        if ((str[i] >= 'a' && str[i] <= 'z') || (str[i] >= 'A' && str[i] <= 'Z')) {
+            result[j++] = str[i];
+        }
+    }
+    result[j] = '\0';  // Null-terminate the result string
+    strcpy(str, result);  // Optionally copy back to original string
+}
+
+static RValue builtinStringLetters(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeInt32(0);
+    char* str = RValue_toString(args[0]);
+    filterAlphabets(str);
+    return RValue_makeString(str);
 }
 
 static RValue builtinStringByteLength(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
@@ -8701,6 +8723,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 
     // String functions
     VM_registerBuiltin(ctx, "string_length", builtinStringLength);
+    VM_registerBuiltin(ctx, "string_letters", builtinStringLetters);
     VM_registerBuiltin(ctx, "string_byte_length", builtinStringByteLength);
     VM_registerBuiltin(ctx, "string", builtinString);
     VM_registerBuiltin(ctx, "string_upper", builtinStringUpper);
@@ -8765,6 +8788,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "irandom_range", builtinIrandomRange);
     VM_registerBuiltin(ctx, "choose", builtinChoose);
     VM_registerBuiltin(ctx, "randomize", builtinRandomize);
+    VM_registerBuiltin(ctx, "randomise", builtinRandomize);
 
     // Room
     VM_registerBuiltin(ctx, "game_get_speed", builtinGameGetSpeed);
