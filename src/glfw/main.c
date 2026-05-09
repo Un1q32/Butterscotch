@@ -499,7 +499,8 @@ static void freeCommandLineArgs(CommandLineArgs* args) {
 
 // ===[ SCREENSHOT ]===
 // Reads the contents of an FBO (use 0 for the default framebuffer) into a PNG file.
-static void writeFramebufferAsPng(GLuint fbo, int width, int height, const char* filename, const char* logPrefix) {
+// If forceOpaque is true, the alpha channel is overwritten with 255, fixing any clobbering done by blending modes.
+static void writeFramebufferAsPng(GLuint fbo, int width, int height, const char* filename, const char* logPrefix, bool forceOpaque) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
 
     int stride = width * 4;
@@ -510,6 +511,11 @@ static void writeFramebufferAsPng(GLuint fbo, int width, int height, const char*
     }
 
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+    if (forceOpaque) {
+        int totalPixels = width * height;
+        repeat(totalPixels, i) pixels[i * 4 + 3] = 255;
+    }
 
     // OpenGL reads bottom-to-top, but PNG is top-to-bottom.
     // Use stb's negative stride trick: point to the last row and use a negative stride to flip vertically.
@@ -523,7 +529,7 @@ static void writeFramebufferAsPng(GLuint fbo, int width, int height, const char*
 static void captureScreenshot(GLuint fbo, const char* filenamePattern, int frameNumber, int width, int height) {
     char filename[512];
     snprintf(filename, sizeof(filename), filenamePattern, frameNumber);
-    writeFramebufferAsPng(fbo, width, height, filename, "Screenshot saved");
+    writeFramebufferAsPng(fbo, width, height, filename, "Screenshot saved", true);
 }
 
 // Dumps every live surface in the GL renderer as a PNG.
@@ -539,7 +545,7 @@ static void dumpAllSurfaces(GLRenderer* gl, const char* filenamePattern, int fra
 
         char filename[512];
         snprintf(filename, sizeof(filename), filenamePattern, frameNumber, (int) surfaceId);
-        writeFramebufferAsPng(gl->surfaces[surfaceId], width, height, filename, "Surface dump");
+        writeFramebufferAsPng(gl->surfaces[surfaceId], width, height, filename, "Surface dump", false);
     }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, gl->fbo);
