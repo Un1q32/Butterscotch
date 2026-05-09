@@ -1325,6 +1325,40 @@ static bool glSurfaceExists(Renderer* renderer, int32_t surfaceId) {
     return false;
 }
 
+static bool glSurfaceGetPixels(Renderer* renderer, int32_t surfaceId, uint8_t* outRGBA) {
+    GLRenderer* gl = (GLRenderer*) renderer;
+    if (0 > surfaceId || surfaceId >= (int32_t) gl->ssurfaceCount) return false;
+    if (gl->surfaces[surfaceId] == 0) return false;
+
+    flushBatch(gl);
+
+    int32_t w = gl->surfaceWidth[surfaceId];
+    int32_t h = gl->surfaceHeight[surfaceId];
+    if (0 >= w || 0 >= h) return false;
+
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    GLint prevPackAlign = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlign);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, gl->surfaces[surfaceId]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    // Read into a flipped temp, then flip to top-down RGBA matching native (y=0 at top)
+    uint8_t* tmp = safeMalloc((size_t) w * (size_t) h * 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+
+    int32_t rowBytes = w * 4;
+    repeat(h, y) {
+        memcpy(outRGBA + (size_t) y * (size_t) rowBytes, tmp + (size_t) (h - 1 - y) * (size_t) rowBytes, (size_t) rowBytes);
+    }
+    free(tmp);
+
+    glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint) prevFbo);
+    return true;
+}
+
 static int32_t findSurfaceStackSlot(GLRenderer* gl) {
     for (int32_t i = 0; 16 > i; i++) {
         if (gl->surfaceStack[i] == -1) return i;
@@ -2068,6 +2102,7 @@ static RendererVtable glVtable = {
     .setSurfaceTarget = glSetSurfaceTarget,
     .resetSurfaceTarget = glResetSurfaceTarget,
     .surfaceCopy = glSurfaceCopy,
+    .surfaceGetPixels = glSurfaceGetPixels,
     .getSurfaceWidth = glGetSurfaceWidth,
     .getSurfaceHeight = glGetSurfaceHeight,
     .drawSurface = glDrawSurface,

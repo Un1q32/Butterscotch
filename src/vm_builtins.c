@@ -24,6 +24,7 @@
 #include "ini.h"
 #include "audio_system.h"
 #include "file_system.h"
+#include "md5.h"
 
 #define MAX_BACKGROUNDS 8
 
@@ -5181,6 +5182,60 @@ static RValue builtin_bufferSave(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYB
 
 STUB_RETURN_ZERO(buffer_base64_encode)
 
+// buffer_md5(buffer, offset, size) -> hex string (32 chars, lowercase). Uses the RFC 1321 reference impl in vendor/md5.
+static RValue builtin_bufferMd5(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    int32_t offset = RValue_toInt32(args[1]);
+    int32_t size = RValue_toInt32(args[2]);
+    GmlBuffer* buf = gmlBufferGet(runner, id);
+    if (buf == nullptr || 0 > offset || 0 > size) return RValue_makeOwnedString(safeStrdup(""));
+    if (offset + size > buf->size) {
+        if (buf->size > offset) size = buf->size - offset; else size = 0;
+    }
+
+    MD5_CTX mctx;
+    MD5Init(&mctx);
+    if (size > 0) MD5Update(&mctx, buf->data + offset, (unsigned int) size);
+    unsigned char digest[16];
+    MD5Final(digest, &mctx);
+
+    char* hex = safeMalloc(33);
+    static const char HEX[] = "0123456789abcdef";
+    for (int32_t i = 0; 16 > i; i++) {
+        hex[i * 2]     = HEX[(digest[i] >> 4) & 0xF];
+        hex[i * 2 + 1] = HEX[digest[i] & 0xF];
+    }
+    hex[32] = '\0';
+    return RValue_makeOwnedString(hex);
+}
+
+// buffer_get_surface(buffer, surface, offset) -> bool
+// Reads RGBA8 pixels from the surface into the buffer at the given offset.
+static RValue builtin_bufferGetSurface(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t bufId = RValue_toInt32(args[0]);
+    int32_t surfaceId = RValue_toInt32(args[1]);
+    int32_t offset = RValue_toInt32(args[2]);
+    GmlBuffer* buf = gmlBufferGet(runner, bufId);
+    if (buf == nullptr || runner->renderer == nullptr) return RValue_makeBool(false);
+    if (runner->renderer->vtable->surfaceGetPixels == nullptr) return RValue_makeBool(false);
+    if (!Renderer_surfaceExists(runner->renderer, surfaceId)) return RValue_makeBool(false);
+
+    int32_t w = (int32_t) Renderer_getSurfaceWidth(runner->renderer, surfaceId);
+    int32_t h = (int32_t) Renderer_getSurfaceHeight(runner->renderer, surfaceId);
+    if (0 >= w || 0 >= h) return RValue_makeBool(false);
+    int32_t bytes = w * h * 4;
+
+    if (0 > offset) return RValue_makeBool(false);
+    gmlBufferEnsureSize(buf, offset + bytes);
+    if (offset + bytes > buf->size) return RValue_makeBool(false);
+
+    bool ok = runner->renderer->vtable->surfaceGetPixels(runner->renderer, surfaceId, buf->data + offset);
+    if (ok && buf->type == GML_BUFFER_GROW && offset + bytes > buf->usedSize) buf->usedSize = offset + bytes;
+    return RValue_makeBool(ok);
+}
+
 // PSN stubs
 STUB_RETURN_UNDEFINED(psn_init)
 STUB_RETURN_ZERO(psn_default_user)
@@ -9109,6 +9164,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "buffer_load", builtin_bufferLoad);
     VM_registerBuiltin(ctx, "buffer_save", builtin_bufferSave);
     VM_registerBuiltin(ctx, "buffer_base64_encode", builtin_buffer_base64_encode);
+    VM_registerBuiltin(ctx, "buffer_md5", builtin_bufferMd5);
+    VM_registerBuiltin(ctx, "buffer_get_surface", builtin_bufferGetSurface);
 
     // PSN
     VM_registerBuiltin(ctx, "psn_init", builtin_psn_init);
