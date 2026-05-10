@@ -1978,18 +1978,24 @@ static RValue builtinMoveSnap(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t
     return RValue_makeReal(0.0);
 }
 
+// For lengthdir: Anything that's 1e-4 > abs(result) should be coerced to 0 to avoid precision drift.
+// If not, precision drift can cause a LOT of issues, especially on platforms that use floats instead of doubles.
 static RValue builtinLengthdir_x(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeReal(0.0);
     GMLReal len = RValue_toReal(args[0]);
     GMLReal dir = RValue_toReal(args[1]) * (M_PI / 180.0);
-    return RValue_makeReal(len * GMLReal_cos(dir));
+    GMLReal result = len * GMLReal_cos(dir);
+    if ((GMLReal) 1e-4 > GMLReal_fabs(result)) result = 0.0;
+    return RValue_makeReal(result);
 }
 
 static RValue builtinLengthdir_y(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeReal(0.0);
     GMLReal len = RValue_toReal(args[0]);
     GMLReal dir = RValue_toReal(args[1]) * (M_PI / 180.0);
-    return RValue_makeReal(-len * GMLReal_sin(dir));
+    GMLReal result = -len * GMLReal_sin(dir);
+    if ((GMLReal) 1e-4 > GMLReal_fabs(result)) result = 0.0;
+    return RValue_makeReal(result);
 }
 
 // ===[ RANDOM FUNCTIONS ]===
