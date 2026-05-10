@@ -3319,15 +3319,24 @@ static AudioSystem* getAudioSystem(VMContext* ctx) {
 
 static RValue builtin_audioExists(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     AudioSystem* audio = getAudioSystem(ctx);
-    if (audio == nullptr || audio->vtable == nullptr || argCount < 1) return RValue_makeBool(false);
+    if (audio == nullptr || audio->vtable == nullptr || 1 > argCount) return RValue_makeBool(false);
     if (args[0].type == RVALUE_UNDEFINED) return RValue_makeBool(false);
 
+    // Invalid sound index!
     int32_t soundIndex = RValue_toInt32(args[0]);
-    if (soundIndex < 0) return RValue_makeBool(false);
+    if (0 > soundIndex) return RValue_makeBool(false);
 
+    // Check if it is a valid soundIndex
     DataWin* dw = audio->audioGroups[0];
-    if (dw == nullptr) return RValue_makeBool(false);
-    return RValue_makeBool((uint32_t) soundIndex < dw->sond.count);
+    if (dw->sond.count > (uint32_t) soundIndex)
+        return RValue_makeBool(true);
+
+    // If it isn't a valid soundIndex, then this is a sound instance handle
+    // So let's check if the audio system is playing it!
+    if (audio->vtable != nullptr && audio->vtable->isPlaying != nullptr && audio->vtable->isPlaying(audio, soundIndex))
+        return RValue_makeBool(true);
+
+    return RValue_makeBool(false);
 }
 
 static RValue builtin_audioChannelNum(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
