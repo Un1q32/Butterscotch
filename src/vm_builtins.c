@@ -1353,14 +1353,17 @@ static RValue builtinCeil(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t arg
 
 static RValue builtinRound(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(0.0);
-    // GameMaker's round() uses banker's rounding (round half to even), matching llrint() under the default IEEE 754 rounding mode.
-    // C's round()/roundf() rounds half away from zero, which produces different results for x.5 values (e.g. round(2.5) is 2 in GML but 3 with round()).
+    // GameMaker's round() uses banker's rounding (round half to even).
+    // While the original runner uses "llrint(double)", we use our own banker's rounding implementation to avoid quirks in specific platforms (like the PlayStation 2) having different llrint rounding implementations.
     GMLReal v = RValue_toReal(args[0]);
-#ifdef USE_FLOAT_REALS
-    return RValue_makeReal(rintf(v));
-#else
-    return RValue_makeReal(rint(v));
-#endif
+    if (isnan(v) || isinf(v)) return RValue_makeReal(v);
+    GMLReal f = GMLReal_floor(v);
+    GMLReal frac = v - f;
+    if (0.5 > frac) return RValue_makeReal(f);
+    if (frac > 0.5) return RValue_makeReal(f + 1.0);
+    // Exactly halfway: round to the even neighbor.
+    int64_t fi = (int64_t) f;
+    return RValue_makeReal((fi & 1) == 0 ? f : f + 1.0);
 }
 
 static RValue builtinAbs(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
