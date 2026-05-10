@@ -1818,7 +1818,13 @@ static RValue builtinLerp(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t arg
     GMLReal a = RValue_toReal(args[0]);
     GMLReal b = RValue_toReal(args[1]);
     GMLReal t = RValue_toReal(args[2]);
-    return RValue_makeReal(a + (b - a) * t);
+    GMLReal result = a + (b - a) * t;
+#ifdef USE_FLOAT_REALS
+    // When using floats, floating point inaccuracies can cause games to softlock, so if the lerp did not do any meaningful movement, we'll *nudge* it a bit forward.
+    // This COULD have unforeseen consequences, but it also fixes some games (example: DELTARUNE Chapter 2's pre-giga queen cutscene)
+    if (result == a && a != b) result = GMLReal_nextafter(a, b);
+#endif
+    return RValue_makeReal(result);
 }
 
 static RValue builtinPointDistance(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
