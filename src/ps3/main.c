@@ -147,14 +147,16 @@ int main(int argc, char* argv[]) {
     printf("%s\n", argv[0]);
     strcpy(buffer, argv[0]);
     char* tmp = str_replace(buffer, "butterscotch.elf", "");
-    char* dataWinPath = malloc(strlen(tmp) + strlen("data.win") + 1);
+    char* tmp2 = str_replace(buffer, "EBOOT.BIN", "");
+    char* dataWinPath = malloc(strlen(tmp2) + strlen("data.win") + 1);
     if (!dataWinPath) {
         free(tmp);
         return 1;
     }
-    strcpy(dataWinPath, tmp);
+    strcpy(dataWinPath, tmp2);
     strcat(dataWinPath, "data.win");
     free(tmp);
+    free(tmp2);
     sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
     freq = sysGetTimebaseFrequency();
 
