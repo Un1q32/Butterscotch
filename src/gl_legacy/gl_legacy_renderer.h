@@ -5,6 +5,8 @@
 #ifdef PLATFORM_PS3
 #include "ps3gl.h"
 #include "rsxutil.h"
+#elif defined(USE_SDL)
+#include <SDL/SDL_opengl.h>
 #else
 #include <glad/glad.h>
 #endif

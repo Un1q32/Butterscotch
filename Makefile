@@ -15,7 +15,7 @@ DEFINES := -DENABLE_VM_GML_PROFILER \
 INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/stb/vorbis -Ivendor/md5 -Ivendor/glad/include
 
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
-SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c vendor/glad/src/glad.c
+SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c
 
 AUDIO_BACKEND := miniaudio
 
@@ -48,11 +48,13 @@ endif
 endif
 
 ifndef DISABLE_MODERN_GL
+ifneq ($(PLATFORM),sdl)
 DEFINES += -DENABLE_MODERN_GL
 SRCS += $(wildcard src/gl/*.c)
 HEADERS += $(wildcard src/gl/*.h)
 ifdef DISABLE_LEGACY_GL
 INCLUDES += -Isrc/gl
+endif
 endif
 endif
 
@@ -92,8 +94,9 @@ endif
 
 PLATFORM := glfw
 ifeq ($(PLATFORM),glfw)
-SRCS += $(wildcard src/glfw/*.c)
+SRCS += $(wildcard src/glfw/*.c) vendor/glad/src/glad.c
 HEADERS += $(wildcard src/glfw/*.h)
+DEFINES += -DUSE_GLFW
 ifdef USE_GLFW2
 ifdef ENABLE_GLES
 $(error can't enable both GLES and GLFW2 at the same time!)
@@ -110,7 +113,14 @@ endif
 endif
 LIBS += $(GLFW_LIBS)
 else
+ifeq ($(PLATFORM),sdl)
+SRCS += $(wildcard src/sdl/*.c)
+HEADERS += $(wildcard src/sdl/*.h)
+DEFINES += -DUSE_SDL
+LIBS += -lSDL -lGL
+else
 $(error invalid platform)
+endif
 endif
 
 ifeq ($(OS),Windows)

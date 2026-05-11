@@ -7,6 +7,8 @@
 #include "ps3gl.h"
 #include "rsxutil.h"
 GLAPI void GLAPIENTRY glActiveTexture( GLenum texture ) {};
+#elif defined(USE_SDL)
+#include <SDL/SDL_opengl.h>
 #else
 #include <glad/glad.h>
 #endif
