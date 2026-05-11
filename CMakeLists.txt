@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra)
 
 set(PLATFORM "" CACHE STRING "Platform backend")
+set(AUDIO_BACKEND "" CACHE STRING "Audio backend")
 
 # Build metadata
 set(BUTTERSCOTCH_COMMIT_HASH "unknown" CACHE STRING "Git commit hash")
@@ -19,12 +20,40 @@ if(PLATFORM STREQUAL "")
     message(FATAL_ERROR "PLATFORM is not set! Use -DPLATFORM=glfw (or another supported platform).")
 endif()
 
-# To avoid unused code in production builds that are only used for a single game (example: PlayStation 2 target), we can enable/disable specific bytecode versions
+# Audio backend defaults
+if(AUDIO_BACKEND STREQUAL "")
+    if(PLATFORM STREQUAL "web")
+        set(AUDIO_BACKEND "web")
+    elseif(PLATFORM STREQUAL "ps3")
+        set(AUDIO_BACKEND "openal")
+    elseif(PLATFORM STREQUAL "ps2")
+        set(AUDIO_BACKEND "ps2")
+    else()
+        set(AUDIO_BACKEND "miniaudio")
+    endif()
+endif()
+
+if(AUDIO_BACKEND STREQUAL "openal")
+    file(GLOB AUDIO_SOURCES src/audio/openal/*.c)
+elseif(AUDIO_BACKEND STREQUAL "miniaudio")
+    file(GLOB AUDIO_SOURCES src/audio/miniaudio/*.c)
+elseif(AUDIO_BACKEND STREQUAL "web")
+    file(GLOB AUDIO_SOURCES src/audio/web/*.c)
+    file(GLOB AUDIO_SOURCES src/audio/miniaudio/*.c)
+elseif(AUDIO_BACKEND STREQUAL "ps2")
+    file(GLOB AUDIO_SOURCES src/audio/ps2/*.c)
+elseif(NOT AUDIO_BACKEND STREQUAL "none")
+    message(FATAL_ERROR "Invalid AUDIO_BACKEND!")
+endif()
+
+# To avoid unused code in production builds that are only used for a single game (example: PlayStation 2 target), we can enable/disable specific features
 #
 # If only a single bytecode version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
 # performance on low end hardware!
 option(ENABLE_BC16 "Enable support for Bytecode Version 16" ON)
 option(ENABLE_BC17 "Enable support for Bytecode Version 17" ON)
+option(ENABLE_LEGACY_GL "Enable the legacy OpenGL renderer" ON)
+option(ENABLE_MODERN_GL "Enable the modern OpenGL renderer" ON)
 if(NOT ENABLE_BC16 AND NOT ENABLE_BC17)
     message(FATAL_ERROR "You need to build Butterscotch with at least one bytecode version enabled!")
 endif()
@@ -33,6 +62,12 @@ if(ENABLE_BC16)
 endif()
 if(ENABLE_BC17)
     add_compile_definitions(ENABLE_BC17)
+endif()
+if(ENABLE_LEGACY_GL)
+    add_compile_definitions(ENABLE_LEGACY_GL)
+endif()
+if(ENABLE_MODERN_GL)
+    add_compile_definitions(ENABLE_MODERN_GL)
 endif()
 
 if(PLATFORM STREQUAL "web-meta")
@@ -49,9 +84,36 @@ file(GLOB PLATFORM_SOURCES src/${PLATFORM}/*.c)
 
 # OpenGL ES 3.0 / WebGL2 compatibility
 option(ENABLE_GLES "Build the gl_renderer against OpenGL ES 3.0 / WebGL2 instead of desktop GL 4.1 Core" OFF)
+if (ENABLE_GLES AND ENABLE_LEGACY_GL)
+    set(ENABLE_LEGACY_GL OFF)
+endif()
 
-add_executable(butterscotch ${SOURCES} ${PLATFORM_SOURCES})
+add_executable(butterscotch ${SOURCES} ${PLATFORM_SOURCES} ${AUDIO_SOURCES})
 target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+if(AUDIO_BACKEND STREQUAL "openal")
+    target_include_directories(butterscotch PUBLIC src/audio/openal)
+    add_compile_definitions(USE_OPENAL)
+    if(APPLE)
+        set(AUDIO_LIBRARIES "-framework OpenAL")
+    elseif(NOT PLATFORM STREQUAL "ps3")
+        find_package(OpenAL REQUIRED)
+        target_include_directories(butterscotch PUBLIC "${OPENAL_INCLUDE_DIR}")
+        set(AUDIO_LIBRARIES "${OPENAL_LIBRARY}")
+    endif()
+elseif(AUDIO_BACKEND STREQUAL "miniaudio")
+    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
+    target_include_directories(butterscotch PUBLIC src/audio/miniaudio)
+    add_compile_definitions(USE_MINIAUDIO)
+elseif(AUDIO_BACKEND STREQUAL "web")
+    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
+    target_include_directories(butterscotch PUBLIC src/audio/web)
+    target_include_directories(butterscotch PUBLIC src/audio/miniaudio)
+    add_compile_definitions(USE_WEB_AUDIO)
+elseif(AUDIO_BACKEND STREQUAL "ps2")
+    target_include_directories(butterscotch PUBLIC src/audio/ps2)
+    add_compile_definitions(USE_PS2_AUDIO)
+endif()
 
 # stb_ds
 target_include_directories(butterscotch PUBLIC vendor/stb/ds)
@@ -61,15 +123,20 @@ target_sources(butterscotch PRIVATE vendor/md5/md5.c)
 target_include_directories(butterscotch PUBLIC vendor/md5)
 
 if(PLATFORM STREQUAL "glfw")
-    if(ENABLE_GLES)
-        file(GLOB GL_SOURCES src/gl/*.c src/image/*.c)
-    else()
-        file(GLOB GL_SOURCES src/gl/*.c src/image/*.c src/gl_legacy/*.c)
+    if (NOT ENABLE_LEGACY_GL AND NOT ENABLE_MODERN_GL)
+        message(FATAL_ERROR "GLFW requires at least one GL version!")
+    endif()
+    file(GLOB GL_SOURCES src/image/*.c)
+    if(ENABLE_LEGACY_GL)
+        file(GLOB GL_SOURCES ${GL_SOURCES} src/gl_legacy/*.c)
+        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_legacy)
+    endif()
+    if(ENABLE_MODERN_GL)
+        file(GLOB GL_SOURCES ${GL_SOURCES} src/gl/*.c)
     endif()
     target_sources(butterscotch PRIVATE ${GL_SOURCES})
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
-    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_legacy)
 
     # Butterscotch VM/interpreter profiler
     option(ENABLE_VM_GML_PROFILER "Enable Butterscotch VM/interpreter profiler" ON)
@@ -117,9 +184,6 @@ if(PLATFORM STREQUAL "glfw")
     # stb_vorbis
     target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
 
-    # miniaudio
-    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
-
     if(MINGW)
         find_package(glfw3 REQUIRED)
         set(GLFW3_LIBRARIES glfw3)
@@ -127,20 +191,20 @@ if(PLATFORM STREQUAL "glfw")
         # Target Windows 7+ (avoids referencing newer APIs like MapViewOfFileNuma2 that MinGW import libs don't provide)
         # https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/include/sdkddkver.h
         target_compile_definitions(butterscotch PRIVATE _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000 WIN32_LEAN_AND_MEAN)
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m opengl32 gdi32 winmm bz2)
+        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m opengl32 gdi32 winmm bz2)
         target_link_options(butterscotch PRIVATE -static)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Haiku")
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(GLFW3 REQUIRED glfw3)
         target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
         target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m pthread bz2)
+        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m pthread bz2)
     else()
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(GLFW3 REQUIRED glfw3)
         target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
         target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m pthread dl bz2)
+        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m pthread dl bz2)
     endif()
 
     # Enable AddressSanitizer by default in Debug builds
@@ -162,6 +226,9 @@ if(PLATFORM STREQUAL "glfw")
             $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
     )
 elseif(PLATFORM STREQUAL "web")
+    if (NOT ENABLE_MODERN_GL)
+        message(FATAL_ERROR "Web requires modern gl!")
+    endif()
     file(GLOB GL_SOURCES src/gl/*.c src/image/*.c)
     target_sources(butterscotch PRIVATE ${GL_SOURCES})
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
@@ -173,9 +240,6 @@ elseif(PLATFORM STREQUAL "web")
 
     # stb_vorbis (for miniaudio's OGG decoding)
     target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
-
-    # miniaudio (used in noDevice mode; see src/web/web_audio_system.c)
-    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
 
     set_target_properties(butterscotch PROPERTIES SUFFIX ".mjs")
 
@@ -263,14 +327,6 @@ elseif(PLATFORM STREQUAL "ps2")
         add_compile_definitions(ENABLE_PS2_RENDERER_LOGS)
     endif()
 
-    # PS2 audio system
-    option(ENABLE_PS2_AUDIO "Enable the PS2 audio system" ON)
-    if(ENABLE_PS2_AUDIO)
-        add_compile_definitions(ENABLE_PS2_AUDIO)
-    else()
-        list(REMOVE_ITEM PLATFORM_SOURCES ${CMAKE_SOURCE_DIR}/src/ps2/ps2_audio_system.c)
-    endif()
-
     # -fsingle-precision-constant: Treat unsuffixed float constants as single-precision to avoid accidental  float->double promotions on platforms with no hardware double
     # -Werror=double-promotion: Warn when something is being promoted to a double
     # -fomit-frame-pointer: frees a register on a target with tight register pressure
@@ -281,7 +337,7 @@ elseif(PLATFORM STREQUAL "ps2")
         # Compiling on the Docker container
         target_include_directories(butterscotch PRIVATE $ENV{PS2SDK}/ee/include $ENV{PS2SDK}/common/include $ENV{PS2DEV}/ee/include $ENV{GSKIT}/include)
         target_link_directories(butterscotch PRIVATE $ENV{PS2SDK}/ee/lib $ENV{GSKIT}/lib)
-        target_link_libraries(butterscotch gskit dmakit audsrv pad mc kbd patches kernel c m)
+        target_link_libraries(${AUDIO_LIBRARIES} butterscotch gskit dmakit audsrv pad mc kbd patches kernel c m)
 
         # Embed ps2sdk IRX modules (freesio2, freepad) as C arrays via bin2c
         # This avoids loading from rom0: which has compatibility issues between fat/slim PS2
@@ -326,7 +382,7 @@ elseif(PLATFORM STREQUAL "ps2")
             DEPENDS ${IRX_DIR}/ps2kbd.irx
             COMMENT "Embedding ps2kbd.irx"
         )
-        if(ENABLE_PS2_AUDIO)
+        if(AUDIO_BACKEND STREQUAL "ps2")
             add_custom_command(
                 OUTPUT ${IRX_GEN_DIR}/freesd_irx.c
                 COMMAND $ENV{PS2SDK}/bin/bin2c ${IRX_DIR}/freesd.irx ${IRX_GEN_DIR}/freesd_irx.c freesd_irx
@@ -342,7 +398,7 @@ elseif(PLATFORM STREQUAL "ps2")
         endif()
 
         target_sources(butterscotch PRIVATE ${IRX_GEN_DIR}/freesio2_irx.c ${IRX_GEN_DIR}/mcman_irx.c ${IRX_GEN_DIR}/mcserv_irx.c ${IRX_GEN_DIR}/freepad_irx.c ${IRX_GEN_DIR}/usbd_irx.c ${IRX_GEN_DIR}/ps2kbd_irx.c)
-        if(ENABLE_PS2_AUDIO)
+        if(AUDIO_BACKEND STREQUAL "ps2")
             target_sources(butterscotch PRIVATE ${IRX_GEN_DIR}/freesd_irx.c ${IRX_GEN_DIR}/audsrv_irx.c)
         endif()
         target_include_directories(butterscotch PRIVATE ${IRX_GEN_DIR})
@@ -405,6 +461,9 @@ elseif(PLATFORM STREQUAL "ps2")
         )
     endif()
 elseif(PLATFORM STREQUAL "ps3")
+    if (NOT ENABLE_LEGACY_GL)
+        message(FATAL_ERROR "PS3 requires legacy gl!")
+    endif()
     file(GLOB GL_SOURCES src/gl_legacy/*.c src/image/*.c vendor/ps3gl/*.c)
     file(GLOB AL_SOURCES vendor/mojoal/mojoal.c)
     target_sources(butterscotch PRIVATE ${GL_SOURCES} ${AL_SOURCES})
