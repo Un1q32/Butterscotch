@@ -1088,19 +1088,17 @@ int main(int argc, char* argv[]) {
 
     // Initialize the audio system
     AudioSystem* audioSystem = nullptr;
+    if (args.headless) {
+        audioSystem = (AudioSystem*) NoopAudioSystem_create();
+    } else {
 #if defined(USE_OPENAL)
-    if (!args.headless)
         audioSystem = (AudioSystem*) AlAudioSystem_create();
-    else
-        audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #elif defined(USE_MINIAUDIO)
-    if (!args.headless)
         audioSystem = (AudioSystem*) MaAudioSystem_create();
-    else
-        audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #else
-    audioSystem = (AudioSystem*) NoopAudioSystem_create();
+        audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #endif
+    }
 
     // Initialize the runner
     Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem);
@@ -1172,13 +1170,15 @@ int main(int argc, char* argv[]) {
     bool debugPaused = false;
     bool debugShowCollisionMasks = false;
     double lastFrameTime = glfwGetTime();
-    while (
+    while (true) {
 #ifdef USE_GLFW2
-            glfwGetWindowParam(GLFW_OPENED)
+        bool shouldWindowClose = !glfwGetWindowParam(GLFW_OPENED);
 #else
-            !glfwWindowShouldClose(window)
+        bool shouldWindowClose = glfwWindowShouldClose(window);
 #endif
-            && !runner->shouldExit) {
+        if (runner->shouldExit || shouldWindowClose)
+            break;
+
         // Clear last frame's pressed/released state, then poll new input events
         RunnerKeyboard_beginFrame(runner->keyboard);
         RunnerGamepad_beginFrame(runner->gamepads);
