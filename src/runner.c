@@ -1572,6 +1572,7 @@ static void validateRendererVtable(Renderer* renderer) {
     requireNotNullFunction(drawSpritePart);
     requireNotNullFunction(drawSpritePos);
     requireNotNullFunction(drawRectangle);
+    requireNotNullFunction(drawRectangleColor);
     requireNotNullFunction(drawLine);
     requireNotNullFunction(drawTriangle);
     requireNotNullFunction(drawLineColor);
