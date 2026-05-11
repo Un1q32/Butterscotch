@@ -117,7 +117,10 @@ ifeq ($(PLATFORM),sdl)
 SRCS += $(wildcard src/sdl/*.c)
 HEADERS += $(wildcard src/sdl/*.h)
 DEFINES += -DUSE_SDL
-LIBS += -lSDL -lGL
+ifndef SDL_LIBS
+SDL_LIBS := $(shell pkg-config --libs sdl)
+endif
+LIBS += $(SDL_LIBS)
 else
 $(error invalid platform)
 endif
