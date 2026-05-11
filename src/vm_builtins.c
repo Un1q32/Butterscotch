@@ -31,6 +31,38 @@
 
 #define MAX_BACKGROUNDS 8
 
+// ===[ STUBS MACROS ]===
+
+#define STUB_RETURN_ZERO(name) \
+    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
+        logStubbedFunction(ctx, #name); \
+        return RValue_makeReal(0.0); \
+    }
+
+#define STUB_RETURN_TRUE(name) \
+    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
+        logStubbedFunction(ctx, #name); \
+        return RValue_makeBool(true); \
+    }
+
+#define STUB_RETURN_FALSE(name) \
+    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
+        logStubbedFunction(ctx, #name); \
+        return RValue_makeBool(false); \
+    }
+
+#define STUB_RETURN_VALUE(name, value) \
+    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
+        logStubbedFunction(ctx, #name); \
+        return RValue_makeReal(value); \
+    }
+
+#define STUB_RETURN_UNDEFINED(name) \
+    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
+        logStubbedFunction(ctx, #name); \
+        return RValue_makeUndefined(); \
+    }
+
 // ===[ STUB LOGGING ]===
 
 #ifdef ENABLE_VM_STUB_LOGS
@@ -2842,9 +2874,7 @@ static RValue builtinOsGetRegion(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValu
     return RValue_makeOwnedString(safeStrdup("US"));
 }
 
-static RValue builtinOsIsPaused(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    return RValue_makeBool(false);
-}
+STUB_RETURN_FALSE(os_is_paused);
 
 // ===[ DS_MAP BUILTIN FUNCTIONS ]===
 
@@ -3522,31 +3552,7 @@ static RValue builtinMpPotentialSettings(VMContext* ctx, RValue* args, MAYBE_UNU
     return RValue_makeReal(0.0);
 }
 
-// ===[ STUBBED FUNCTIONS ]===
-
-#define STUB_RETURN_ZERO(name) \
-    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
-        logStubbedFunction(ctx, #name); \
-        return RValue_makeReal(0.0); \
-    }
-
-#define STUB_RETURN_TRUE(name) \
-    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
-        logStubbedFunction(ctx, #name); \
-        return RValue_makeBool(true); \
-    }
-
-#define STUB_RETURN_VALUE(name, value) \
-    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
-        logStubbedFunction(ctx, #name); \
-        return RValue_makeReal(value); \
-    }
-
-#define STUB_RETURN_UNDEFINED(name) \
-    static RValue builtin_##name(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) { \
-        logStubbedFunction(ctx, #name); \
-        return RValue_makeUndefined(); \
-    }
+// ===[ Steam ]===
 
 // Steam stubs
 STUB_RETURN_ZERO(steam_initialised)
@@ -9254,7 +9260,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     // OS
     VM_registerBuiltin(ctx, "os_get_language", builtinOsGetLanguage);
     VM_registerBuiltin(ctx, "os_get_region", builtinOsGetRegion);
-    VM_registerBuiltin(ctx, "os_is_paused", builtinOsIsPaused);
+    VM_registerBuiltin(ctx, "os_is_paused", builtin_os_is_paused);
 
     // ds_map
     VM_registerBuiltin(ctx, "ds_map_create", builtinDsMapCreate);
