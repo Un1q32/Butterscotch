@@ -1764,6 +1764,19 @@ static RValue builtinStringReplaceAll(MAYBE_UNUSED VMContext* ctx, RValue* args,
 
 // ===[ MATH FUNCTIONS ]===
 
+
+static RValue builtinArctan(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(0.0);
+    GMLReal y = RValue_toReal(args[0]);
+    return RValue_makeReal(GMLReal_atan(y));
+}
+
+static RValue builtinDarctan(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(0.0);
+    GMLReal y = RValue_toReal(args[0]);
+    return RValue_makeReal(GMLReal_atan(y) * (180.0 / M_PI));
+}
+
 static RValue builtinDarctan2(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeReal(0.0);
     GMLReal y = RValue_toReal(args[0]);
@@ -8915,9 +8928,11 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "sqr", builtinSqr);
     VM_registerBuiltin(ctx, "sin", builtinSin);
     VM_registerBuiltin(ctx, "arcsin", builtinArcsin);
+    VM_registerBuiltin(ctx, "arctan", builtinArctan);
     VM_registerBuiltin(ctx, "cos", builtinCos);
     VM_registerBuiltin(ctx, "dsin", builtinDsin);
     VM_registerBuiltin(ctx, "dcos", builtinDcos);
+    VM_registerBuiltin(ctx, "darctan", builtinDarctan);
     VM_registerBuiltin(ctx, "darctan2", builtinDarctan2);
     VM_registerBuiltin(ctx, "degtorad", builtinDegtorad);
     VM_registerBuiltin(ctx, "radtodeg", builtinRadtodeg);
