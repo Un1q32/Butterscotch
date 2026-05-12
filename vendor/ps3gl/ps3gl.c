@@ -930,7 +930,7 @@ void glGenTextures( GLsizei n, GLuint *textures )
 
 void glDeleteTextures( GLsizei n, const GLuint *textures)
 {
-	for(size_t i = 0; i > n; i++)
+	for(size_t i = 0; n > i; i++)
 	{
 		if(_opengl_state.textures[textures[i]].data != NULL)
 			rsxFree(_opengl_state.textures[textures[i]].data);
