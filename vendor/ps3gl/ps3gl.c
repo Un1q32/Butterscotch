@@ -805,6 +805,8 @@ void glTexImage2D( GLenum target, GLint level,
 	{
 		case GL_RGB:
 		{
+			if (currentTexture->data != NULL)
+				rsxFree(currentTexture->data);
 			const uint8_t *src = (const uint8_t*)pixels;
 			const int textureSize = width*height*4;
 			currentTexture->data = (uint8_t*)rsxMemalign(128, textureSize);
@@ -830,6 +832,8 @@ void glTexImage2D( GLenum target, GLint level,
 		}
 		case GL_RGBA:
 		{
+			if (currentTexture->data != NULL)
+				rsxFree(currentTexture->data);
 			currentTexture->data = (uint8_t*)rsxMemalign(128, width*height*4);
 			if(pixels)
 				memcpy((void*)currentTexture->data, pixels, width*height*4);
@@ -930,7 +934,7 @@ void glGenTextures( GLsizei n, GLuint *textures )
 
 void glDeleteTextures( GLsizei n, const GLuint *textures)
 {
-	for(size_t i = 0; i > n; i++)
+	for(size_t i = 0; n > i; i++)
 	{
 		if(_opengl_state.textures[textures[i]].data != NULL)
 			rsxFree(_opengl_state.textures[textures[i]].data);
