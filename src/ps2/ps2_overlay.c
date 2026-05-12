@@ -42,7 +42,7 @@ static void drawChunkStats(LoadingScreenState* loadingState) {
 static void beginStatusScreen(GSGLOBAL* gs, const char* gameName) {
     gsKit_clear(gs, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));
 
-    u64 title = GS_SETREG_RGBAQ(0x5E, 0x54, 0x92, 0x80, 0x00);
+    u64 title = GS_SETREG_RGBAQ(0xE8 >> 1, 0xA5 >> 1, 0x52 >> 1, 0x80, 0x00);
     u64 gray = GS_SETREG_RGBAQ(0xAA, 0xAA, 0xAA, 0x80, 0x00);
 
     gOverlay.font->align = GSKIT_FALIGN_CENTER;
