@@ -5,7 +5,6 @@
 #ifdef PLATFORM_PS3
 #include "ps3gl.h"
 #include "rsxutil.h"
-GLAPI void GLAPIENTRY glActiveTexture( GLenum texture ) {};
 #else
 #include <glad/glad.h>
 #endif

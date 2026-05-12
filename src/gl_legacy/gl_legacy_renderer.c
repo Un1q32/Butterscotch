@@ -12,6 +12,10 @@
 #include "utils.h"
 #include "image_decoder.h"
 
+#ifdef PLATFORM_PS3
+GLAPI void GLAPIENTRY glActiveTexture( GLenum texture ) {};
+#endif
+
 // ===[ Helpers ]===
 static void glApplyViewport(GLLegacyRenderer* gl, int32_t x, int32_t y, int32_t w, int32_t h) {
     int32_t effW, effH;
