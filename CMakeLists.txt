@@ -283,6 +283,10 @@ elseif(PLATFORM STREQUAL "web-meta")
             "-sFORCE_FILESYSTEM=1"
     )
 elseif(PLATFORM STREQUAL "ps2")
+    file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
+    target_sources(butterscotch PRIVATE ${DEBUG_FONT_SOURCES})
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
+
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)
     # By disabling Int64 support, we can fit the entire RValue struct in 8 bytes, improving performance and memory usage
