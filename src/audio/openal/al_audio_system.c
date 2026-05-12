@@ -55,6 +55,54 @@ static void alGetSourceLengthSec(ALuint buffer, float* out) {
     *out = (float)lengthInSamples / (float)frequency;
 }
 
+// Tears down whatever AL state is attached to a slot and marks it inactive.
+static void releaseInstance(SoundInstance* inst) {
+    if (!inst->active)
+        return;
+
+    alSourceStop(inst->alSource);
+
+    if (inst->streaming) {
+        // Drain anything still queued so the buffer names are detachable.
+        ALint queued = 0;
+        alGetSourcei(inst->alSource, AL_BUFFERS_QUEUED, &queued);
+        repeat(queued, i) {
+            ALuint b;
+            alSourceUnqueueBuffers(inst->alSource, 1, &b);
+        }
+        alDeleteSources(1, &inst->alSource);
+        alDeleteBuffers(AL_STREAM_BUFFER_COUNT, inst->streamBuffers);
+        if (inst->vorbis != nullptr) {
+            stb_vorbis_close((stb_vorbis*) inst->vorbis);
+            inst->vorbis = nullptr;
+        }
+        free(inst->decodeScratch);
+        inst->decodeScratch = nullptr;
+        inst->streaming = false;
+    } else {
+        alDeleteSources(1, &inst->alSource);
+        alDeleteBuffers(1, &inst->alBuffer);
+    }
+
+    inst->active = false;
+}
+
+// Decode the next chunk from inst->vorbis into inst->decodeScratch and upload it to "buf".
+// Wraps around on EOF if inst->loop is set.
+// Returns false when no more samples are available (decoder exhausted and not looping, or read failed).
+static bool streamFillBuffer(SoundInstance* inst, ALuint buf) {
+    stb_vorbis* v = (stb_vorbis*) inst->vorbis;
+    int samples = stb_vorbis_get_samples_short_interleaved(v, inst->streamChannels, inst->decodeScratch, AL_STREAM_BUFFER_SAMPLES * inst->streamChannels);
+    if (0 >= samples) {
+        if (!inst->loop) return false;
+        stb_vorbis_seek_start(v);
+        samples = stb_vorbis_get_samples_short_interleaved(v, inst->streamChannels, inst->decodeScratch, AL_STREAM_BUFFER_SAMPLES * inst->streamChannels);
+        if (0 >= samples) return false;
+    }
+    alBufferData(buf, inst->streamFormat, inst->decodeScratch, samples * inst->streamChannels * (ALsizei) sizeof(int16_t), inst->streamSampleRate);
+    return true;
+}
+
 static SoundInstance* findFreeSlot(AlAudioSystem* ma) {
     // First pass: find an inactive slot
     repeat(MAX_SOUND_INSTANCES, i) {
@@ -63,10 +111,14 @@ static SoundInstance* findFreeSlot(AlAudioSystem* ma) {
         }
     }
 
-    // Second pass: evict the lowest-priority ended sound
+    // Second pass: evict the lowest-priority ended sound.
+    // Streaming instances can briefly report AL_STOPPED during an underrun, so exclude them from eviction to keep music alive across SFX bursts.
     SoundInstance* best = nullptr;
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
+        if (inst->streaming)
+            continue;
+
         if (!alSourceIsPlaying(inst->alSource)) {
             if (best == nullptr || best->priority > inst->priority) {
                 best = inst;
@@ -75,9 +127,7 @@ static SoundInstance* findFreeSlot(AlAudioSystem* ma) {
     }
 
     if (best != nullptr) {
-        alDeleteSources(1, &best->alSource);
-        alDeleteBuffers(1, &best->alBuffer);
-        best->active = false;
+        releaseInstance(best);
     }
 
     return best;
@@ -135,11 +185,7 @@ static void maDestroy(AudioSystem* audio) {
 
     // Uninit all active sound instances
     repeat(MAX_SOUND_INSTANCES, i) {
-        if (ma->instances[i].active) {
-            alDeleteSources(1, &ma->instances[i].alSource);
-            alDeleteBuffers(1, &ma->instances[i].alBuffer);
-            ma->instances[i].active = false;
-        }
+        releaseInstance(&ma->instances[i]);
     }
 
     // Free stream entries
@@ -183,11 +229,51 @@ static void maUpdate(AudioSystem* audio, float deltaTime) {
             alSourcef(inst->alSource, AL_GAIN, inst->currentGain);
         }
 
+        if (inst->streaming) {
+            // Recycle any buffers AL has finished with: count their samples toward the play position, then refill from the decoder and re-queue at the tail.
+            ALint processed = 0;
+            alGetSourcei(inst->alSource, AL_BUFFERS_PROCESSED, &processed);
+            while (processed > 0) {
+                ALuint buf;
+                alSourceUnqueueBuffers(inst->alSource, 1, &buf);
+                processed--;
+
+                ALint sizeBytes = 0, bits = 0, channels = 0;
+                alGetBufferi(buf, AL_SIZE, &sizeBytes);
+                alGetBufferi(buf, AL_BITS, &bits);
+                alGetBufferi(buf, AL_CHANNELS, &channels);
+                if (bits > 0 && channels > 0) {
+                    inst->playedSamples += (uint64_t) (sizeBytes * 8 / (bits * channels));
+                }
+
+                if (!inst->streamEnded) {
+                    if (streamFillBuffer(inst, buf)) {
+                        alSourceQueueBuffers(inst->alSource, 1, &buf);
+                    } else {
+                        inst->streamEnded = true;
+                    }
+                }
+            }
+
+            // Reap once the queue has fully drained on a non-looping track.
+            ALint queued = 0;
+            alGetSourcei(inst->alSource, AL_BUFFERS_QUEUED, &queued);
+            if (inst->streamEnded && queued == 0) {
+                releaseInstance(inst);
+                continue;
+            }
+
+            // Underrun recovery: AL goes to AL_STOPPED if the queue runs dry.
+            // Kick it back on as soon as we have buffers queued again.
+            if (alSourceHasStopped(inst->alSource) && queued > 0) {
+                alSourcePlay(inst->alSource);
+            }
+            continue;
+        }
+
         // Clean up ended non-looping sounds (ma_sound_at_end avoids reaping still-loading async sounds)
         if (alSourceHasStopped(inst->alSource) && !alSourceIsLooping(inst->alSource)) {
-            alDeleteSources(1, &inst->alSource);
-            alDeleteBuffers(1, &inst->alBuffer);
-            inst->active = false;
+            releaseInstance(inst);
         }
     }
 }
@@ -223,24 +309,57 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     }
 
     int32_t slotIndex = (int32_t) (slot - ma->instances);
-    
-    alGenSources(1, &slot->alSource);
-    alGenBuffers(1, &slot->alBuffer);
+
+    slot->streaming = false;
+    slot->vorbis = nullptr;
+    slot->decodeScratch = nullptr;
+    slot->streamEnded = false;
+    slot->playedSamples = 0;
+
     if (isStream) {
-        int channels;
-        int sample_rate;
-        short* data = NULL;
-        int len = stb_vorbis_decode_filename(streamPath, &channels, &sample_rate, &data);
-        alBufferData(
-            slot->alBuffer, 
-            (channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, 
-            (void*)data, 
-            len*channels*sizeof(uint16_t), 
-            sample_rate
-        );
-        alSourcei(slot->alSource, AL_BUFFER, slot->alBuffer);
-        if(data != NULL) free(data);
+        // Streaming path: open the decoder, queue a few small buffers, and let maUpdate() top them up.
+        // This avoids the multi-hundred-millisecond hang of decoding a whole song into PCM on the main thread.
+        int err = 0;
+        stb_vorbis* v = stb_vorbis_open_filename(streamPath, &err, nullptr);
+        if (v == nullptr) {
+            fprintf(stderr, "Audio: Failed to open stream '%s' (stb_vorbis err %d)\n", streamPath, err);
+            return -1;
+        }
+        stb_vorbis_info info = stb_vorbis_get_info(v);
+
+        slot->streaming = true;
+        slot->loop = loop;
+        slot->vorbis = v;
+        slot->streamChannels = info.channels;
+        slot->streamSampleRate = (int) info.sample_rate;
+        slot->streamFormat = (info.channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16;
+        slot->streamLengthSeconds = stb_vorbis_stream_length_in_seconds(v);
+        slot->decodeScratch = safeMalloc(AL_STREAM_BUFFER_SAMPLES * info.channels * sizeof(int16_t));
+
+        alGenSources(1, &slot->alSource);
+        alGenBuffers(AL_STREAM_BUFFER_COUNT, slot->streamBuffers);
+
+        int primed = 0;
+        for (int i = 0; AL_STREAM_BUFFER_COUNT > i; i++) {
+            if (!streamFillBuffer(slot, slot->streamBuffers[i])) break;
+            alSourceQueueBuffers(slot->alSource, 1, &slot->streamBuffers[i]);
+            primed++;
+        }
+
+        if (primed == 0) {
+            // Empty file or decode failure: tear everything down cleanly.
+            alDeleteSources(1, &slot->alSource);
+            alDeleteBuffers(AL_STREAM_BUFFER_COUNT, slot->streamBuffers);
+            stb_vorbis_close(v);
+            free(slot->decodeScratch);
+            slot->streaming = false;
+            slot->vorbis = nullptr;
+            slot->decodeScratch = nullptr;
+            return -1;
+        }
     } else {
+        alGenSources(1, &slot->alSource);
+        alGenBuffers(1, &slot->alBuffer);
         bool isEmbedded = (sound->flags & 0x01) != 0;
         bool isCompressed = (sound->flags & 0x02) != 0;
 
@@ -310,7 +429,10 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     if (pitch != 1.0f) {
         alSourcef(slot->alSource, AL_PITCH, pitch != 0.0f ? pitch : 1.0f);
     }
-    alSourcei(slot->alSource, AL_LOOPING, loop ? AL_TRUE : AL_FALSE);
+    // AL_LOOPING on a streaming source only loops the currently-playing buffer, not the whole queue,
+    // so streaming looping is handled by streamFillBuffer calling stb_vorbis_seek_start when the decoder runs out.
+    if (!isStream)
+        alSourcei(slot->alSource, AL_LOOPING, loop ? AL_TRUE : AL_FALSE);
 
     // Set up instance tracking
     slot->active = true;
@@ -337,21 +459,13 @@ static void maStopSound(AudioSystem* audio, int32_t soundOrInstance) {
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         // Stop specific instance
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
-        if (inst != nullptr) {
-            alSourceStop(inst->alSource);
-            alDeleteSources(1, &inst->alSource);
-            alDeleteBuffers(1, &inst->alBuffer);
-            inst->active = false;
-        }
+        if (inst != nullptr) releaseInstance(inst);
     } else {
         // Stop all instances of this sound resource
         repeat(MAX_SOUND_INSTANCES, i) {
             SoundInstance* inst = &ma->instances[i];
             if (inst->active && inst->soundIndex == soundOrInstance) {
-                alSourceStop(inst->alSource);
-                alDeleteSources(1, &inst->alSource);
-                alDeleteBuffers(1, &inst->alBuffer);
-                inst->active = false;
+                releaseInstance(inst);
             }
         }
     }
@@ -361,13 +475,7 @@ static void maStopAll(AudioSystem* audio) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
     repeat(MAX_SOUND_INSTANCES, i) {
-        SoundInstance* inst = &ma->instances[i];
-        if (inst->active) {
-            alSourceStop(inst->alSource);
-            alDeleteSources(1, &inst->alSource);
-            alDeleteBuffers(1, &inst->alBuffer);
-            inst->active = false;
-        }
+        releaseInstance(&ma->instances[i]);
     }
 }
 
@@ -376,14 +484,21 @@ static bool maIsPlaying(AudioSystem* audio, int32_t soundOrInstance) {
 
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
-        return inst != nullptr && alSourceIsPlaying(inst->alSource);
+        if (inst == nullptr)
+            return false;
+
+        // Streaming sources can flip to AL_STOPPED for a frame during underrun, so trust the active flag instead (cleared by maUpdate when fully drained).
+        if (inst->streaming)
+            return inst->active;
+
+        return alSourceIsPlaying(inst->alSource);
     } else {
         // Check if any instance of this sound resource is playing
         repeat(MAX_SOUND_INSTANCES, i) {
             SoundInstance* inst = &ma->instances[i];
-            if (inst->active && inst->soundIndex == soundOrInstance && alSourceIsPlaying(inst->alSource)) {
-                return true;
-            }
+            if (!inst->active || inst->soundIndex != soundOrInstance) continue;
+            if (inst->streaming) return true;
+            if (alSourceIsPlaying(inst->alSource)) return true;
         }
         return false;
     }
@@ -538,12 +653,24 @@ static float maGetSoundPitch(AudioSystem* audio, int32_t soundOrInstance) {
     return pitch;
 }
 
+// For streaming instances AL_SEC_OFFSET resets per buffer in the queue, so we combine the dequeued-sample tally with the offset into the currently-playing buffer to report a position over the whole track.
+static float streamCursorSeconds(SoundInstance* inst) {
+    if (0 >= inst->streamSampleRate)
+        return 0.0f;
+    
+    ALint sampleOffset = 0;
+    alGetSourcei(inst->alSource, AL_SAMPLE_OFFSET, &sampleOffset);
+    uint64_t total = inst->playedSamples + (uint64_t) sampleOffset;
+    return (float) total / (float) inst->streamSampleRate;
+}
+
 static float maGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
         if (inst != nullptr) {
+            if (inst->streaming) return streamCursorSeconds(inst);
             float cursor;
             alGetSourcef(inst->alSource, AL_SEC_OFFSET, &cursor);
             return cursor;
@@ -552,6 +679,7 @@ static float maGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
         repeat(MAX_SOUND_INSTANCES, i) {
             SoundInstance* inst = &ma->instances[i];
             if (inst->active && inst->soundIndex == soundOrInstance) {
+                if (inst->streaming) return streamCursorSeconds(inst);
                 float cursor;
                 alGetSourcef(inst->alSource, AL_SEC_OFFSET, &cursor);
                 return cursor;
@@ -596,6 +724,7 @@ static float maGetSoundLength(AudioSystem* audio, int32_t soundOrInstance) {
         }
     }
     if (match != nullptr) {
+        if (match->streaming) return match->streamLengthSeconds;
         float seconds = 0.0f;
         alGetSourceLengthSec(match->alBuffer, &seconds);
         return seconds;
@@ -709,10 +838,7 @@ static bool maDestroyStream(AudioSystem* audio, int32_t streamIndex) {
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
         if (inst->active && inst->soundIndex == streamIndex) {
-            alSourceStop(inst->alSource);
-            alDeleteSources(1, &inst->alSource);
-            alDeleteBuffers(1, &inst->alBuffer);
-            inst->active = false;
+            releaseInstance(inst);
         }
     }
 
