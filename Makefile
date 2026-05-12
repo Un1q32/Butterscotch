@@ -15,7 +15,7 @@ DEFINES := -DENABLE_VM_GML_PROFILER \
 INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/stb/vorbis -Ivendor/md5 -Ivendor/glad/include
 
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
-SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c
+SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c vendor/glad/src/glad.c
 
 AUDIO_BACKEND := miniaudio
 
@@ -94,7 +94,7 @@ endif
 
 PLATFORM := glfw
 ifeq ($(PLATFORM),glfw)
-SRCS += $(wildcard src/glfw/*.c) vendor/glad/src/glad.c
+SRCS += $(wildcard src/glfw/*.c)
 HEADERS += $(wildcard src/glfw/*.h)
 DEFINES += -DUSE_GLFW
 ifdef USE_GLFW2

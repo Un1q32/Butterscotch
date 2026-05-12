@@ -2,8 +2,6 @@
 #include "vm.h"
 #include <SDL/SDL_events.h>
 
-#define GL_GLEXT_PROTOTYPES
-#include <SDL/SDL_opengl.h>
 #include <SDL/SDL.h>
 #include <SDL/SDL_video.h>
 #include <getopt.h>
@@ -778,6 +776,15 @@ int main(int argc, char* argv[]) {
     }
 
     SDL_SetVideoMode((int) gen8->defaultWindowWidth, (int) gen8->defaultWindowHeight, 0, SDL_OPENGL);
+
+    // Load OpenGL function pointers via GLAD
+    if (!gladLoadGLLoader((GLADloadproc) SDL_GL_GetProcAddress)) {
+        fprintf(stderr, "Failed to initialize GLAD\n");
+        SDL_Quit();
+        DataWin_free(dataWin);
+        freeCommandLineArgs(&args);
+        return 1;
+    }
 
     // Initialize the renderer
     Renderer* renderer = GLLegacyRenderer_create();
