@@ -15,6 +15,7 @@
 #include "debug_overlay.h"
 #include "gl_legacy_renderer.h"
 #include "overlay_file_system.h"
+#include "ps3_overlay.h"
 #ifdef USE_OPENAL
 #include "al_audio_system.h"
 #endif
@@ -42,7 +43,7 @@ const PadMapping PAD_MAPPINGS[] = {
     { PAD_BUTTON_OFFSET_DIGITAL1, PAD_CTRL_LEFT,     VK_LEFT },
     { PAD_BUTTON_OFFSET_DIGITAL1, PAD_CTRL_RIGHT,    VK_RIGHT },
     { PAD_BUTTON_OFFSET_DIGITAL1, PAD_CTRL_START,    'C' },
-    { PAD_BUTTON_OFFSET_DIGITAL1, PAD_CTRL_SELECT,   VK_ESCAPE },
+    { PAD_BUTTON_OFFSET_DIGITAL1, PAD_CTRL_SELECT,   VK_F12 },
     { PAD_BUTTON_OFFSET_DIGITAL2, PAD_CTRL_CROSS,    'Z' },
     { PAD_BUTTON_OFFSET_DIGITAL2, PAD_CTRL_SQUARE,   'X' },
     { PAD_BUTTON_OFFSET_DIGITAL2, PAD_CTRL_TRIANGLE, 'C' },
@@ -244,6 +245,8 @@ int main(int argc, char* argv[]) {
     AudioSystem* audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #endif
 
+    PS3Overlay_init();
+
     // Initialize the runner
     Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem);
     runner->debugMode = false;
@@ -319,16 +322,26 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F12)) {
+            PS3Overlay_toggleDebugOverlay(runner);
+        }
+
         double frameStartTime = PS3_GET_TIME;
+        double stepTime = 0.0;
+        double audioTime = 0.0;
         if (shouldStep) {
             // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
+            double stepStart = PS3_GET_TIME;
             Runner_step(runner);
+            stepTime = PS3_GET_TIME - stepStart;
 
             // Update audio system (gain fading, cleanup ended sounds)
             float dt = (float) (PS3_GET_TIME - lastFrameTime);
             if (0.0f > dt) dt = 0.0f;
             if (dt > 0.1f) dt = 0.1f; // cap delta to avoid huge fades on lag spikes
+            double audioStart = PS3_GET_TIME;
             runner->audioSystem->vtable->update(runner->audioSystem, dt);
+            audioTime = PS3_GET_TIME - audioStart;
         }
 
         // Query actual framebuffer size (differs from window size on Wayland with fractional scaling)
@@ -364,9 +377,15 @@ int main(int argc, char* argv[]) {
         }
         glClear(GL_COLOR_BUFFER_BIT);
 
+        double drawStart = PS3_GET_TIME;
         Runner_drawViews(runner, gameW, gameH, displayScaleX, displayScaleY, debugShowCollisionMasks);
 
         renderer->vtable->endFrame(renderer);
+        double drawTime = PS3_GET_TIME - drawStart;
+
+        // ===[ Debug Overlay ]===
+        double tickTime = PS3_GET_TIME - frameStartTime;
+        PS3Overlay_drawDebugOverlay(runner, (float) (tickTime * 1000.0), (float) (stepTime * 1000.0), (float) (drawTime * 1000.0), (float) (audioTime * 1000.0), fbWidth, fbHeight);
 
         sysUtilCheckCallback();
         // Only swap when there isn't a room change to match the original runner.
@@ -400,6 +419,7 @@ int main(int argc, char* argv[]) {
 
 
     // Cleanup
+    PS3Overlay_deinit();
     runner->audioSystem->vtable->destroy(runner->audioSystem);
     runner->audioSystem = nullptr;
     renderer->vtable->destroy(renderer);

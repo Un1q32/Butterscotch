@@ -229,16 +229,12 @@ static void loadAndUploadCLUTs(GsRenderer* gs) {
 // Manages a pool of 128KB VRAM chunks for atlas textures.
 // 4bpp atlases use 1 chunk, 8bpp atlases use 2 consecutive chunks.
 
-#define FONTM_RESERVED_VRAM 65536 // 64KB reserved for gsKit's TexManager (FONTM debug overlay)
-
-// Initializes the chunk pool from the remaining VRAM after CLUTs.
-// Reserves 64KB at the end for gsKit's TexManager (used by FONTM).
-// Our chunk pool occupies the middle, between CLUTs and the FONTM region.
+// Initializes the chunk pool from the remaining VRAM after framebuffers + CLUTs + Debug Font.
 //
-// VRAM layout: [Framebuffers] [CLUTs] [Chunk Pool ...] [64KB FONTM]
+// VRAM layout: [Framebuffers] [Debug Font atlas + CLUT] [CLUTs] [Chunk Pool ...]
 static void initTextureCache(GsRenderer* gs) {
     gs->textureVramBase = gs->gsGlobal->CurrentPointer;
-    uint32_t availableVram = GS_VRAM_SIZE - gs->textureVramBase - FONTM_RESERVED_VRAM;
+    uint32_t availableVram = GS_VRAM_SIZE - gs->textureVramBase;
     gs->chunkCount = availableVram / VRAM_CHUNK_SIZE;
 
     gs->chunks = safeMalloc(gs->chunkCount * sizeof(VRAMChunk));
@@ -249,13 +245,10 @@ static void initTextureCache(GsRenderer* gs) {
 
     gs->frameCounter = 1;
 
-    // Advance CurrentPointer past our chunk pool so the TexManager only
-    // manages the 64KB FONTM region at the end of VRAM.
+    // Advance CurrentPointer past our chunk pool so any future gsKit allocations fail loudly.
     gs->gsGlobal->CurrentPointer = gs->textureVramBase + gs->chunkCount * VRAM_CHUNK_SIZE;
-    gsKit_TexManager_init(gs->gsGlobal);
 
-    uint32_t fontmVram = GS_VRAM_SIZE - gs->gsGlobal->CurrentPointer;
-    fprintf(stderr, "GsRenderer: Texture cache initialized - %u chunks (%u KB each), base 0x%08X, %u KB for textures, %u KB for FONTM\n", gs->chunkCount, VRAM_CHUNK_SIZE / 1024, gs->textureVramBase, gs->chunkCount * (VRAM_CHUNK_SIZE / 1024), fontmVram / 1024);
+    fprintf(stderr, "GsRenderer: Texture cache initialized - %u chunks (%u KB each), base 0x%08X, %u KB for textures\n", gs->chunkCount, VRAM_CHUNK_SIZE / 1024, gs->textureVramBase, gs->chunkCount * (VRAM_CHUNK_SIZE / 1024));
 }
 
 // Find the first run of consecutive free chunks.

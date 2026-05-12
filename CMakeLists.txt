@@ -283,6 +283,10 @@ elseif(PLATFORM STREQUAL "web-meta")
             "-sFORCE_FILESYSTEM=1"
     )
 elseif(PLATFORM STREQUAL "ps2")
+    file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
+    target_sources(butterscotch PRIVATE ${DEBUG_FONT_SOURCES})
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
+
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)
     # By disabling Int64 support, we can fit the entire RValue struct in 8 bytes, improving performance and memory usage
@@ -466,9 +470,11 @@ elseif(PLATFORM STREQUAL "ps3")
     endif()
     file(GLOB GL_SOURCES src/gl_legacy/*.c src/image/*.c vendor/ps3gl/*.c)
     file(GLOB AL_SOURCES vendor/mojoal/mojoal.c)
-    target_sources(butterscotch PRIVATE ${GL_SOURCES} ${AL_SOURCES})
+    file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
+    target_sources(butterscotch PRIVATE ${GL_SOURCES} ${AL_SOURCES} ${DEBUG_FONT_SOURCES})
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_legacy)
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/vendor/ps3gl)
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mojoal)
 
