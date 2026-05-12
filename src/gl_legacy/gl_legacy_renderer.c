@@ -320,6 +320,85 @@ static void glDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y
     glEnd();
 }
 
+static void glDrawTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha) {
+    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+
+    if (0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex) return;
+
+    TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+    int16_t pageId = tpag->texturePageId;
+    if (0 > pageId || gl->textureCount <= (uint32_t) pageId) return;
+    if (!ensureTextureLoaded(gl, (uint32_t) pageId)) return;
+
+    GLuint texId = gl->glTextures[pageId];
+    int32_t texW = gl->textureWidths[pageId];
+    int32_t texH = gl->textureHeights[pageId];
+
+    float axScale = fabsf(xscale);
+    float ayScale = fabsf(yscale);
+    float tileW = (float) tpag->boundingWidth * axScale;
+    float tileH = (float) tpag->boundingHeight * ayScale;
+    if (0 >= tileW || 0 >= tileH) return;
+
+    float startX, endX, startY, endY;
+    if (tileX) {
+        startX = fmodf(x - originX * axScale, tileW);
+        if (startX > 0) startX -= tileW;
+        endX = roomW;
+    } else {
+        startX = x - originX * axScale;
+        endX = startX + tileW;
+    }
+    if (tileY) {
+        startY = fmodf(y - originY * ayScale, tileH);
+        if (startY > 0) startY -= tileH;
+        endY = roomH;
+    } else {
+        startY = y - originY * ayScale;
+        endY = startY + tileH;
+    }
+
+    float u0 = (float) tpag->sourceX / (float) texW;
+    float v0 = (float) tpag->sourceY / (float) texH;
+    float u1 = (float) (tpag->sourceX + tpag->sourceWidth) / (float) texW;
+    float v1 = (float) (tpag->sourceY + tpag->sourceHeight) / (float) texH;
+
+    float localX0 = (float) tpag->targetX - originX;
+    float localY0 = (float) tpag->targetY - originY;
+    float localX1 = localX0 + (float) tpag->sourceWidth;
+    float localY1 = localY0 + (float) tpag->sourceHeight;
+    float sx0 = xscale * localX0;
+    float sy0 = yscale * localY0;
+    float sx1 = xscale * localX1;
+    float sy1 = yscale * localY1;
+
+    float r = (float) BGR_R(color) / 255.0f;
+    float g = (float) BGR_G(color) / 255.0f;
+    float b = (float) BGR_B(color) / 255.0f;
+
+    // Emit the entire tile grid in a single glBegin -> glEnd
+    glBindTexture(GL_TEXTURE_2D, texId);
+    glBegin(GL_QUADS);
+    glColor4f(r, g, b, alpha);
+    for (float dy = startY; endY > dy; dy += tileH) {
+        float cy = dy + originY * ayScale;
+        float vy0 = cy + sy0;
+        float vy1 = cy + sy1;
+        for (float dx = startX; endX > dx; dx += tileW) {
+            float cx = dx + originX * axScale;
+            float vx0 = cx + sx0;
+            float vx1 = cx + sx1;
+
+            glTexCoord2f(u0, v0); glVertex2f(vx0, vy0);
+            glTexCoord2f(u1, v0); glVertex2f(vx1, vy0);
+            glTexCoord2f(u1, v1); glVertex2f(vx1, vy1);
+            glTexCoord2f(u0, v1); glVertex2f(vx0, vy1);
+        }
+    }
+    glEnd();
+}
+
 static void glDrawSpritePos(Renderer* renderer, int32_t tpagIndex, float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4, float alpha) {
     GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
@@ -1275,6 +1354,7 @@ static RendererVtable glVtable = {
     .gpuSetColorWriteEnable = glGpuSetColorWriteEnable,
     .gpuGetBlendEnable = glGpuGetBlendEnable,
     .drawTile = nullptr,
+    .drawTiled = glDrawTiled,
     .createSurface = glLegacyCreateSurface,
     .surfaceExists = glLegacySurfaceExists,
     .setSurfaceTarget = glLegacySetSurfaceTarget,
