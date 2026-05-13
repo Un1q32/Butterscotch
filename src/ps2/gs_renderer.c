@@ -698,6 +698,8 @@ static void uploadAtlasToChunk(GsRenderer* gs, uint16_t atlasId, int32_t firstCh
             rendererPrintf("GsRenderer: EE cache insert failed for atlas %u, uploading directly\n", atlasId);
             uploadData = tempPixelData;
         }
+    } else {
+        gs->ramLoadsThisFrame++;
     }
 
     // Upload pixel data to VRAM
@@ -1173,6 +1175,7 @@ static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_U
     gs->evictedAtlasUsedInCurrentFrame = false;
     gs->uniqueAtlasesThisFrame = 0;
     gs->chunksNeededThisFrame = 0;
+    gs->ramLoadsThisFrame = 0;
     gs->diskLoadsThisFrame = 0;
 
     // gsKit_setactive (called by sync_flip) re-emits FRAME with FBMSK=0, so any color-write mask we set last frame is gone. Re-apply it here for cases where GML leaves it asserted across frames.
