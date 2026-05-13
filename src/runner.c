@@ -2689,7 +2689,7 @@ bool Runner_surfaceResetTarget(Runner* runner) {
     runner->renderer->vtable->flush(runner->renderer);
 
     int32_t newTop = findStackTop(runner);
-    int32_t newTarget = newTop == -1 ? -1 : runner->surfaceStack[newTop];
+    int32_t newTarget = newTop == -1 ? APPLICATION_SURFACE_ID : runner->surfaceStack[newTop];
     runner->renderer->vtable->setRenderTarget(runner->renderer, newTarget);
     return true;
 }

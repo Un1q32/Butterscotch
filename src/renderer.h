@@ -30,6 +30,9 @@
 #define bm_inv_dest_color 10
 #define bm_src_alpha_sat 11
 
+// The "application_surface" sentinel ID
+#define APPLICATION_SURFACE_ID (-1)
+
 // Nine-slice tile mode constants
 #define NS_STRETCH    0
 #define NS_REPEAT     1
@@ -81,7 +84,7 @@ typedef struct {
     // Surface Functions
     int32_t (*createSurface)(Renderer* renderer, int32_t width, int32_t height);
     bool (*surfaceExists)(Renderer* renderer, int32_t surfaceID);
-    // Bind the given surface as the active render target. Pass -1 to bind the main framebuffer.
+    // Bind the given surface as the active render target. Pass APPLICATION_SURFACE_ID to bind the main framebuffer.
     bool (*setRenderTarget)(Renderer* renderer, int32_t surfaceID);
     float (*getSurfaceWidth)(Renderer* renderer, int32_t surfaceID);
     float (*getSurfaceHeight)(Renderer* renderer, int32_t surfaceID);

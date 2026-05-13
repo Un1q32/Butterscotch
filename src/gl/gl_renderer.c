@@ -1261,7 +1261,7 @@ glSurfaceFree
 static void glSurfaceFree(Renderer* renderer, int32_t surfaceID) {
     GLRenderer* gl = (GLRenderer*) renderer;
     flushBatch(gl);
-    if (surfaceID == -1) return;
+    if (surfaceID == APPLICATION_SURFACE_ID) return;
     if (gl->surfaceTexture[surfaceID] != 0) glDeleteTextures(1, &gl->surfaceTexture[surfaceID]);
     if (gl->surfaces[surfaceID] != 0) glDeleteFramebuffers(1, &gl->surfaces[surfaceID]);
 
@@ -1338,7 +1338,7 @@ static bool glSurfaceGetPixels(Renderer* renderer, int32_t surfaceId, uint8_t* o
 static bool glSetRenderTarget(Renderer* renderer, int32_t surfaceId) {
     GLRenderer* gl = (GLRenderer*) renderer;
 
-    if (surfaceId > -1) {
+    if (surfaceId != APPLICATION_SURFACE_ID) {
         if (surfaceId < gl->surfaceCount)
         {
             if (gl->surfaces[surfaceId] != 0) {
@@ -1360,7 +1360,7 @@ static bool glSetRenderTarget(Renderer* renderer, int32_t surfaceId) {
         }
     }
 
-    if (surfaceId == -1) {
+    if (surfaceId == APPLICATION_SURFACE_ID) {
         glUniformMatrix4fv(gl->uProjection, 1, GL_FALSE, renderer->PreviousViewMatrix.m);
         glBindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
         //glViewport(0, 0, gl->fboWidth, gl->fboHeight);
@@ -1642,7 +1642,7 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
     int32_t glY = gl->fboHeight - y - h;
 
     // Read pixels from the FBO (application_surface)
-    if (surfaceID == -1) {
+    if (surfaceID == APPLICATION_SURFACE_ID) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, gl->fbo);
     } else {
         if (surfaceID < gl->surfaceCount)

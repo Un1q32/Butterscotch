@@ -1365,11 +1365,11 @@ static void glLegacySurfaceFree(Renderer* renderer, int32_t surfaceId) {
     fprintf(stderr, "GL: Freed Surface %d\n", surfaceId);
 }
 
-// Binds the given surface (or -1 for the main FBO) and sets a matching ortho projection.
+// Binds the given surface (or APPLICATION_SURFACE_ID for the main FBO) and sets a matching ortho projection.
 static bool glLegacySetRenderTarget(Renderer* renderer, int32_t surfaceId) {
     GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
 
-    if (surfaceId == -1) {
+    if (surfaceId == APPLICATION_SURFACE_ID) {
         glBindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
         glViewport(gl->base.CPortX, gl->base.CPortY, gl->base.CPortW, gl->base.CPortH);
         glMatrixMode(GL_PROJECTION);
@@ -1400,9 +1400,9 @@ static bool glLegacySetRenderTarget(Renderer* renderer, int32_t surfaceId) {
     return true;
 }
 
-// Resolves a surfaceID (or -1 for the main FBO) to a GL texture and its size.
+// Resolves a surfaceID (or APPLICATION_SURFACE_ID for the main FBO) to a GL texture and its size.
 static bool resolveSurfaceTexture(GLLegacyRenderer* gl, int32_t surfaceId, GLuint* outTexId, int32_t* outW, int32_t* outH) {
-    if (surfaceId == -1) {
+    if (surfaceId == APPLICATION_SURFACE_ID) {
         *outTexId = gl->fboTexture;
         *outW = gl->fboWidth;
         *outH = gl->fboHeight;
