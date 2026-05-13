@@ -2432,6 +2432,25 @@ static void gsGpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t df
     gsCommitBlend(gs);
 }
 
+// While a surface is bound, FBA + alpha-test follow the GML's blend-enable signal:
+// * blend ON  -> FBA=1, ATE=1: sprite-friendly. Opaque texels get a-bit forced to 1; transparent atlas texels (alpha=0) are discarded so the cleared a-bit=0 survives the surrounding region.
+// * blend OFF -> FBA=0, ATE=0: mask-friendly. Source alpha passes straight through to the CT16 a-bit so that masks can carve actual transparent holes in the surface.
+// Outside a surface this helper is a no-op; the main FB keeps its existing FBA-via-colorwriteenable + ATE-via-alphatestenable behavior.
+static void gsApplySurfaceWriteMode(GsRenderer* gs) {
+    if (gs->currentSurface == -1) return;
+    if (gs->surfaces[gs->currentSurface].chunkCount == 0) return; // phantom: leave FBMSK masking everything
+    uint8_t wantFba = gs->blendEnabled ? 1 : 0;
+    uint8_t wantAte = gs->blendEnabled ? 1 : 0;
+    if (gs->fba != wantFba) gsApplyFBA(gs, wantFba);
+    if (gs->gsGlobal->Test->ATE != wantAte) {
+        gs->gsGlobal->Test->ATE = wantAte;
+        gs->gsGlobal->Test->ATST = 6;   // GREATER
+        gs->gsGlobal->Test->AREF = 0;
+        gs->gsGlobal->Test->AFAIL = 0;  // KEEP (no write on fail)
+        gsKit_set_test(gs->gsGlobal, wantAte ? GS_ATEST_ON : GS_ATEST_OFF);
+    }
+}
+
 static void gsGpuSetBlendEnable(Renderer* renderer, bool enable) {
     GsRenderer* gs = (GsRenderer*) renderer;
     // PrimAlphaEnable is OR'd into the PRIM bits gsKit emits with each primitive,
@@ -2439,6 +2458,8 @@ static void gsGpuSetBlendEnable(Renderer* renderer, bool enable) {
     if (gs->blendEnabled == enable) return;
     gs->blendEnabled = enable;
     gsCommitBlend(gs);
+    // Inside a surface, FBA + alpha-test track blend state so that "gpu_set_blendenable(false); draw alpha=0" punches an actual hole, while regular blended sprite draws keep their force-opaque + discard-transparent semantics.
+    gsApplySurfaceWriteMode(gs);
 }
 
 static bool gsGpuGetBlendEnable(Renderer* renderer) {
@@ -2678,9 +2699,10 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
         gs->gsGlobal->Height = gs->savedFbHeight;
         gs->gsGlobal->PSM = gs->savedFbPSM;
         gsApplyFrameSwitch(gs);
-        // Restore the alpha-test enable state the GML had asked for (off by default; surface-only path is the one that flips it on).
+        // Restore the alpha-test enable state the GML had asked for, and the main FB's FBA (typically 1 to keep its a-bit opaque).
         gs->gsGlobal->Test->ATE = gs->savedAte;
         gsKit_set_test(gs->gsGlobal, gs->savedAte ? GS_ATEST_ON : GS_ATEST_OFF);
+        if (gs->fba != gs->savedFba) gsApplyFBA(gs, gs->savedFba);
         // Restore view transform so subsequent draws use the GML view coords again.
         gs->scaleX = gs->savedScaleX;
         gs->scaleY = gs->savedScaleY;
@@ -2720,6 +2742,7 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
     gs->savedFbHeight = gs->gsGlobal->Height;
     gs->savedFbPSM = gs->gsGlobal->PSM;
     gs->savedAte = gs->gsGlobal->Test->ATE;
+    gs->savedFba = gs->fba;
     gs->savedScaleX = gs->scaleX;
     gs->savedScaleY = gs->scaleY;
     gs->savedOffsetX = gs->offsetX;
@@ -2734,13 +2757,6 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
     gs->gsGlobal->PSM = GS_PSM_CT16;
     gsApplyFrameSwitch(gs);
 
-    // Discard zero-alpha texels via alpha test. FBA stays at 1 (force-opaque on writes), which combined with ATST=GREATER, AREF=0, AFAIL=KEEP yields binary alpha semantics suitable for a CT16 surface: opaque texels get a-bit=1, transparent texels skip the write so the cleared a-bit=0 survives.
-    gs->gsGlobal->Test->ATE = 1;
-    gs->gsGlobal->Test->ATST = 6;   // GREATER (gsInit already sets this, but be explicit)
-    gs->gsGlobal->Test->AREF = 0;
-    gs->gsGlobal->Test->AFAIL = 0;  // KEEP (no write at all on fail)
-    gsKit_set_test(gs->gsGlobal, GS_ATEST_ON);
-
     // Identity view: surface-local draws like draw_sprite(spr_tensionbar, 1, 0, 0) must land at exactly (0, 0) in surface space.
     gs->scaleX = 1.0f;
     gs->scaleY = 1.0f;
@@ -2749,6 +2765,9 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
     gs->viewX = 0;
     gs->viewY = 0;
     gs->currentSurface = surfaceID;
+
+    // Pick FBA + alpha-test based on the GML's current blend-enable state. See gsApplySurfaceWriteMode for the rationale.
+    gsApplySurfaceWriteMode(gs);
     return true;
 }
 

@@ -179,6 +179,7 @@ typedef struct {
     uint16_t savedFbHeight;
     uint8_t  savedFbPSM;
     uint8_t  savedAte;              // Test->ATE at the moment of push (so we can restore the GML's last alpha-test enable choice on pop).
+    uint8_t  savedFba;              // gs->fba at the moment of push (main FB normally has FBA=1; surface flips it based on blend state).
     uint32_t savedFbmsk;            // FBMSK at the moment of push (so a phantom-surface set_target can mask all writes and restore on pop).
 
     // Saved view transform captured on push, restored on pop, so the GML view scale/offset doesn't bleed into surface-local draws.
