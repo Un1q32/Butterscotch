@@ -88,9 +88,7 @@ typedef struct {
     bool (*setRenderTarget)(Renderer* renderer, int32_t surfaceID);
     float (*getSurfaceWidth)(Renderer* renderer, int32_t surfaceID);
     float (*getSurfaceHeight)(Renderer* renderer, int32_t surfaceID);
-    void (*drawSurface)(Renderer* renderer, int32_t surfaceID, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha);
-    void (*drawSurfacePart)(Renderer* renderer, int32_t surfaceID, int32_t x, int32_t y, int32_t left, int32_t top, int32_t width, int32_t height, float xscale, float yscale, uint32_t color, float alpha);
-    void (*drawSurfaceStretched)(Renderer* renderer, int32_t surfaceID, float x, float y, float width, float height);
+    void (*drawSurface)(Renderer* renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha);
     void (*surfaceResize)(Renderer* renderer, int32_t surfaceID, int32_t width, int32_t height);
     void (*surfaceFree)(Renderer* renderer, int32_t surfaceID);
     void (*surfaceCopy)(Renderer* renderer, int32_t DestSurfaceID, int32_t DestX, int32_t DestY, int32_t SrcSurfaceID, int32_t SrcX, int32_t SrcY, int32_t SrcW, int32_t SrcH, bool part);

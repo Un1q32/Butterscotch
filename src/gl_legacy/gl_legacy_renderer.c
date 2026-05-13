@@ -1418,11 +1418,19 @@ static bool resolveSurfaceTexture(GLLegacyRenderer* gl, int32_t surfaceId, GLuin
 
 // Surface textures are stored with Y=0 at the bottom (OpenGL convention), but GML treats
 // surfaces top-down, so we sample with V flipped (v0=1, v1=0) when drawing them.
-static void glLegacyDrawSurface(Renderer* renderer, int32_t surfaceId, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
+static void glLegacyDrawSurface(Renderer* renderer, int32_t surfaceId, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
     GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
     GLuint texId;
     int32_t texW, texH;
     if (!resolveSurfaceTexture(gl, surfaceId, &texId, &texW, &texH)) return;
+
+    if (0 > srcWidth) { srcLeft = 0; srcTop = 0; srcWidth = texW; srcHeight = texH; }
+
+    // top-down GML coords -> flipped V for our bottom-up texture
+    float u0 = (float) srcLeft / (float) texW;
+    float u1 = (float) (srcLeft + srcWidth) / (float) texW;
+    float v0 = 1.0f - (float) srcTop / (float) texH;
+    float v1 = 1.0f - (float) (srcTop + srcHeight) / (float) texH;
 
     float r = (float) BGR_R(color) / 255.0f;
     float g = (float) BGR_G(color) / 255.0f;
@@ -1433,67 +1441,17 @@ static void glLegacyDrawSurface(Renderer* renderer, int32_t surfaceId, float x, 
     Matrix4f_setTransform2D(&transform, x, y, xscale, yscale, angleRad);
 
     float x0, y0, x1, y1, x2, y2, x3, y3;
-    Matrix4f_transformPoint(&transform, 0.0f,         0.0f,         &x0, &y0);
-    Matrix4f_transformPoint(&transform, (float) texW, 0.0f,         &x1, &y1);
-    Matrix4f_transformPoint(&transform, (float) texW, (float) texH, &x2, &y2);
-    Matrix4f_transformPoint(&transform, 0.0f,         (float) texH, &x3, &y3);
-
-    glBindTexture(GL_TEXTURE_2D, texId);
-    glBegin(GL_QUADS);
-        glColor4f(r, g, b, alpha); glTexCoord2f(0.0f, 1.0f); glVertex2f(x0, y0);
-        glColor4f(r, g, b, alpha); glTexCoord2f(1.0f, 1.0f); glVertex2f(x1, y1);
-        glColor4f(r, g, b, alpha); glTexCoord2f(1.0f, 0.0f); glVertex2f(x2, y2);
-        glColor4f(r, g, b, alpha); glTexCoord2f(0.0f, 0.0f); glVertex2f(x3, y3);
-    glEnd();
-}
-
-static void glLegacyDrawSurfacePart(Renderer* renderer, int32_t surfaceId, int32_t x, int32_t y, int32_t left, int32_t top, int32_t width, int32_t height, float xscale, float yscale, uint32_t color, float alpha) {
-    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
-    GLuint texId;
-    int32_t texW, texH;
-    if (!resolveSurfaceTexture(gl, surfaceId, &texId, &texW, &texH)) return;
-
-    float u0 = (float) left / (float) texW;
-    float u1 = (float) (left + width) / (float) texW;
-    // top-down GML coords -> flipped V for our bottom-up texture
-    float v0 = 1.0f - (float) top / (float) texH;
-    float v1 = 1.0f - (float) (top + height) / (float) texH;
-
-    float r = (float) BGR_R(color) / 255.0f;
-    float g = (float) BGR_G(color) / 255.0f;
-    float b = (float) BGR_B(color) / 255.0f;
-
-    float x0 = (float) x;
-    float y0 = (float) y;
-    float x1 = x0 + (float) width  * xscale;
-    float y1 = y0 + (float) height * yscale;
+    Matrix4f_transformPoint(&transform, 0.0f,             0.0f,             &x0, &y0);
+    Matrix4f_transformPoint(&transform, (float) srcWidth, 0.0f,             &x1, &y1);
+    Matrix4f_transformPoint(&transform, (float) srcWidth, (float) srcHeight, &x2, &y2);
+    Matrix4f_transformPoint(&transform, 0.0f,             (float) srcHeight, &x3, &y3);
 
     glBindTexture(GL_TEXTURE_2D, texId);
     glBegin(GL_QUADS);
         glColor4f(r, g, b, alpha); glTexCoord2f(u0, v0); glVertex2f(x0, y0);
-        glColor4f(r, g, b, alpha); glTexCoord2f(u1, v0); glVertex2f(x1, y0);
-        glColor4f(r, g, b, alpha); glTexCoord2f(u1, v1); glVertex2f(x1, y1);
-        glColor4f(r, g, b, alpha); glTexCoord2f(u0, v1); glVertex2f(x0, y1);
-    glEnd();
-}
-
-static void glLegacyDrawSurfaceStretched(Renderer* renderer, int32_t surfaceId, float x, float y, float width, float height) {
-    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
-    GLuint texId;
-    MAYBE_UNUSED int32_t texW, texH;
-    if (!resolveSurfaceTexture(gl, surfaceId, &texId, &texW, &texH)) return;
-
-    float x0 = x;
-    float y0 = y;
-    float x1 = x + width;
-    float y1 = y + height;
-
-    glBindTexture(GL_TEXTURE_2D, texId);
-    glBegin(GL_QUADS);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glTexCoord2f(0.0f, 1.0f); glVertex2f(x0, y0);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glTexCoord2f(1.0f, 1.0f); glVertex2f(x1, y0);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glTexCoord2f(1.0f, 0.0f); glVertex2f(x1, y1);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glTexCoord2f(0.0f, 0.0f); glVertex2f(x0, y1);
+        glColor4f(r, g, b, alpha); glTexCoord2f(u1, v0); glVertex2f(x1, y1);
+        glColor4f(r, g, b, alpha); glTexCoord2f(u1, v1); glVertex2f(x2, y2);
+        glColor4f(r, g, b, alpha); glTexCoord2f(u0, v1); glVertex2f(x3, y3);
     glEnd();
 }
 
@@ -1516,9 +1474,7 @@ static bool glLegacySurfaceExists(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED 
 static bool glLegacySetRenderTarget(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
 static float glLegacyGetSurfaceWidth(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
 static float glLegacyGetSurfaceHeight(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
-static void glLegacyDrawSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED float angleDeg, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
-static void glLegacyDrawSurfacePart(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t x, MAYBE_UNUSED int32_t y, MAYBE_UNUSED int32_t left, MAYBE_UNUSED int32_t top, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
-static void glLegacyDrawSurfaceStretched(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float width, MAYBE_UNUSED float height) {}
+static void glLegacyDrawSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t srcLeft, MAYBE_UNUSED int32_t srcTop, MAYBE_UNUSED int32_t srcWidth, MAYBE_UNUSED int32_t srcHeight, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED float angleDeg, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
 static void glLegacySurfaceResize(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) {}
 static void glLegacySurfaceFree(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) {}
 static void glLegacySurfaceCopy(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t DestSurfaceID, MAYBE_UNUSED int32_t DestX, MAYBE_UNUSED int32_t DestY, MAYBE_UNUSED int32_t SrcSurfaceID, MAYBE_UNUSED int32_t SrcX, MAYBE_UNUSED int32_t SrcY, MAYBE_UNUSED int32_t SrcW, MAYBE_UNUSED int32_t SrcH, MAYBE_UNUSED bool part) {}
@@ -1567,8 +1523,6 @@ static RendererVtable glVtable = {
     .getSurfaceWidth = glLegacyGetSurfaceWidth,
     .getSurfaceHeight = glLegacyGetSurfaceHeight,
     .drawSurface = glLegacyDrawSurface,
-    .drawSurfacePart = glLegacyDrawSurfacePart,
-    .drawSurfaceStretched = glLegacyDrawSurfaceStretched,
     .surfaceResize = glLegacySurfaceResize,
     .surfaceFree = glLegacySurfaceFree,
     .surfaceCopy = glLegacySurfaceCopy,

@@ -1598,8 +1598,6 @@ static void validateRendererVtable(Renderer* renderer) {
     requireNotNullFunction(getSurfaceWidth);
     requireNotNullFunction(getSurfaceHeight);
     requireNotNullFunction(drawSurface);
-    requireNotNullFunction(drawSurfacePart);
-    requireNotNullFunction(drawSurfaceStretched);
     requireNotNullFunction(surfaceResize);
     requireNotNullFunction(surfaceFree);
     requireNotNullFunction(surfaceCopy);

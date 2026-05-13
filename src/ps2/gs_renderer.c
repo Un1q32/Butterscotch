@@ -2748,14 +2748,17 @@ static float gsGetSurfaceHeight(Renderer* renderer, int32_t surfaceID) {
     return (float) gs->surfaces[surfaceID].height;
 }
 
-static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
+static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
     GsRenderer* gs = (GsRenderer*) renderer;
     if (!gsSurfaceIsLive(gs, surfaceID)) return;
 
     Surface* s = &gs->surfaces[surfaceID];
     if (s->chunkCount == 0) return; // phantom surface — fully transparent, nothing to draw
-    float worldW = (float) s->width * xscale;
-    float worldH = (float) s->height * yscale;
+
+    if (0 > srcWidth) { srcLeft = 0; srcTop = 0; srcWidth = s->width; srcHeight = s->height; }
+
+    float worldW = (float) srcWidth * xscale;
+    float worldH = (float) srcHeight * yscale;
 
     if (angleDeg != 0.0f) {
         // Tension bar (our only current consumer) never rotates. Add a quad_texture path when a game needs it.
@@ -2790,15 +2793,16 @@ static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, float x, float 
     uint8_t a = alphaToGS(alpha);
     u64 gsColor = GS_SETREG_RGBAQ(r, g, b, a, 0x00);
 
-    float u0 = 0.0f, v0 = 0.0f;
-    float u1 = (float) s->width;
-    float v1 = (float) s->height;
+    float u0 = (float) srcLeft;
+    float v0 = (float) srcTop;
+    float u1 = (float) (srcLeft + srcWidth);
+    float v1 = (float) (srcTop + srcHeight);
 
-    // REGION_CLAMP the sampler to (0..width-1, 0..height-1) so any scale/rotation rounding never reads the padded columns/rows. See project_ps2_ct16_region_clamp.
-    gs->gsGlobal->Clamp->MINU = 0;
-    gs->gsGlobal->Clamp->MAXU = s->width  - 1;
-    gs->gsGlobal->Clamp->MINV = 0;
-    gs->gsGlobal->Clamp->MAXV = s->height - 1;
+    // REGION_CLAMP the sampler to the src rect so any scale rounding never reads padded columns/rows. See project_ps2_ct16_region_clamp.
+    gs->gsGlobal->Clamp->MINU = srcLeft;
+    gs->gsGlobal->Clamp->MAXU = srcLeft + srcWidth  - 1;
+    gs->gsGlobal->Clamp->MINV = srcTop;
+    gs->gsGlobal->Clamp->MAXV = srcTop  + srcHeight - 1;
     gsKit_set_clamp(gs->gsGlobal, GS_CMODE_REGION_CLAMP);
 
     gsKit_prim_sprite_texture(gs->gsGlobal, &tex, sx0, sy0, u0, v0, sx1, sy1, u1, v1, 0, gsColor);
@@ -2806,9 +2810,6 @@ static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, float x, float 
     // Restore default REPEAT so subsequent atlas draws aren't stuck on this region.
     gsKit_set_clamp(gs->gsGlobal, GS_CMODE_REPEAT);
 }
-
-static void gsDrawSurfacePart(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t x, MAYBE_UNUSED int32_t y, MAYBE_UNUSED int32_t left, MAYBE_UNUSED int32_t top, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
-static void gsDrawSurfaceStretched(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float width, MAYBE_UNUSED float height) {}
 static void gsSurfaceResize(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) {}
 
 static void gsSurfaceFree(Renderer* renderer, int32_t surfaceID) {
@@ -2876,8 +2877,6 @@ static RendererVtable gsVtable = {
     .getSurfaceWidth = gsGetSurfaceWidth,
     .getSurfaceHeight = gsGetSurfaceHeight,
     .drawSurface = gsDrawSurface,
-    .drawSurfacePart = gsDrawSurfacePart,
-    .drawSurfaceStretched = gsDrawSurfaceStretched,
     .surfaceResize = gsSurfaceResize,
     .surfaceFree = gsSurfaceFree,
     .surfaceCopy = gsSurfaceCopy,
