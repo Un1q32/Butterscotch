@@ -505,53 +505,6 @@ static void initEeCache(GsRenderer* gs) {
     }
 }
 
-// Preload atlases sequentially into the EE cache until the buffer is full.
-// Reads compressed data from disc, decompresses, and stores uncompressed pixels in the cache.
-static void preloadEeCache(GsRenderer* gs) {
-    uint32_t preloaded = 0;
-
-    // Allocate a temp buffer for reading compressed data from disc
-    uint32_t maxDiskSize = 0;
-    repeat(gs->atlasCount, i) {
-        if (gs->atlasDataSizes[i] > maxDiskSize) maxDiskSize = gs->atlasDataSizes[i];
-    }
-    uint8_t* tempBuf = (uint8_t*) safeMemalign(128, maxDiskSize);
-
-    repeat(gs->atlasCount, i) {
-        uint8_t bpp = gs->atlasBpp[i];
-        uint16_t width = gs->atlasWidth[i];
-        uint16_t height = gs->atlasHeight[i];
-        uint32_t uncompSize = atlasUncompressedSize(width, height, bpp);
-        if (gs->eeCacheBumpPtr + uncompSize > gs->eeCacheCapacity) {
-            break;
-        }
-
-        // Read compressed data from disc into temp buffer
-        uint32_t dataSize = gs->atlasDataSizes[i];
-        fseek(gs->texturesFile, (long) gs->atlasOffsets[i], SEEK_SET);
-        size_t bytesRead = fread(tempBuf, 1, dataSize, gs->texturesFile);
-        if (bytesRead != dataSize) {
-            fprintf(stderr, "GsRenderer: EE cache preload short read for atlas %u (expected %u, got %zu)\n", i, dataSize, bytesRead);
-            break;
-        }
-
-        // Decompress directly into the EE cache
-        decompressAtlasPixels(tempBuf, gs->eeCache + gs->eeCacheBumpPtr);
-
-        gs->eeCacheEntries[i].atlasId = (int16_t) i;
-        gs->eeCacheEntries[i].offset = gs->eeCacheBumpPtr;
-        gs->eeCacheEntries[i].size = uncompSize;
-        gs->eeCacheEntries[i].lastUsed = gs->frameCounter;
-
-        gs->eeCacheBumpPtr += uncompSize;
-        preloaded++;
-    }
-
-    free(tempBuf);
-
-    fprintf(stderr, "GsRenderer: EE cache initialized - %u MB, %u atlases preloaded (%u KB used)\n", EE_CACHE_CAPACITY / (1024 * 1024), preloaded, gs->eeCacheBumpPtr / 1024);
-}
-
 // Look up an atlas in the EE cache. Returns pointer to cached data or nullptr.
 static uint8_t* eeCacheLookup(GsRenderer* gs, uint16_t atlasId) {
     if (atlasId >= gs->atlasCount) return nullptr;
@@ -1139,7 +1092,6 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
 
     // Initialize EE RAM cache for compressed atlas data
     initEeCache(gs);
-    preloadEeCache(gs);
 
     fprintf(stderr, "GsRenderer: Initialized (textured mode)\n");
 }
