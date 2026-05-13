@@ -2825,6 +2825,12 @@ static void gsSurfaceCopy(Renderer* renderer, int32_t destSurfaceID, int32_t des
         h = srcHeight;
     }
 
+    // Same fix as the one from gsCreateSpriteFromSurface
+    if (srcSurfaceID == APPLICATION_SURFACE_ID && part) {
+        srcX += (int32_t) floorf(gs->offsetX);
+        srcY += (int32_t) floorf(gs->offsetY);
+    }
+
     // Clip source rect to source bounds, propagating the offset into the destination so we copy the right sub-region.
     if (0 > srcX) { destX -= srcX; w += srcX; srcX = 0; }
     if (0 > srcY) { destY -= srcY; h += srcY; srcY = 0; }
