@@ -2574,13 +2574,6 @@ static int32_t gsCreateSurface(Renderer* renderer, int32_t width, int32_t height
     if (tbw == 0) tbw = 1;
     uint32_t paddedWidth = (uint32_t) tbw * 64;
     uint32_t bytes = paddedWidth * (uint32_t) height * 2; // CT16 = 2 bytes/pixel
-    if (bytes > SURFACE_MAX_BYTES) {
-        fprintf(stderr, "GsRenderer: surface_create(%d, %d) exceeds %u byte cap (would need %u bytes)\n", width, height, SURFACE_MAX_BYTES, bytes);
-        return -1;
-    }
-
-    int chunksNeeded = (int) ((bytes + VRAM_CHUNK_SIZE - 1) / VRAM_CHUNK_SIZE);
-    if (chunksNeeded <= 0) chunksNeeded = 1;
 
     // Reuse a freed row if possible so the table doesn't grow unbounded.
     int32_t row = -1;
@@ -2594,11 +2587,31 @@ static int32_t gsCreateSurface(Renderer* renderer, int32_t width, int32_t height
         row = (int32_t) (arrlen(gs->surfaces) - 1);
     }
 
-    // Allocate from the non-reserved tail of the chunk pool (same as snapshots).
-    int32_t firstChunk = allocateChunks(gs, chunksNeeded, gs->reservedAtlasChunks);
-    if (0 > firstChunk) {
-        fprintf(stderr, "GsRenderer: surface_create(%d, %d) failed: cannot allocate %d chunk(s)\n", width, height, chunksNeeded);
-        return -1;
+    // When we aren't able to allocate this, we return a "phantom" row
+    int chunksNeeded = (int) ((bytes + VRAM_CHUNK_SIZE - 1) / VRAM_CHUNK_SIZE);
+    if (0 >= chunksNeeded) chunksNeeded = 1;
+
+    int32_t firstChunk = -1;
+    const char* phantomReason = nullptr;
+    if (bytes > SURFACE_MAX_BYTES) {
+        phantomReason = "exceeds per-surface byte cap";
+    } else {
+        // Allocate from the non-reserved tail of the chunk pool (same as snapshots).
+        firstChunk = allocateChunks(gs, chunksNeeded, gs->reservedAtlasChunks);
+        if (0 > firstChunk)
+            phantomReason = "out of VRAM";
+    }
+
+    if (phantomReason != nullptr) {
+        fprintf(stderr, "GsRenderer: surface_create(%d, %d) phantom (%s); needed %d chunks (%u bytes)\n", width, height, phantomReason, chunksNeeded, bytes);
+        Surface* s = &gs->surfaces[row];
+        s->firstChunk = 0;
+        s->chunkCount = 0;
+        s->width = (uint16_t) width;
+        s->height = (uint16_t) height;
+        s->tbw = tbw;
+        s->inUse = true;
+        return row;
     }
 
     // Pin chunks to this surface.
@@ -2636,6 +2649,13 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
 
     if (surfaceID == APPLICATION_SURFACE_ID) {
         if (gs->currentSurface == -1) return true; // already on the main FB
+        bool wasPhantom = gs->surfaces[gs->currentSurface].chunkCount == 0;
+        if (wasPhantom) {
+            // Phantom pop: we never touched the FRAME/view; just restore the writemask we clobbered to discard the bar's draws.
+            gsApplyFBMask(gs, gs->savedFbmsk);
+            gs->currentSurface = -1;
+            return true;
+        }
         // Restore framebuffer state captured on the most recent push.
         gs->gsGlobal->ScreenBuffer[gs->gsGlobal->ActiveBuffer & 1] = gs->savedScreenBufferAddr;
         gs->gsGlobal->Width = gs->savedFbWidth;
@@ -2667,6 +2687,15 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
     }
 
     Surface* s = &gs->surfaces[surfaceID];
+
+    if (s->chunkCount == 0) {
+        // Phantom push: nothing to render into. Mask all FB writes for the duration so the bar's draws fall on the floor, then mark currentSurface so reset_target knows to undo this.
+        gs->savedFbmsk = gs->fbmsk;
+        gsApplyFBMask(gs, 0xFFFFFFFFu);
+        gs->currentSurface = surfaceID;
+        return true;
+    }
+
     uint32_t vramAddr = gs->textureVramBase + (uint32_t) s->firstChunk * VRAM_CHUNK_SIZE;
 
     // Save framebuffer + view state so surface_reset_target can restore them.
@@ -2724,6 +2753,7 @@ static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, float x, float 
     if (!gsSurfaceIsLive(gs, surfaceID)) return;
 
     Surface* s = &gs->surfaces[surfaceID];
+    if (s->chunkCount == 0) return; // phantom surface — fully transparent, nothing to draw
     float worldW = (float) s->width * xscale;
     float worldH = (float) s->height * yscale;
 
