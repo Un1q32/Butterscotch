@@ -2613,7 +2613,7 @@ static int32_t gsCreateSurface(Renderer* renderer, int32_t width, int32_t height
     uint16_t tbw = (uint16_t) ((width + 63) / 64);
     if (tbw == 0) tbw = 1;
     uint32_t paddedWidth = (uint32_t) tbw * 64;
-    uint32_t bytes = paddedWidth * (uint32_t) height * 2; // CT16 = 2 bytes/pixel
+    uint32_t bytes = gsKit_texture_size(paddedWidth, height, GS_PSM_CT16);
 
     // Reuse a freed row if possible so the table doesn't grow unbounded.
     int32_t row = -1;
