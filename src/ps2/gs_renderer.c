@@ -2491,8 +2491,7 @@ static void gsDrawTile(Renderer* renderer, RoomTile* tile, float offsetX, float 
 
 static int32_t gsCreateSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) { return 0; }
 static bool gsSurfaceExists(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
-static bool gsSetSurfaceTarget(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
-static bool gsResetSurfaceTarget(MAYBE_UNUSED Renderer* renderer) { return false; }
+static bool gsSetRenderTarget(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
 static float gsGetSurfaceWidth(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
 static float gsGetSurfaceHeight(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
 static void gsDrawSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED float angleDeg, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
@@ -2540,8 +2539,7 @@ static RendererVtable gsVtable = {
     .drawTiledPart = gsDrawTiledPart,
     .createSurface = gsCreateSurface,
     .surfaceExists = gsSurfaceExists,
-    .setSurfaceTarget = gsSetSurfaceTarget,
-    .resetSurfaceTarget = gsResetSurfaceTarget,
+    .setRenderTarget = gsSetRenderTarget,
     .getSurfaceWidth = gsGetSurfaceWidth,
     .getSurfaceHeight = gsGetSurfaceHeight,
     .drawSurface = gsDrawSurface,
