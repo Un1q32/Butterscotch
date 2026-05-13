@@ -74,6 +74,7 @@ typedef struct {
     void (*gpuSetAlphaTestEnable)(Renderer* renderer, bool enable);
     void (*gpuSetAlphaTestRef)(Renderer* renderer, uint8_t ref);
     void (*gpuSetColorWriteEnable)(Renderer* renderer, bool red, bool green, bool blue, bool alpha);
+    void (*gpuGetColorWriteEnable)(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha);
     bool (*gpuGetBlendEnable)(Renderer* renderer);
     // Optional: when enabled, replaces output RGB with the fog color (preserving alpha)
     void (*gpuSetFog)(Renderer* renderer, bool enable, uint32_t color);

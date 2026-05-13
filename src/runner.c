@@ -1592,6 +1592,7 @@ static void validateRendererVtable(Renderer* renderer) {
     requireNotNullFunction(gpuSetAlphaTestEnable);
     requireNotNullFunction(gpuSetAlphaTestRef);
     requireNotNullFunction(gpuSetColorWriteEnable);
+    requireNotNullFunction(gpuGetColorWriteEnable);
     requireNotNullFunction(createSurface);
     requireNotNullFunction(surfaceExists);
     requireNotNullFunction(setRenderTarget);

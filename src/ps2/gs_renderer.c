@@ -1088,6 +1088,10 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
     // Enable alpha blending
     gs->gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gs->blendEnabled = true;
+    gs->colorWriteR = true;
+    gs->colorWriteG = true;
+    gs->colorWriteB = true;
+    gs->colorWriteA = true;
     gs->currentBlendAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0);
 
     // gsKit defaults Test->AREF to 0x80, but GMS's gpu_get_alphatestref() defaults to 0. Scripts that enable alpha test without calling gpu_set_alphatestref expect ref=0.
@@ -2443,6 +2447,14 @@ static bool gsGpuGetBlendEnable(Renderer* renderer) {
     return gs->blendEnabled;
 }
 
+static void gsGpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    *red = gs->colorWriteR;
+    *green = gs->colorWriteG;
+    *blue = gs->colorWriteB;
+    *alpha = gs->colorWriteA;
+}
+
 
 static void gsGpuSetAlphaTestEnable(Renderer* renderer, bool enable) {
     GsRenderer* gs = (GsRenderer*) renderer;
@@ -2468,6 +2480,10 @@ static void gsGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {
 
 static void gsGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {
     GsRenderer* gs = (GsRenderer*) renderer;
+    gs->colorWriteR = red;
+    gs->colorWriteG = green;
+    gs->colorWriteB = blue;
+    gs->colorWriteA = alpha;
     // FBMSK: bit=1 means MASK that bit (don't write). Layout is the conceptual RGBA8888 mapping
     // even when the framebuffer is CT16 - the GS remaps the relevant bits internally.
     u32 fbmsk = 0;
@@ -2926,6 +2942,7 @@ static RendererVtable gsVtable = {
     .gpuSetAlphaTestEnable = gsGpuSetAlphaTestEnable,
     .gpuSetAlphaTestRef = gsGpuSetAlphaTestRef,
     .gpuSetColorWriteEnable = gsGpuSetColorWriteEnable,
+    .gpuGetColorWriteEnable = gsGpuGetColorWriteEnable,
     .drawTile = gsDrawTile,
     .drawTiled = gsDrawTiled,
     .drawTiledPart = gsDrawTiledPart,

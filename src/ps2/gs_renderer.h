@@ -160,6 +160,7 @@ typedef struct {
     // That breaks textured alpha-mask sprites.
     // To keep TCC=1 always, we leave PrimAlphaEnable=ON and emulate blend-disable by switching ALPHA to an identity equation (Cs passes through unchanged).
     bool blendEnabled;       // What the GML last requested via gpu_set_blendenable
+    bool colorWriteR, colorWriteG, colorWriteB, colorWriteA; // What the GML last requested via gpu_set_colorwriteenable
     u64 currentBlendAlpha;   // The ALPHA register value the GML last requested via gpu_set_blendmode[_ext]
 
     // Snapshot table for sprite_create_from_surface(application_surface, ...). VRAM lives in the shared chunk pool, pinned via VRAMChunk.snapshotIdx.

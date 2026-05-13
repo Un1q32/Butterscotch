@@ -1270,7 +1270,20 @@ static void glGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {
 }
 
 static void glGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {
+    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
+    gl->colorWriteR = red;
+    gl->colorWriteG = green;
+    gl->colorWriteB = blue;
+    gl->colorWriteA = alpha;
     glColorMask(red, green, blue, alpha);
+}
+
+static void glGpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha) {
+    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
+    *red = gl->colorWriteR;
+    *green = gl->colorWriteG;
+    *blue = gl->colorWriteB;
+    *alpha = gl->colorWriteA;
 }
 
 // ===[ Surfaces ]===
@@ -1514,6 +1527,7 @@ static RendererVtable glVtable = {
     .gpuSetAlphaTestEnable = glGpuSetAlphaTestEnable,
     .gpuSetAlphaTestRef = glGpuSetAlphaTestRef,
     .gpuSetColorWriteEnable = glGpuSetColorWriteEnable,
+    .gpuGetColorWriteEnable = glGpuGetColorWriteEnable,
     .gpuGetBlendEnable = glGpuGetBlendEnable,
     .drawTile = nullptr,
     .drawTiled = glDrawTiled,
@@ -1540,5 +1554,9 @@ Renderer* GLLegacyRenderer_create(void) {
     gl->base.drawHalign = 0;
     gl->base.drawValign = 0;
     gl->base.circlePrecision = 24;
+    gl->colorWriteR = true;
+    gl->colorWriteG = true;
+    gl->colorWriteB = true;
+    gl->colorWriteA = true;
     return (Renderer*) gl;
 }

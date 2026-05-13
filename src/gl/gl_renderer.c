@@ -142,6 +142,10 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->uFogColor = glGetUniformLocation(gl->shaderProgram, "uFogColor");
     gl->alphaTestEnable = false;
     gl->alphaTestRef = 0.0f;
+    gl->colorWriteR = true;
+    gl->colorWriteG = true;
+    gl->colorWriteB = true;
+    gl->colorWriteA = true;
     gl->fogEnable = false;
     gl->fogColor = 0;
     glUseProgram(gl->shaderProgram);
@@ -1657,8 +1661,21 @@ static void glGpuSetAlphaTestRef(Renderer* renderer, uint8_t ref) {
 }
 
 static void glGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha) {
-    flushBatch((GLRenderer*)renderer);
+    GLRenderer* gl = (GLRenderer*) renderer;
+    flushBatch(gl);
+    gl->colorWriteR = red;
+    gl->colorWriteG = green;
+    gl->colorWriteB = blue;
+    gl->colorWriteA = alpha;
     glColorMask(red, green, blue, alpha);
+}
+
+static void glGpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha) {
+    GLRenderer* gl = (GLRenderer*) renderer;
+    *red = gl->colorWriteR;
+    *green = gl->colorWriteG;
+    *blue = gl->colorWriteB;
+    *alpha = gl->colorWriteA;
 }
 
 static void glGpuSetFog(Renderer* renderer, bool enable, uint32_t color) {
@@ -1705,6 +1722,7 @@ static RendererVtable glVtable = {
     .gpuSetAlphaTestEnable = glGpuSetAlphaTestEnable,
     .gpuSetAlphaTestRef = glGpuSetAlphaTestRef,
     .gpuSetColorWriteEnable = glGpuSetColorWriteEnable,
+    .gpuGetColorWriteEnable = glGpuGetColorWriteEnable,
     .gpuSetFog = glGpuSetFog,
     .gpuGetBlendEnable = glGpuGetBlendEnable,
     .drawTile = nullptr,

@@ -9120,6 +9120,17 @@ static RValue builtinGpuSetColorWriteEnable(VMContext* ctx, RValue* args, int32_
     return RValue_makeUndefined();
 }
 
+static RValue builtinGpuGetColorWriteEnable(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    bool r, g, b, a;
+    ctx->runner->renderer->vtable->gpuGetColorWriteEnable(ctx->runner->renderer, &r, &g, &b, &a);
+    GMLArray* out = GMLArray_create(4);
+    *GMLArray_slot(out, 0) = RValue_makeReal(r ? 1.0 : 0.0);
+    *GMLArray_slot(out, 1) = RValue_makeReal(g ? 1.0 : 0.0);
+    *GMLArray_slot(out, 2) = RValue_makeReal(b ? 1.0 : 0.0);
+    *GMLArray_slot(out, 3) = RValue_makeReal(a ? 1.0 : 0.0);
+    return RValue_makeArray(out);
+}
+
 // ===[ REGISTRATION ]===
 
 void VMBuiltins_registerAll(VMContext* ctx) {
@@ -9712,6 +9723,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx,"gpu_set_alphatestenable", builtinGpuSetAlphaTestEnable);
     VM_registerBuiltin(ctx,"gpu_set_alphatestref", builtinGpuSetAlphaTestRef);
     VM_registerBuiltin(ctx,"gpu_set_colorwriteenable", builtinGpuSetColorWriteEnable);
+    VM_registerBuiltin(ctx,"gpu_get_colorwriteenable", builtinGpuGetColorWriteEnable);
     VM_registerBuiltin(ctx,"gpu_set_fog", builtinGpuSetFog);
     VM_registerBuiltin(ctx,"d3d_set_fog", builtinGpuSetFog);
 }
