@@ -38,6 +38,7 @@ ifndef DISABLE_BC17
 DEFINES += -DENABLE_BC17
 endif
 
+INCLUDES += -Isrc/gl_common
 SRCS += $(wildcard src/gl_common/*.c)
 HEADERS += $(wildcard src/gl_common/*.h)
 
