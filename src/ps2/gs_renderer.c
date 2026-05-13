@@ -259,16 +259,19 @@ static inline bool chunkIsFree(const VRAMChunk* chunk) {
 
 // Find the first run of consecutive free chunks.
 // Returns the index of the first chunk, or -1 if not found.
-static int32_t findConsecutiveFreeChunks(GsRenderer* gs, int chunksNeeded) {
+static int32_t findConsecutiveFreeChunks(GsRenderer* gs, int chunksNeeded, uint32_t startIdx) {
     int consecutive = 0;
-    forEachIndexed(VRAMChunk, chunk, i, gs->chunks, gs->chunkCount) {
-        if (chunkIsFree(chunk)) {
-            consecutive++;
-            if (consecutive >= chunksNeeded) {
-                return (int32_t) (i - (uint32_t) chunksNeeded + 1);
+    if (gs->chunkCount > startIdx) {
+        for (uint32_t i = startIdx; gs->chunkCount > i; i++) {
+            VRAMChunk* chunk = &gs->chunks[i];
+            if (chunkIsFree(chunk)) {
+                consecutive++;
+                if (consecutive >= chunksNeeded) {
+                    return (int32_t) (i - (uint32_t) chunksNeeded + 1);
+                }
+            } else {
+                consecutive = 0;
             }
-        } else {
-            consecutive = 0;
         }
     }
     return -1;
@@ -336,11 +339,13 @@ static void defragTextureCache(GsRenderer* gs) {
     rendererPrintf("GsRenderer: Defrag complete - free chunks = %u\n", countFreeChunks(gs));
 }
 
-// Allocate consecutive chunks for an atlas. Evicts LRU victims or defrags if needed.
+// Allocate consecutive chunks. Evicts LRU atlas victims or defrags if needed.
+// startIdx restricts the scan to [startIdx, chunkCount); snapshot callers pass
+// reservedAtlasChunks so the reserved fail-safe region stays atlas-only.
 // Returns the first chunk index, or -1 if VRAM is truly exhausted.
-static int32_t allocateChunks(GsRenderer* gs, int chunksNeeded) {
+static int32_t allocateChunks(GsRenderer* gs, int chunksNeeded, uint32_t startIdx) {
     // Attempt 1: find free consecutive chunks
-    int32_t idx = findConsecutiveFreeChunks(gs, chunksNeeded);
+    int32_t idx = findConsecutiveFreeChunks(gs, chunksNeeded, startIdx);
     if (idx >= 0) return idx;
 
     // Attempt 2: evict LRU victims one at a time until space is found
@@ -361,7 +366,7 @@ static int32_t allocateChunks(GsRenderer* gs, int chunksNeeded) {
 
         evictAtlas(gs, victim);
 
-        idx = findConsecutiveFreeChunks(gs, chunksNeeded);
+        idx = findConsecutiveFreeChunks(gs, chunksNeeded, startIdx);
 
         if (idx >= 0)
             return idx;
@@ -376,7 +381,7 @@ static int32_t allocateChunks(GsRenderer* gs, int chunksNeeded) {
     // Handles fragmentation where enough free chunks exist but aren't consecutive
     if (countFreeChunks(gs) >= (uint32_t) chunksNeeded) {
         defragTextureCache(gs);
-        idx = findConsecutiveFreeChunks(gs, chunksNeeded);
+        idx = findConsecutiveFreeChunks(gs, chunksNeeded, startIdx);
 
         if (idx >= 0)
             return idx;
@@ -447,6 +452,19 @@ static void loadAtlasMetadata(GsRenderer* gs) {
 static int atlasChunkCount(uint16_t width, uint16_t height, uint8_t bpp) {
     uint32_t bytes = atlasUncompressedSize(width, height, bpp);
     return (int) ((bytes + VRAM_CHUNK_SIZE - 1) / VRAM_CHUNK_SIZE);
+}
+
+// As a fail-safe, we'll reserve the first N chunks for atlases only, to avoid sprite snapshots pinning all chunks.
+static void computeAtlasReservation(GsRenderer* gs) {
+    uint32_t worst = 0;
+    repeat(gs->atlasCount, i) {
+        uint32_t need = (uint32_t) atlasChunkCount(gs->atlasWidth[i], gs->atlasHeight[i], 8);
+        if (need > worst)
+            worst = need;
+    }
+    if (worst > gs->chunkCount) worst = gs->chunkCount;
+    gs->reservedAtlasChunks = worst;
+    fprintf(stderr, "GsRenderer: Reserving first %u chunk(s) (%u KB) as atlas-only fail-safe (largest atlas @ 8bpp)\n", worst, worst * (VRAM_CHUNK_SIZE / 1024));
 }
 
 // Initialize the EE RAM cache. Called from gsInit after opening TEXTURES.BIN.
@@ -736,7 +754,7 @@ static bool ensureAtlasLoaded(GsRenderer* gs, uint16_t atlasId) {
     gs->chunksNeededThisFrame += (uint16_t) chunksNeeded;
 
     // Allocate chunks (may evict or defrag)
-    int32_t chunkIdx = allocateChunks(gs, chunksNeeded);
+    int32_t chunkIdx = allocateChunks(gs, chunksNeeded, 0);
     if (0 > chunkIdx) {
         fprintf(stderr, "GsRenderer: VRAM exhausted! Cannot allocate %d chunk(s) for atlas %u (%ubpp)\n", chunksNeeded, atlasId, bpp);
         abort();
@@ -775,7 +793,7 @@ static int32_t allocateSnapshotChunk(GsRenderer* gs, int32_t w, int32_t h) {
     }
 
     // Acquire chunks via the shared atlas allocator (LRU-evicts atlases as needed; skips pinned snapshots).
-    int32_t firstChunk = allocateChunks(gs, chunksNeeded);
+    int32_t firstChunk = allocateChunks(gs, chunksNeeded, gs->reservedAtlasChunks);
     if (0 > firstChunk) {
         rendererPrintf("GsRenderer: Cannot allocate %d chunks for snapshot (VRAM exhausted by pinned snapshots?)\n", chunksNeeded);
         return -1;
@@ -1102,6 +1120,8 @@ static void gsInit(Renderer* renderer, DataWin* dataWin) {
 
     // Read per-page format/size from TEXTURES.BIN headers
     loadAtlasMetadata(gs);
+
+    computeAtlasReservation(gs);
 
     // Initialize EE RAM cache for compressed atlas data
     initEeCache(gs);

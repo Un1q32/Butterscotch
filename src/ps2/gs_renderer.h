@@ -118,6 +118,7 @@ typedef struct {
     // VRAM texture cache (buddy system with LRU eviction)
     uint32_t textureVramBase;  // Start of texture region in VRAM (after framebuffers + CLUTs)
     uint32_t chunkCount;       // Number of 128KB chunks available
+    uint32_t reservedAtlasChunks; // First N chunks are atlas-only to avoid starving all chunks with pinned chunks.
     VRAMChunk* chunks;         // Per-chunk state [chunkCount]
     int16_t* atlasToChunk;     // atlasId -> first chunk index (-1 = not loaded) [atlasCount]
     uint16_t atlasCount;       // Number of atlas IDs from ATLAS.BIN header
