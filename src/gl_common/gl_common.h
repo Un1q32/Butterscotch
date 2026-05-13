@@ -5,6 +5,9 @@
 
 #ifdef __EMSCRIPTEN__
 #include <GLES3/gl3.h>
+#elif PLATFORM_PS3
+#include "ps3gl.h"
+#include "rsxutil.h"
 #else
 #include <glad/glad.h>
 #endif
