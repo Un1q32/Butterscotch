@@ -2834,24 +2834,24 @@ static void gsSurfaceFree(Renderer* renderer, int32_t surfaceID) {
 }
 
 // surface_copy / surface_copy_part. Both source and destination are CT16 in the chunk pool (or the main framebuffer when SrcSurfaceID == APPLICATION_SURFACE_ID), so we can do a single local-to-local GS bitblt instead of going through the rasterizer.
-static void gsSurfaceCopy(Renderer* renderer, int32_t DestSurfaceID, int32_t DestX, int32_t DestY, int32_t SrcSurfaceID, int32_t SrcX, int32_t SrcY, int32_t SrcW, int32_t SrcH, bool part) {
+static void gsSurfaceCopy(Renderer* renderer, int32_t destSurfaceID, int32_t destX, int32_t destY, int32_t srcSurfaceID, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH, bool part) {
     GsRenderer* gs = (GsRenderer*) renderer;
-    if (!gsSurfaceIsLive(gs, DestSurfaceID)) return;
-    Surface* dst = &gs->surfaces[DestSurfaceID];
+    if (!gsSurfaceIsLive(gs, destSurfaceID)) return;
+    Surface* dst = &gs->surfaces[destSurfaceID];
     if (dst->chunkCount == 0) return; // phantom dest - nowhere to write
 
     uint32_t srcVram;
     uint32_t srcTbw;
     int32_t  srcWidth;
     int32_t  srcHeight;
-    if (SrcSurfaceID == APPLICATION_SURFACE_ID) {
+    if (srcSurfaceID == APPLICATION_SURFACE_ID) {
         srcVram = gs->gsGlobal->ScreenBuffer[gs->gsGlobal->ActiveBuffer & 1];
         srcTbw = (uint32_t) gs->gsGlobal->Width / 64;
         srcWidth = (int32_t) gs->gsGlobal->Width;
         srcHeight = (int32_t) gs->gsGlobal->Height;
     } else {
-        if (!gsSurfaceIsLive(gs, SrcSurfaceID)) return;
-        Surface* src = &gs->surfaces[SrcSurfaceID];
+        if (!gsSurfaceIsLive(gs, srcSurfaceID)) return;
+        Surface* src = &gs->surfaces[srcSurfaceID];
         if (src->chunkCount == 0) return; // phantom src - nothing to read
         srcVram = gs->textureVramBase + (uint32_t) src->firstChunk * VRAM_CHUNK_SIZE;
         srcTbw = src->tbw;
@@ -2861,24 +2861,24 @@ static void gsSurfaceCopy(Renderer* renderer, int32_t DestSurfaceID, int32_t Des
 
     int32_t w, h;
     if (part) {
-        w = SrcW;
-        h = SrcH;
+        w = srcW;
+        h = srcH;
     } else {
-        SrcX = 0; SrcY = 0;
+        srcX = 0; srcY = 0;
         w = srcWidth;
         h = srcHeight;
     }
 
     // Clip source rect to source bounds, propagating the offset into the destination so we copy the right sub-region.
-    if (0 > SrcX) { DestX -= SrcX; w += SrcX; SrcX = 0; }
-    if (0 > SrcY) { DestY -= SrcY; h += SrcY; SrcY = 0; }
-    if (SrcX + w > srcWidth)  w = srcWidth  - SrcX;
-    if (SrcY + h > srcHeight) h = srcHeight - SrcY;
+    if (0 > srcX) { destX -= srcX; w += srcX; srcX = 0; }
+    if (0 > srcY) { destY -= srcY; h += srcY; srcY = 0; }
+    if (srcX + w > srcWidth)  w = srcWidth  - srcX;
+    if (srcY + h > srcHeight) h = srcHeight - srcY;
     // Clip dest rect to dest bounds.
-    if (0 > DestX) { SrcX -= DestX; w += DestX; DestX = 0; }
-    if (0 > DestY) { SrcY -= DestY; h += DestY; DestY = 0; }
-    if (DestX + w > dst->width)  w = dst->width  - DestX;
-    if (DestY + h > dst->height) h = dst->height - DestY;
+    if (0 > destX) { srcX -= destX; w += destX; destX = 0; }
+    if (0 > destY) { srcY -= destY; h += destY; destY = 0; }
+    if (destX + w > dst->width)  w = dst->width  - destX;
+    if (destY + h > dst->height) h = dst->height - destY;
     if (0 >= w || 0 >= h) return;
 
     // Drain any pending gsKit draw commands into the GIF so the bitblt source is coherent. Same flush pattern gsCreateSpriteFromSurface uses.
@@ -2887,8 +2887,8 @@ static void gsSurfaceCopy(Renderer* renderer, int32_t DestSurfaceID, int32_t Des
 
     uint32_t dstVram = gs->textureVramBase + (uint32_t) dst->firstChunk * VRAM_CHUNK_SIZE;
     gsLocalToLocalBlit(
-        srcVram, srcTbw, GS_PSM_CT16, (uint32_t) SrcX, (uint32_t) SrcY,
-        dstVram, dst->tbw, GS_PSM_CT16, (uint32_t) DestX, (uint32_t) DestY,
+        srcVram, srcTbw, GS_PSM_CT16, (uint32_t) srcX, (uint32_t) srcY,
+        dstVram, dst->tbw, GS_PSM_CT16, (uint32_t) destX, (uint32_t) destY,
         (uint32_t) w, (uint32_t) h
     );
 }
