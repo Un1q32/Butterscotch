@@ -2833,7 +2833,65 @@ static void gsSurfaceFree(Renderer* renderer, int32_t surfaceID) {
     s->chunkCount = 0;
 }
 
-static void gsSurfaceCopy(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t DestSurfaceID, MAYBE_UNUSED int32_t DestX, MAYBE_UNUSED int32_t DestY, MAYBE_UNUSED int32_t SrcSurfaceID, MAYBE_UNUSED int32_t SrcX, MAYBE_UNUSED int32_t SrcY, MAYBE_UNUSED int32_t SrcW, MAYBE_UNUSED int32_t SrcH, MAYBE_UNUSED bool part) {}
+// surface_copy / surface_copy_part. Both source and destination are CT16 in the chunk pool (or the main framebuffer when SrcSurfaceID == APPLICATION_SURFACE_ID), so we can do a single local-to-local GS bitblt instead of going through the rasterizer.
+static void gsSurfaceCopy(Renderer* renderer, int32_t DestSurfaceID, int32_t DestX, int32_t DestY, int32_t SrcSurfaceID, int32_t SrcX, int32_t SrcY, int32_t SrcW, int32_t SrcH, bool part) {
+    GsRenderer* gs = (GsRenderer*) renderer;
+    if (!gsSurfaceIsLive(gs, DestSurfaceID)) return;
+    Surface* dst = &gs->surfaces[DestSurfaceID];
+    if (dst->chunkCount == 0) return; // phantom dest - nowhere to write
+
+    uint32_t srcVram;
+    uint32_t srcTbw;
+    int32_t  srcWidth;
+    int32_t  srcHeight;
+    if (SrcSurfaceID == APPLICATION_SURFACE_ID) {
+        srcVram = gs->gsGlobal->ScreenBuffer[gs->gsGlobal->ActiveBuffer & 1];
+        srcTbw = (uint32_t) gs->gsGlobal->Width / 64;
+        srcWidth = (int32_t) gs->gsGlobal->Width;
+        srcHeight = (int32_t) gs->gsGlobal->Height;
+    } else {
+        if (!gsSurfaceIsLive(gs, SrcSurfaceID)) return;
+        Surface* src = &gs->surfaces[SrcSurfaceID];
+        if (src->chunkCount == 0) return; // phantom src - nothing to read
+        srcVram = gs->textureVramBase + (uint32_t) src->firstChunk * VRAM_CHUNK_SIZE;
+        srcTbw = src->tbw;
+        srcWidth = src->width;
+        srcHeight = src->height;
+    }
+
+    int32_t w, h;
+    if (part) {
+        w = SrcW;
+        h = SrcH;
+    } else {
+        SrcX = 0; SrcY = 0;
+        w = srcWidth;
+        h = srcHeight;
+    }
+
+    // Clip source rect to source bounds, propagating the offset into the destination so we copy the right sub-region.
+    if (0 > SrcX) { DestX -= SrcX; w += SrcX; SrcX = 0; }
+    if (0 > SrcY) { DestY -= SrcY; h += SrcY; SrcY = 0; }
+    if (SrcX + w > srcWidth)  w = srcWidth  - SrcX;
+    if (SrcY + h > srcHeight) h = srcHeight - SrcY;
+    // Clip dest rect to dest bounds.
+    if (0 > DestX) { SrcX -= DestX; w += DestX; DestX = 0; }
+    if (0 > DestY) { SrcY -= DestY; h += DestY; DestY = 0; }
+    if (DestX + w > dst->width)  w = dst->width  - DestX;
+    if (DestY + h > dst->height) h = dst->height - DestY;
+    if (0 >= w || 0 >= h) return;
+
+    // Drain any pending gsKit draw commands into the GIF so the bitblt source is coherent. Same flush pattern gsCreateSpriteFromSurface uses.
+    gsKit_queue_exec(gs->gsGlobal);
+    dmaKit_wait_fast();
+
+    uint32_t dstVram = gs->textureVramBase + (uint32_t) dst->firstChunk * VRAM_CHUNK_SIZE;
+    gsLocalToLocalBlit(
+        srcVram, srcTbw, GS_PSM_CT16, (uint32_t) SrcX, (uint32_t) SrcY,
+        dstVram, dst->tbw, GS_PSM_CT16, (uint32_t) DestX, (uint32_t) DestY,
+        (uint32_t) w, (uint32_t) h
+    );
+}
 static bool gsSurfaceGetPixels(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED uint8_t* outRGBA) { return false; }
 
 // ===[ Vtable ]===
