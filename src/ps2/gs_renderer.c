@@ -2489,7 +2489,7 @@ static void gsDrawTile(Renderer* renderer, RoomTile* tile, float offsetX, float 
 
 // ===[ Surfaces ]===
 
-static int32_t gsCreateSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) { return -1; }
+static int32_t gsCreateSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) { return 0; }
 static bool gsSurfaceExists(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
 static bool gsSetSurfaceTarget(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
 static bool gsResetSurfaceTarget(MAYBE_UNUSED Renderer* renderer) { return false; }
