@@ -2880,6 +2880,9 @@ static void writeRValueJson(JsonWriter* w, RValue val) {
             JsonWriter_string(w, buf);
             break;
         }
+        case RVALUE_ASSETREF:
+            JsonWriter_int(w, val.int32);
+            break;
     }
 }
 

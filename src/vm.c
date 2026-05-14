@@ -2346,6 +2346,7 @@ static const char* rvalueTypeName(uint8_t type) {
         case RVALUE_ARRAY:     return "ARRAY";
         case RVALUE_METHOD:    return "METHOD";
         case RVALUE_STRUCT:    return "STRUCT";
+        case RVALUE_ASSETREF:  return "ASSETREF";
         case 0xF:              return "-";
         default:               return "???";
     }
