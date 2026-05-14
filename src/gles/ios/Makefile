@@ -33,19 +33,48 @@ APPLICATION_NAME = Butterscotch
 # -----------------------------------------------------------------------------
 # Sources
 #
-# At this milestone the shell is intentionally NOT linked against the
-# full Butterscotch C runtime. The renderer skeleton is included so the
-# linker pulls in the GLES1 vtable symbol, and the UI in main.m is
-# self-sufficient for proving the toolchain + on-device GL pipeline.
-# Once that works on the iPod Touch 2G we extend BS_RUNTIME_FILES with
-# the rest of src/*.c.
+# Includes the full Butterscotch C runtime so DataWin parsing, the VM
+# and the Runner are all linked in. We omit the platform-specific
+# main.c entries (src/glfw, src/ps2, src/ps3, src/web) — main.m below
+# replaces them — plus data_win_print.c which is only used by the
+# `--print` debug subcommand on desktop and pulls in dprintf-style
+# helpers we do not need on iOS.
 # -----------------------------------------------------------------------------
+BS_RUNTIME_FILES = \
+    ../../binary_reader.c \
+    ../../data_win.c \
+    ../../debug_overlay.c \
+    ../../event_table.c \
+    ../../gml_array.c \
+    ../../gml_method.c \
+    ../../ini.c \
+    ../../input_recording.c \
+    ../../instance.c \
+    ../../int_int_hashmap.c \
+    ../../int_rvalue_hashmap.c \
+    ../../json_reader.c \
+    ../../json_writer.c \
+    ../../noop_audio_system.c \
+    ../../noop_file_system.c \
+    ../../overlay_file_system.c \
+    ../../profiler.c \
+    ../../runner.c \
+    ../../runner_gamepad.c \
+    ../../runner_keyboard.c \
+    ../../spatial_grid.c \
+    ../../string_builder.c \
+    ../../vm.c \
+    ../../vm_builtins.c \
+    ../../../vendor/md5/md5.c
+
 BS_RENDERER_FILES = \
     ../gles1_renderer.c
 
 Butterscotch_FILES = \
     main.m \
-    $(BS_RENDERER_FILES)
+    stb_impl.c \
+    $(BS_RENDERER_FILES) \
+    $(BS_RUNTIME_FILES)
 
 # -----------------------------------------------------------------------------
 # Frameworks
@@ -73,7 +102,14 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -Wno-deprecated-declarations \
                        -Wno-unused-parameter \
                        -Wno-unused-variable \
-                       -Wno-unused-function
+                       -Wno-unused-function \
+                       -Wno-return-type \
+                       -Wno-incompatible-pointer-types-discards-qualifiers \
+                       -Wno-pointer-sign \
+                       -Wno-sign-compare \
+                       -Wno-format \
+                       -Wno-implicit-function-declaration \
+                       -Wno-error
 
 Butterscotch_CCFLAGS = $(Butterscotch_CFLAGS)
 Butterscotch_LDFLAGS = -Wl,-no_implicit_dylibs

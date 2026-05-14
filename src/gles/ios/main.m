@@ -26,11 +26,19 @@
 #import <OpenGLES/ES1/glext.h>
 #import <Foundation/Foundation.h>
 
-// Forward decl from the renderer skeleton. The renderer is allocated
-// when the user enters a game; for now we don't actually run the VM
-// from here (that wiring is the next milestone).
-struct Renderer;
-extern struct Renderer* GLES1Renderer_create(void);
+// Butterscotch runtime headers.
+#include "data_win.h"
+#include "vm.h"
+#include "runner.h"
+#include "renderer.h"
+#include "audio_system.h"
+#include "file_system.h"
+#include "noop_audio_system.h"
+#include "overlay_file_system.h"
+#include "runner_keyboard.h"
+
+// From src/gles/gles1_renderer.h
+Renderer* GLES1Renderer_create(void);
 
 // ============================================================================
 // GameEntry — one playable folder
@@ -111,6 +119,10 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 // GLView — owns the EAGLContext + framebuffer + renderbuffer
 // ============================================================================
 
+@protocol BSGLViewDelegate <NSObject>
+- (void)glViewTick:(int)frameIndex backingWidth:(GLint)w backingHeight:(GLint)h;
+@end
+
 @interface BSGLView : UIView {
     EAGLContext* _ctx;
     GLuint _framebuffer;
@@ -120,13 +132,22 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     CADisplayLink* _displayLink;
     NSTimer* _fallbackTimer;
     int _frameCounter;
-    float _hue;  // cycling clear color so it is obvious the loop runs
+    id<BSGLViewDelegate> _delegate;  // weak, lifetime tied to view controller
 }
+@property (nonatomic, assign) id<BSGLViewDelegate> delegate;
+@property (nonatomic, readonly) GLint backingWidth;
+@property (nonatomic, readonly) GLint backingHeight;
+- (void)bindDrawable;
+- (void)presentDrawable;
+- (void)makeContextCurrent;
 - (void)startRunLoop;
 - (void)stopRunLoop;
 @end
 
 @implementation BSGLView
+@synthesize delegate = _delegate;
+@synthesize backingWidth = _backingWidth;
+@synthesize backingHeight = _backingHeight;
 
 + (Class)layerClass {
     return [CAEAGLLayer class];
@@ -166,7 +187,25 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     }
 
     glViewport(0, 0, _backingWidth, _backingHeight);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    [_ctx presentRenderbuffer:GL_RENDERBUFFER_OES];
     return self;
+}
+
+- (void)makeContextCurrent {
+    [EAGLContext setCurrentContext:_ctx];
+}
+
+- (void)bindDrawable {
+    [EAGLContext setCurrentContext:_ctx];
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, _framebuffer);
+    glViewport(0, 0, _backingWidth, _backingHeight);
+}
+
+- (void)presentDrawable {
+    glBindRenderbufferOES(GL_RENDERBUFFER_OES, _renderbuffer);
+    [_ctx presentRenderbuffer:GL_RENDERBUFFER_OES];
 }
 
 - (void)dealloc {
@@ -179,42 +218,18 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     [super dealloc];
 }
 
-// HSV→RGB for the demo clear color cycle.
-static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
-    int i = (int) (h * 6.0f);
-    float f = h * 6.0f - i;
-    float p = v * (1.0f - s);
-    float q = v * (1.0f - f * s);
-    float t = v * (1.0f - (1.0f - f) * s);
-    switch (i % 6) {
-        case 0: *r = v; *g = t; *b = p; break;
-        case 1: *r = q; *g = v; *b = p; break;
-        case 2: *r = p; *g = v; *b = t; break;
-        case 3: *r = p; *g = q; *b = v; break;
-        case 4: *r = t; *g = p; *b = v; break;
-        case 5: *r = v; *g = p; *b = q; break;
-    }
-}
-
 - (void)tick {
-    [EAGLContext setCurrentContext:_ctx];
-    glBindFramebufferOES(GL_FRAMEBUFFER_OES, _framebuffer);
-    glViewport(0, 0, _backingWidth, _backingHeight);
-
-    _hue += 1.0f / 240.0f;
-    if (_hue >= 1.0f) _hue -= 1.0f;
-    float r, g, b;
-    hsv2rgb(_hue, 0.4f, 0.9f, &r, &g, &b);
-    glClearColor(r, g, b, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glBindRenderbufferOES(GL_RENDERBUFFER_OES, _renderbuffer);
-    [_ctx presentRenderbuffer:GL_RENDERBUFFER_OES];
-
+    [self bindDrawable];
     _frameCounter += 1;
-    if (_frameCounter % 60 == 0) {
-        NSLog(@"[Butterscotch] tick %d (%dx%d)", _frameCounter, (int) _backingWidth, (int) _backingHeight);
+    if (_delegate != nil) {
+        [_delegate glViewTick:_frameCounter backingWidth:_backingWidth backingHeight:_backingHeight];
+    } else {
+        // No delegate yet — just present a black frame so the layer is
+        // showing something other than the previous frame's stale buffer.
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
     }
+    [self presentDrawable];
 }
 
 - (void)startRunLoop {
@@ -249,13 +264,27 @@ static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
 @end
 
 // ============================================================================
-// GameViewController — wraps the GLView, holds the picked game entry
+// GameViewController — wraps the GLView, owns the Butterscotch runtime
 // ============================================================================
 
-@interface BSGameViewController : UIViewController {
+@interface BSGameViewController : UIViewController <BSGLViewDelegate> {
     BSGameEntry* _game;
     BSGLView* _glView;
     UILabel* _hudLabel;
+
+    // Butterscotch runtime state. All nil/NULL until -loadRuntime
+    // succeeds.
+    DataWin* _dataWin;
+    VMContext* _vm;
+    Renderer* _renderer;
+    AudioSystem* _audio;
+    FileSystem* _fileSystem;
+    Runner* _runner;
+    BOOL _runtimeReady;
+    BOOL _runtimeFailed;
+    NSString* _lastError;
+    NSTimeInterval _lastTickTime;
+    int _logicFrameCount;
 }
 - (id)initWithGame:(BSGameEntry*)game;
 @end
@@ -274,6 +303,14 @@ static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
     [_game release];
     [_glView release];
     [_hudLabel release];
+    [_lastError release];
+
+    // We intentionally do NOT free the Butterscotch runtime here on
+    // teardown: there's no clean Runner_destroy / DataWin_free path
+    // currently that we trust on iOS 3 (and the user backing out to
+    // the picker is rare on a 128 MB device anyway — they'll just
+    // close the app). Letting iOS reclaim the process memory is the
+    // safer behaviour for now.
     [super dealloc];
 }
 
@@ -285,15 +322,16 @@ static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
 
     _glView = [[BSGLView alloc] initWithFrame:root.bounds];
     _glView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _glView.delegate = self;
     [root addSubview:_glView];
 
-    _hudLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 8, root.bounds.size.width - 16, 60)];
-    _hudLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    _hudLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 8, root.bounds.size.width - 16, 96)];
+    _hudLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
     _hudLabel.textColor = [UIColor whiteColor];
-    _hudLabel.font = [UIFont systemFontOfSize:12];
-    _hudLabel.numberOfLines = 3;
-    _hudLabel.text = [NSString stringWithFormat:@"Butterscotch (GLES1)\nGame: %@\ndata.win: %@",
-                       _game->name, _game->dataWinPath];
+    _hudLabel.font = [UIFont systemFontOfSize:11];
+    _hudLabel.numberOfLines = 6;
+    _hudLabel.lineBreakMode = UILineBreakModeWordWrap;
+    _hudLabel.text = [NSString stringWithFormat:@"Butterscotch / GLES1\nLoading %@…", _game->name];
     _hudLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [root addSubview:_hudLabel];
 
@@ -301,14 +339,16 @@ static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
     [root release];
 }
 
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    NSLog(@"[Butterscotch] entering game: %@ (data.win = %@)", _game->name, _game->dataWinPath);
-
-    // TODO(milestone 2): wire DataWin/VM/Runner here. For now we just
-    // confirm the GL context + run loop are alive on real hardware.
-    // (void) GLES1Renderer_create();
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // Defer loading until after the view is fully on-screen so the
+    // navigation push animation and "Loading…" HUD are visible. The
+    // run loop is started immediately so the GL view keeps painting
+    // (black) while the parser is busy.
     [_glView startRunLoop];
+    if (!_runtimeReady && !_runtimeFailed) {
+        [self performSelector:@selector(loadRuntime) withObject:nil afterDelay:0.05];
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -318,6 +358,164 @@ static void hsv2rgb(float h, float s, float v, float* r, float* g, float* b) {
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
     return YES;  // accept all orientations on iOS 3.x
+}
+
+// ------------------------------------------------------------------ runtime
+
+// Progress callback — invoked from inside DataWin_parse on each chunk.
+// We can't call back into UIKit from arbitrary call sites on iOS 3
+// (no GCD), so we just NSLog so the chunk name shows in syslog and
+// the user can see how far parsing got if it crashes mid-way.
+static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalChunks, DataWin* dw, void* userData) {
+    (void) dw;
+    (void) userData;
+    NSLog(@"[Butterscotch] parse chunk %d/%d: %s", chunkIndex + 1, totalChunks, chunkName);
+}
+
+- (void)setStatus:(NSString*)line {
+    NSLog(@"[Butterscotch] %@", line);
+    _hudLabel.text = [NSString stringWithFormat:@"Butterscotch / GLES1\n%@\n%@",
+                       _game->name, line];
+}
+
+- (void)loadRuntime {
+    NSLog(@"[Butterscotch] loadRuntime: %@", _game->dataWinPath);
+    [self setStatus:@"Parsing data.win… (this can take a minute)"];
+
+    // Stage 1: parse data.win.
+    DataWinParserOptions opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.parseGen8 = true;
+    opts.parseOptn = true;
+    opts.parseLang = true;
+    opts.parseExtn = false;
+    opts.parseSond = true;
+    opts.parseAgrp = true;
+    opts.parseSprt = true;
+    opts.parseBgnd = true;
+    opts.parsePath = true;
+    opts.parseScpt = true;
+    opts.parseGlob = true;
+    opts.parseShdr = true;
+    opts.parseFont = true;
+    opts.parseTmln = true;
+    opts.parseObjt = true;
+    opts.parseRoom = true;
+    opts.parseTpag = true;
+    opts.parseCode = true;
+    opts.parseVari = true;
+    opts.parseFunc = true;
+    opts.parseStrg = true;
+    opts.parseTxtr = true;
+    opts.parseAudo = true;
+    opts.skipLoadingPreciseMasksForNonPreciseSprites = true;
+    opts.lazyLoadRooms = true;   // critical for 128 MB MBX Lite RAM budget
+    opts.eagerlyLoadedRooms = NULL;
+    opts.progressCallback = BSDataWinProgress;
+    opts.progressCallbackUserData = NULL;
+
+    const char* path = [_game->dataWinPath UTF8String];
+    _dataWin = DataWin_parse(path, opts);
+    if (_dataWin == NULL) {
+        _runtimeFailed = YES;
+        [_lastError release];
+        _lastError = [[NSString stringWithFormat:@"DataWin_parse returned NULL for %@", _game->dataWinPath] retain];
+        [self setStatus:_lastError];
+        return;
+    }
+    NSLog(@"[Butterscotch] data.win parsed: gen8.name=%s bytecodeVer=%u defaultW=%u defaultH=%u",
+          _dataWin->gen8.name ? _dataWin->gen8.name : "(null)",
+          (unsigned) _dataWin->gen8.bytecodeVersion,
+          (unsigned) _dataWin->gen8.defaultWindowWidth,
+          (unsigned) _dataWin->gen8.defaultWindowHeight);
+
+    // Stage 2: build VM, file system, audio, renderer, runner.
+    [self setStatus:@"Initialising VM + Runner…"];
+
+    _vm = VM_create(_dataWin);
+    if (_vm == NULL) {
+        _runtimeFailed = YES;
+        [self setStatus:@"VM_create failed"];
+        return;
+    }
+
+    const char* dataWinDir = [_game->directory UTF8String];
+    OverlayFileSystem* overlay = OverlayFileSystem_create(dataWinDir, dataWinDir);
+    _fileSystem = (FileSystem*) overlay;
+
+    _audio = (AudioSystem*) NoopAudioSystem_create();
+
+    // Make sure the EAGL context is current before the renderer init
+    // call — it issues GL state setup.
+    [_glView makeContextCurrent];
+    [_glView bindDrawable];
+    _renderer = GLES1Renderer_create();
+
+    _runner = Runner_create(_dataWin, _vm, _renderer, _fileSystem, _audio);
+    _runner->osType = OS_IOS;
+
+    _runtimeReady = YES;
+    _lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    [self setStatus:[NSString stringWithFormat:@"Ready. Bytecode v%u, %ux%u",
+                      (unsigned) _dataWin->gen8.bytecodeVersion,
+                      (unsigned) _dataWin->gen8.defaultWindowWidth,
+                      (unsigned) _dataWin->gen8.defaultWindowHeight]];
+}
+
+// ------------------------------------------------------------------ frame
+
+- (void)glViewTick:(int)frameIndex backingWidth:(GLint)w backingHeight:(GLint)h {
+    if (!_runtimeReady) {
+        // While loading: just clear black so the framebuffer is in a
+        // defined state and the layer keeps presenting fresh content.
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        return;
+    }
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    float dt = (float) (now - _lastTickTime);
+    if (dt < 0.0f) dt = 0.0f;
+    if (dt > 0.1f) dt = 0.1f;
+    _lastTickTime = now;
+
+    // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step).
+    Runner_step(_runner);
+    if (_audio != NULL) _audio->vtable->update(_audio, dt);
+    _logicFrameCount += 1;
+
+    // Draw.
+    int32_t gameW = (int32_t) _dataWin->gen8.defaultWindowWidth;
+    int32_t gameH = (int32_t) _dataWin->gen8.defaultWindowHeight;
+    if (gameW <= 0) gameW = w;
+    if (gameH <= 0) gameH = h;
+
+    float scaleX = 1.0f, scaleY = 1.0f;
+    Runner_computeViewDisplayScale(_runner, gameW, gameH, &scaleX, &scaleY);
+
+    _renderer->vtable->beginFrame(_renderer, gameW, gameH, w, h);
+
+    if (_runner->drawBackgroundColor) {
+        uint32_t c = _runner->backgroundColor;
+        float rF = ((c >>  0) & 0xFF) / 255.0f;
+        float gF = ((c >>  8) & 0xFF) / 255.0f;
+        float bF = ((c >> 16) & 0xFF) / 255.0f;
+        glClearColor(rF, gF, bF, 1.0f);
+    } else {
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    Runner_drawViews(_runner, gameW, gameH, scaleX, scaleY, false);
+
+    _renderer->vtable->endFrame(_renderer);
+
+    Runner_handlePendingRoomChange(_runner);
+
+    if (_logicFrameCount % 60 == 0) {
+        NSLog(@"[Butterscotch] frame %d (game %dx%d, fb %dx%d, dt=%.3fms)",
+              _logicFrameCount, gameW, gameH, w, h, dt * 1000.0f);
+    }
 }
 
 @end
