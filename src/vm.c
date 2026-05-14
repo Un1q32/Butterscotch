@@ -2362,6 +2362,7 @@ static const char* breakSubOpName(int16_t breakType) {
         case BREAK_SETSTATIC:   return "setstatic";
         case BREAK_SAVEAREF:    return "savearef";
         case BREAK_RESTOREAREF: return "restorearef";
+        case BREAK_ISNULLISH:   return "isnullish";
         default:                return "???";
     }
 }
@@ -2615,6 +2616,15 @@ static void handleBreakRestoreARef(VMContext* ctx) {
     ctx->savearefBalance--;
 }
 
+static void handleBreakIsNullish(VMContext* ctx) {
+    // Pop a value, push a bool: true if the value is "nullish".
+    RValue value = stackPop(ctx);
+    // TODO: We need to support a RValue pointer_null later, because that's also considered as "nullish" here!
+    bool nullish = value.type == RVALUE_UNDEFINED;
+    RValue_free(&value);
+    stackPush(ctx, RValue_makeBool(nullish));
+}
+
 static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
     if (IS_BC16_OR_BELOW(ctx)) return;
     int16_t breakType = instrInstanceType(instr);
@@ -2628,6 +2638,7 @@ static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
         case BREAK_SETSTATIC:   handleBreakSetStatic(ctx); break;
         case BREAK_SAVEAREF:    handleBreakSaveARef(ctx); break;
         case BREAK_RESTOREAREF: handleBreakRestoreARef(ctx); break;
+        case BREAK_ISNULLISH:   handleBreakIsNullish(ctx); break;
         default:
             fprintf(stderr, "VM: Unknown BREAK sub-opcode %d at offset %u in %s\n", breakType, instrAddr, ctx->currentCodeName);
             abort();
@@ -3930,6 +3941,7 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
                 case BREAK_SETSTATIC:   mnemonic = "setstatic"; break;
                 case BREAK_SAVEAREF:    mnemonic = "savearef"; break;
                 case BREAK_RESTOREAREF: mnemonic = "restorearef"; break;
+                case BREAK_ISNULLISH:   mnemonic = "isnullish"; break;
                 default:                mnemonic = nullptr; break;
             }
             if (mnemonic != nullptr) {
