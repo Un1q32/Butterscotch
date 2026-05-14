@@ -5,3 +5,9 @@ build_ps3/
 .cache
 CMakeUserPresets.json
 .devcontainer/
+
+# Theos build outputs (iOS port)
+src/gles/ios/.theos/
+src/gles/ios/packages/
+src/gles/ios/.ipa-staging/
+

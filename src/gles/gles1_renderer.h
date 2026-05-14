@@ -1,0 +1,34 @@
+#pragma once
+
+// Butterscotch RendererVtable implementation against OpenGL ES 1.1.
+//
+// Designed for the original iPhone, iPod Touch 1G/2G (PowerVR MBX Lite),
+// plus early Android devices. No shaders — uses the GLES 1.1 fixed
+// function pipeline (glColor4f / glVertexPointer / glTexCoordPointer /
+// glDrawArrays).
+//
+// IMPORTANT: A valid GLES 1.1 context must already be current on the
+// calling thread before any vtable call. On iOS this is set up by
+// `src/gles/ios` (EAGLContext + CAEAGLLayer); on Android by the
+// EGLSurface owned by NativeActivity.
+//
+// This is intentionally a skeleton: at the moment everything beyond
+// init / destroy / clearScreen / beginFrame / endFrame is a no-op so
+// the runner can be brought up on-device and we can iterate from real
+// hardware logs.
+
+#include "../renderer.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Allocate + initialize an empty GLES 1.1 renderer. Returns a Renderer*
+// that can be passed to Runner_create. The renderer's vtable is fully
+// populated (no nullptr entries) so Runner_step / draw paths are safe
+// to call even though most draw functions are currently stubs.
+Renderer* GLES1Renderer_create(void);
+
+#ifdef __cplusplus
+}
+#endif
