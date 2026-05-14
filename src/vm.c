@@ -206,10 +206,18 @@ static void patchReferenceOperands(VMContext* ctx) {
         repeat(f->occurrences, occ) {
             uint32_t operandAddr = addr + 4;
             uint32_t operand = BinaryUtils_readUint32(&buf[operandAddr - base]);
-            uint32_t delta = operand & 0x07FFFFFF;
 
-            // Patch in-place: store funcIdx directly
-            BinaryUtils_writeUint32(&buf[operandAddr - base], funcIdx);
+            uint32_t instrWord = BinaryUtils_readUint32(&buf[addr - base]);
+            bool isPushRef = instrOpcode(instrWord) == OP_BREAK && instrInstanceType(instrWord) == BREAK_PUSHREF;
+
+            uint32_t delta;
+            if (isPushRef) {
+                delta = operand & 0x00FFFFFF;
+                BinaryUtils_writeUint32(&buf[operandAddr - base], ((uint32_t) ASSET_TYPE_SCRIPT << 24) | (funcIdx & 0x00FFFFFF));
+            } else {
+                delta = operand & 0x07FFFFFF;
+                BinaryUtils_writeUint32(&buf[operandAddr - base], funcIdx);
+            }
 
             if (f->occurrences > occ + 1) {
                 addr += delta;
@@ -2364,6 +2372,7 @@ static const char* breakSubOpName(int16_t breakType) {
         case BREAK_SAVEAREF:    return "savearef";
         case BREAK_RESTOREAREF: return "restorearef";
         case BREAK_ISNULLISH:   return "isnullish";
+        case BREAK_PUSHREF:     return "pushref";
         default:                return "???";
     }
 }
@@ -2626,7 +2635,38 @@ static void handleBreakIsNullish(VMContext* ctx) {
     stackPush(ctx, RValue_makeBool(nullish));
 }
 
-static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
+static void handleBreakPushRef(VMContext* ctx, const uint8_t* extraData) {
+    // Push an asset reference encoded in the 32-bit operand: high byte = asset type, low 24 bits = index.
+    // If it is a script reference, the low 24 bits is a funcIdx which we resolve to a callable method; everything else is a plain asset.
+    uint32_t operand = BinaryUtils_readUint32Aligned(extraData);
+    uint8_t assetType = (uint8_t) ((operand >> 24) & 0xFF);
+    int32_t index = (int32_t) (operand & 0x00FFFFFF);
+
+    if (assetType == ASSET_TYPE_SCRIPT) {
+        // Resolve to a callable method
+        if (ctx->dataWin->func.functionCount > (uint32_t) index) {
+            FuncCallCache* cache = &ctx->funcCallCache[index];
+            if (cache->scriptCodeIndex >= 0) {
+                stackPushTyped(ctx, RValue_makeMethod(cache->scriptCodeIndex, -1), GML_TYPE_VARIABLE);
+                return;
+            }
+            RValue rv = { .type = RVALUE_METHOD, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
+            if (cache->builtin != nullptr) {
+                rv.method = GMLMethod_createBuiltin((BuiltinFunc) cache->builtin, -1);
+            } else {
+                rv.method = GMLMethod_createUnresolved(ctx->dataWin->func.functions[index].name, -1);
+            }
+            stackPushTyped(ctx, rv, GML_TYPE_VARIABLE);
+        } else {
+            stackPushTyped(ctx, RValue_makeUndefined(), GML_TYPE_VARIABLE);
+        }
+        return;
+    }
+
+    stackPushTyped(ctx, RValue_makeAssetRef(index, assetType), GML_TYPE_INT32);
+}
+
+static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr, const uint8_t* extraData) {
     if (IS_BC16_OR_BELOW(ctx)) return;
     int16_t breakType = instrInstanceType(instr);
     switch (breakType) {
@@ -2640,6 +2680,7 @@ static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr) {
         case BREAK_SAVEAREF:    handleBreakSaveARef(ctx); break;
         case BREAK_RESTOREAREF: handleBreakRestoreARef(ctx); break;
         case BREAK_ISNULLISH:   handleBreakIsNullish(ctx); break;
+        case BREAK_PUSHREF:     handleBreakPushRef(ctx, extraData); break;
         default:
             fprintf(stderr, "VM: Unknown BREAK sub-opcode %d at offset %u in %s\n", breakType, instrAddr, ctx->currentCodeName);
             abort();
@@ -3137,7 +3178,7 @@ static RValue executeLoop(VMContext* ctx) {
             // Break (extended opcodes in V17+, no-op/debug in V16)
             case OP_BREAK:
 #if IS_BC17_OR_HIGHER_ENABLED
-                handleBreak(ctx, instr, instrAddr);
+                handleBreak(ctx, instr, instrAddr, extraData);
 #endif
                 break;
 
@@ -3943,10 +3984,22 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
                 case BREAK_SAVEAREF:    mnemonic = "savearef"; break;
                 case BREAK_RESTOREAREF: mnemonic = "restorearef"; break;
                 case BREAK_ISNULLISH:   mnemonic = "isnullish"; break;
+                case BREAK_PUSHREF:     mnemonic = "pushref"; break;
                 default:                mnemonic = nullptr; break;
             }
             if (mnemonic != nullptr) {
                 snprintf(opcodeStr, opcodeSize, "%s.%c", mnemonic, gmlTypeChar(type1));
+                if (breakType == BREAK_PUSHREF) {
+                    uint32_t operand = BinaryUtils_readUint32Aligned(extraData);
+                    uint8_t assetType = (uint8_t) ((operand >> 24) & 0xFF);
+                    int32_t index = (int32_t) (operand & 0x00FFFFFF);
+                    if (assetType == ASSET_TYPE_SCRIPT) {
+                        const char* funcName = (dw->func.functionCount > (uint32_t) index) ? dw->func.functions[index].name : "???";
+                        snprintf(operandStr, operandSize, "script %s", funcName);
+                    } else {
+                        snprintf(operandStr, operandSize, "asset type=%d index=%d", assetType, index);
+                    }
+                }
             } else {
                 snprintf(opcodeStr, opcodeSize, "Break.%c", gmlTypeChar(type1));
                 snprintf(operandStr, operandSize, "%d", (int32_t) breakType);
