@@ -567,13 +567,14 @@ static bool isDrawableArraySorted(Drawable* drawables, int32_t count) {
 }
 
 // Refreshes each entry's cached .depth from the live instance/runtime-layer pointer. Tile entries never change depth mid-room so they're left alone.
-static void refreshDrawableDepths(Drawable* drawables, int32_t count) {
+static void refreshDrawableDepths(Runner* runner, Drawable* drawables, int32_t count) {
     for (int32_t i = 0; count > i; i++) {
         Drawable* d = &drawables[i];
         if (d->type == DRAWABLE_INSTANCE) {
             d->depth = d->instance->depth;
         } else if (d->type == DRAWABLE_LAYER) {
-            d->depth = d->runtimeLayer->depth;
+            RuntimeLayer* rl = Runner_findRuntimeLayerById(runner, d->runtimeLayerId);
+            if (rl != nullptr) d->depth = rl->depth;
         }
     }
 }
@@ -611,7 +612,7 @@ static void rebuildDrawableCacheIfDirty(Runner* runner) {
             repeat(runtimeLayersCount, i) {
                 RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
                 Drawable d = { .type = DRAWABLE_LAYER, .depth = runtimeLayer->depth };
-                d.runtimeLayer = runtimeLayer;
+                d.runtimeLayerId = (int32_t) runtimeLayer->id;
                 arrput(runner->cachedDrawables, d);
             }
         }
@@ -627,7 +628,7 @@ static void rebuildDrawableCacheIfDirty(Runner* runner) {
 
     if (runner->drawableListSortDirty) {
         int32_t count = (int32_t) arrlen(runner->cachedDrawables);
-        refreshDrawableDepths(runner->cachedDrawables, count);
+        refreshDrawableDepths(runner, runner->cachedDrawables, count);
         if (count > 1 && !isDrawableArraySorted(runner->cachedDrawables, count)) {
             qsort(runner->cachedDrawables, count, sizeof(Drawable), compareDrawableDepth);
         }
@@ -706,7 +707,8 @@ void Runner_draw(Runner* runner) {
             }
         } else if (d->type == DRAWABLE_LAYER)
         {
-            RuntimeLayer* runtimeLayer = d->runtimeLayer;
+            // Re-resolve every iteration: a previous instance's Draw event may have called layer_create/layer_destroy and reallocated runner->runtimeLayers.
+            RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(runner, d->runtimeLayerId);
             if (runtimeLayer == nullptr || !runtimeLayer->visible) continue;
             float layerOffsetX = runtimeLayer->xOffset;
             float layerOffsetY = runtimeLayer->yOffset;
