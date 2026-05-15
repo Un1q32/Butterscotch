@@ -642,6 +642,17 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             }
         }
 
+        // GameMaker emits a "push builtin" inside a function for "read this as a self-variable"
+        if (varDef->instanceType == INSTANCE_SELF && ctx->currentInstance != nullptr) {
+            Instance* self = (Instance*) ctx->currentInstance;
+            RValue* selfSlot = IntRValueHashMap_findSlot(&self->selfVars, varDef->varID);
+            if (selfSlot != nullptr) {
+                RValue val = *selfSlot;
+                val.ownsReference = false;
+                return val;
+            }
+        }
+
         // Then try user scripts/code entries (funcMap maps both "funcName" and "gml_Script_funcName")
         ptrdiff_t mapIdx = shgeti(ctx->codeIndexByName, varDef->name);
         if (mapIdx >= 0) {
