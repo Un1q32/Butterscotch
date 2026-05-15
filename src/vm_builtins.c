@@ -1469,6 +1469,39 @@ static RValue builtinIsUndefined(MAYBE_UNUSED VMContext* ctx, RValue* args, int3
     return RValue_makeBool(args[0].type == RVALUE_UNDEFINED);
 }
 
+#if IS_BC17_OR_HIGHER_ENABLED
+static RValue builtinIsCallable(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeBool(false);
+    RValue v = args[0];
+
+    if (v.type == RVALUE_METHOD) return RValue_makeBool(v.method != nullptr);
+    if (v.type == RVALUE_ASSETREF) return RValue_makeBool(v.assetRefType == ASSET_TYPE_SCRIPT);
+
+    if (v.type == RVALUE_REAL || v.type == RVALUE_INT32 || v.type == RVALUE_INT64) {
+        int32_t idx = RValue_toInt32(v);
+        if (0 > idx) return RValue_makeBool(false);
+
+        // BC17+: scriptName compiles to a FUNC-table index. Resolve via codeIndexByName or builtinMap.
+        if (ctx->dataWin->func.functionCount > (uint32_t) idx) {
+            const char* funcName = ctx->dataWin->func.functions[idx].name;
+            if (funcName != nullptr) {
+                if (shgeti(ctx->codeIndexByName, (char*) funcName) >= 0) return RValue_makeBool(true);
+                if (shgeti(ctx->builtinMap, (char*) funcName) >= 0) return RValue_makeBool(true);
+            }
+        }
+
+        // Fallback: SCPT index
+        if (ctx->dataWin->scpt.count > (uint32_t) idx) {
+            int32_t codeId = ctx->dataWin->scpt.scripts[idx].codeId;
+            if (codeId >= 0 && ctx->dataWin->code.count > (uint32_t) codeId) return RValue_makeBool(true);
+        }
+        return RValue_makeBool(false);
+    }
+
+    return RValue_makeBool(false);
+}
+#endif
+
 // ===[ STRING FUNCTIONS ]===
 
 static RValue builtinStringUpper(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
@@ -9173,6 +9206,9 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "is_string", builtinIsString);
     VM_registerBuiltin(ctx, "is_real", builtinIsReal);
     VM_registerBuiltin(ctx, "is_undefined", builtinIsUndefined);
+#if IS_BC17_OR_HIGHER_ENABLED
+    VM_registerBuiltin(ctx, "is_callable", builtinIsCallable);
+#endif
 
     // Math functions
     VM_registerBuiltin(ctx, "floor", builtinFloor);
