@@ -1,0 +1,119 @@
+name: Build iOS .ipa (armv6, iPhone OS 3.1.3)
+
+# Cross-compiles Butterscotch for iPod Touch 2G with Theos + clang on
+# ubuntu-latest. No Xcode / no Mac runner required.
+
+on:
+  push:
+    branches: [main, "devin/**"]
+    paths:
+      - "src/**"
+      - "vendor/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "vendor/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-ios-armv6:
+    name: Build (Theos / iOS 3.1.3 / armv6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Identify commit
+        id: commit-info
+        run: |
+          echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(git log -1 --format=%cd --date=short)" >> $GITHUB_OUTPUT
+
+      - name: Install clang-22 + helper tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common \
+                                  build-essential perl curl ca-certificates \
+                                  zip unzip xz-utils bzip2 git
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          CODENAME=$(lsb_release -cs)
+          echo "deb http://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 llvm-22
+          # Sanity check
+          /usr/bin/clang-22 --version
+
+      - name: Install ldid (fake codesigner)
+        run: |
+          sudo apt-get install -y ldid || {
+            # Build from source if no apt package is available.
+            git clone --depth 1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
+            (cd /tmp/ldid && make -j$(nproc) && sudo install -m 755 ldid /usr/local/bin/ldid)
+          }
+          ldid -V || true
+
+      - name: Install Theos
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          # Non-interactive install: pre-answer "n" to the Swift question
+          # so we get a smaller toolchain (Butterscotch is C + ObjC, no Swift).
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          # Theos ships its own internal toolchain bootstrapper; we provide
+          # clang via $CC / $CXX so it does not try to download macOS-only
+          # binaries. The build system invokes the cross-compiler directly.
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Install iPhoneOS 3.1.3 SDK
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
+          mkdir -p "$THEOS/sdks"
+          # Sn0wCooder/theos-sdks is a community mirror that keeps the
+          # legacy 3.x SDKs alive (the official theos/sdks repo dropped
+          # anything older than iOS 9.3).
+          curl -fsSL -o /tmp/iphoneos3.1.3.sdk.tbz2 \
+            "https://raw.githubusercontent.com/Sn0wCooder/theos-sdks/master/iPhoneOS3.1.3.sdk.tbz2"
+          tar -xjf /tmp/iphoneos3.1.3.sdk.tbz2 -C "$THEOS/sdks"
+          ls "$THEOS/sdks"
+
+      - name: Build .deb + .app via Theos
+        env:
+          THEOS: ${{ github.workspace }}/theos
+          CC: /usr/bin/clang-22
+          CXX: /usr/bin/clang-22++
+          FINALPACKAGE: "1"
+        working-directory: src/gles/ios
+        run: |
+          make clean
+          make package FINALPACKAGE=1
+          ls -la packages
+
+      - name: Pack .ipa from staged .app
+        working-directory: src/gles/ios
+        run: |
+          rm -rf ipa_build
+          mkdir -p ipa_build/Payload
+          # The .app lands under .theos/obj/Butterscotch.app when armv6 is
+          # the only arch.
+          APP_DIR=".theos/obj/Butterscotch.app"
+          if [ ! -d "$APP_DIR" ]; then
+            APP_DIR=".theos/obj/armv6/Butterscotch.app"
+          fi
+          cp -a "$APP_DIR" ipa_build/Payload/
+          (cd ipa_build && zip -rq ../packages/Butterscotch-${{ steps.commit-info.outputs.hash }}-armv6-iOS3.1.3.ipa Payload)
+          ls -la packages
+
+      - name: Upload .ipa + .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Butterscotch-armv6-iOS3.1.3-${{ steps.commit-info.outputs.hash }}
+          path: |
+            src/gles/ios/packages/*.ipa
+            src/gles/ios/packages/*.deb
+          if-no-files-found: error
+          retention-days: 30
