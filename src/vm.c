@@ -447,7 +447,7 @@ static const char* instanceTypeName(int32_t instanceType) {
 
 // Returns the object name for an instance, or "<global_scope>" for the global scope dummy instance
 static const char* instanceObjectName(VMContext* ctx, Instance* inst) {
-    if (0 > inst->objectIndex) return "<global_scope>";
+    if (inst->objectIndex == STRUCT_OBJECT_INDEX) return "<global_scope>";
     return ctx->dataWin->objt.objects[inst->objectIndex].name;
 }
 
@@ -667,7 +667,7 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
     if (varDef->varID == -6) {
         // Structs aren't real game instances, but structs CAN store fields with the same names as built-ins.
         // So we'll check the self variables FIRST before checking for built-ins.
-        if (targetInstance != nullptr && targetInstance->objectIndex == -1) {
+        if (targetInstance != nullptr && targetInstance->objectIndex == STRUCT_OBJECT_INDEX) {
             ptrdiff_t nameSlot = shgeti(ctx->selfVarNameMap, (char*) varDef->name);
             if (nameSlot >= 0) {
                 int32_t structVarID = ctx->selfVarNameMap[nameSlot].value;

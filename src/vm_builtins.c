@@ -2869,7 +2869,7 @@ static RValue variableInstanceGetOn(VMContext* ctx, Instance* target, const char
 }
 
 static inline bool variableScopedMatches(Instance* inst, bool structOnly) {
-    return inst->active && (!structOnly || inst->objectIndex == -1);
+    return inst->active && (!structOnly || inst->objectIndex == STRUCT_OBJECT_INDEX);
 }
 
 static bool variableInstanceExistsOn(VMContext* ctx, Instance* target, const char* name) {
@@ -8498,7 +8498,7 @@ static RValue builtinSetStatic(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_
 }
 
 // @@NewGMLObject@@(methodRef, ...args) - GMS2 internal function that allocates a fresh struct instance, runs the constructor method against it, and returns the new instance ID.
-// We reuse Instance (with objectIndex = -1) the same way globalScopeInstance is used for GLOB scripts, instead of introducing a separate struct type.
+// We reuse Instance (with objectIndex = STRUCT_OBJECT_INDEX) the same way globalScopeInstance is used for GLOB scripts, instead of introducing a separate struct type.
 static RValue builtinNewGMLObject(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) {
         fprintf(stderr, "VM: @@NewGMLObject@@ called with no arguments\n");
