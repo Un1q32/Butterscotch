@@ -3787,6 +3787,11 @@ static AudioSystem* getAudioSystem(VMContext* ctx) {
     return runner->audioSystem;
 }
 
+static RValue builtin_audioSystemIsAvailable(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    logSemiStubbedFunction(ctx, "audio_system_is_available");
+    return RValue_makeBool(true);
+}
+
 static RValue builtin_audioExists(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     AudioSystem* audio = getAudioSystem(ctx);
     if (audio == nullptr || audio->vtable == nullptr || 1 > argCount) return RValue_makeBool(false);
@@ -9538,6 +9543,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "steam_get_persona_name", builtin_steam_get_persona_name);
 
     // Audio
+    VM_registerBuiltin(ctx, "audio_system_is_available", builtin_audioSystemIsAvailable);
     VM_registerBuiltin(ctx, "audio_exists", builtin_audioExists);
     VM_registerBuiltin(ctx, "sound_exists", builtin_audioExists); // Replaced with audio_exists in GMS2
     VM_registerBuiltin(ctx, "audio_channel_num", builtin_audioChannelNum);
