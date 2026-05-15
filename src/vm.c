@@ -2704,7 +2704,7 @@ static void handleBreakPushRef(VMContext* ctx, const uint8_t* extraData) {
         return;
     }
 
-    stackPushTyped(ctx, RValue_makeAssetRef(index, assetType), GML_TYPE_INT32);
+    stackPushTyped(ctx, RValue_makeAssetRef(index, assetType), GML_TYPE_VARIABLE);
 }
 
 static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr, const uint8_t* extraData) {
