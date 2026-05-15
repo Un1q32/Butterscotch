@@ -1368,7 +1368,32 @@ static void cleanupState(Runner* runner) {
     }
     runner->savedRoomStates = nullptr;
 
-    // Free struct instances (created via @@NewGMLObject@@). Anything still here at shutdown is leaked refs or a reference cycle - bulk free regardless of refCount.
+    // Drain ds_map/ds_list pools BEFORE bulk-freeing struct instances. Their RValue entries may hold RVALUE_STRUCT refs to structs in runner->structInstances, and RValue_free would deref freed memory if the structs are gone.
+    repeat((int32_t) arrlen(runner->dsMapPool), i) {
+        DsMapEntry* map = runner->dsMapPool[i];
+        if (map != nullptr) {
+            repeat(shlen(map), j) {
+                free(map[j].key);
+                RValue_free(&map[j].value);
+            }
+            shfree(map);
+        }
+    }
+    arrfree(runner->dsMapPool);
+    runner->dsMapPool = nullptr;
+
+    repeat((int32_t) arrlen(runner->dsListPool), i) {
+        DsList* list = &runner->dsListPool[i];
+        repeat(arrlen(list->items), j) {
+            RValue_free(&list->items[j]);
+        }
+        arrfree(list->items);
+    }
+    arrfree(runner->dsListPool);
+    runner->dsListPool = nullptr;
+
+    // Free struct instances.
+    // Anything still here at shutdown is leaked refs or a reference cycle - bulk free regardless of refCount.
     // Because structs can reference each other, we need to free every struct's contents FIRST, then we can free the Instance structs themselves.
     repeat(arrlen(runner->structInstances), i) {
         Instance* s = runner->structInstances[i];
@@ -1389,31 +1414,6 @@ static void cleanupState(Runner* runner) {
     freeRuntimeLayersArray(&runner->runtimeLayers);
     shfree(runner->disabledObjects);
     runner->disabledObjects = nullptr;
-
-    // Free ds_map pool
-    repeat((int32_t) arrlen(runner->dsMapPool), i) {
-        DsMapEntry* map = runner->dsMapPool[i];
-        if (map != nullptr) {
-            repeat(shlen(map), j) {
-                free(map[j].key);
-                RValue_free(&map[j].value);
-            }
-            shfree(map);
-        }
-    }
-    arrfree(runner->dsMapPool);
-    runner->dsMapPool = nullptr;
-
-    // Free ds_list pool
-    repeat((int32_t) arrlen(runner->dsListPool), i) {
-        DsList* list = &runner->dsListPool[i];
-        repeat(arrlen(list->items), j) {
-            RValue_free(&list->items[j]);
-        }
-        arrfree(list->items);
-    }
-    arrfree(runner->dsListPool);
-    runner->dsListPool = nullptr;
 
     // Free mp_grid pool
     repeat((int32_t) arrlen(runner->mpGridPool), i) {
