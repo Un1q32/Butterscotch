@@ -48,12 +48,15 @@ typedef struct {
 
 typedef struct {
     Renderer base; // MUST be first — vtable functions cast Renderer* -> GLES1Renderer*
-    FILE* dataWinFile;
-    BSTexCacheSlot* slots; // count = dataWin->txtr.count
+    FILE* dataWinFile;          // owned, fopen'd from dataWinPath; falls back to dataWin->lazyLoadFile if path was not set
+    char* dataWinPath;          // strdup, owned
+    bool ownsFile;              // true if we fopen'd it, false if we borrowed from lazyLoadFile
+    BSTexCacheSlot* slots;      // count = dataWin->txtr.count
     uint32_t slotCount;
     uint32_t frameTick;
     uint32_t residentBytes;
     uint32_t residentBudget;
+    uint32_t logBudget;         // diagnostic prints we still owe; decremented as we log
 } GLES1Renderer;
 
 static inline GLES1Renderer* asGLES1(Renderer* r) {
@@ -77,9 +80,26 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
     r->drawValign = 0;
     r->circlePrecision = 24;
 
-    // Pick up the lazy-load file handle the parser kept open.
-    if (dataWin->lazyLoadFile != NULL) {
+    // Prefer our own FILE* (set via GLES1Renderer_setDataWinPath) so we
+    // don't race with the parser's room-payload lazy loader on a shared
+    // file position. Fall back to dataWin->lazyLoadFile if the embedder
+    // didn't tell us a path.
+    if (g->dataWinPath != NULL) {
+        g->dataWinFile = fopen(g->dataWinPath, "rb");
+        g->ownsFile = (g->dataWinFile != NULL);
+        if (g->dataWinFile == NULL) {
+            fprintf(stderr, "[gles1] WARN: fopen('%s') failed (errno keeps you guessing on iOS 3); will fall back to lazyLoadFile\n", g->dataWinPath);
+        }
+    }
+    if (g->dataWinFile == NULL && dataWin->lazyLoadFile != NULL) {
         g->dataWinFile = dataWin->lazyLoadFile;
+        g->ownsFile = false;
+    }
+    if (g->dataWinFile == NULL) {
+        fprintf(stderr, "[gles1] WARN: no data.win FILE* for texture streaming — sprites will be white\n");
+    } else {
+        fprintf(stderr, "[gles1] data.win FILE* ready (owned=%d), TXTR count=%u\n",
+                (int) g->ownsFile, (unsigned) dataWin->txtr.count);
     }
 
     // Allocate one cache slot per TXTR entry.
@@ -87,6 +107,7 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
         g->slotCount = dataWin->txtr.count;
         g->slots = (BSTexCacheSlot*) calloc(g->slotCount, sizeof(BSTexCacheSlot));
     }
+    g->logBudget = 8; // first 8 ensureTexture calls get fully logged
 
     g->frameTick = 0;
     g->residentBytes = 0;
@@ -113,6 +134,14 @@ static void gles1_destroy(Renderer* r) {
         }
         free(g->slots);
         g->slots = NULL;
+    }
+    if (g->ownsFile && g->dataWinFile != NULL) {
+        fclose(g->dataWinFile);
+        g->dataWinFile = NULL;
+    }
+    if (g->dataWinPath != NULL) {
+        free(g->dataWinPath);
+        g->dataWinPath = NULL;
     }
 }
 
@@ -153,6 +182,11 @@ static void gles1_evictLRU(GLES1Renderer* g, uint32_t bytesToFree) {
 
 static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* outW, int32_t* outH) {
     if (txtrIndex < 0 || (uint32_t) txtrIndex >= g->slotCount) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture: index %d out of range [0, %u)\n",
+                    txtrIndex, g->slotCount);
+            g->logBudget--;
+        }
         return 0;
     }
     BSTexCacheSlot* slot = &g->slots[txtrIndex];
@@ -164,29 +198,78 @@ static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* 
         return slot->glHandle;
     }
 
-    if (g->dataWinFile == NULL) return 0;
+    if (g->dataWinFile == NULL) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: dataWinFile is NULL\n", txtrIndex);
+            g->logBudget--;
+        }
+        return 0;
+    }
 
     Texture* tex = &g->base.dataWin->txtr.textures[txtrIndex];
-    if (tex->blobOffset == 0 || tex->blobSize == 0) return 0;
+    if (g->logBudget > 0) {
+        fprintf(stderr, "[gles1] ensureTexture[%d]: blobOffset=%u blobSize=%u\n",
+                txtrIndex, (unsigned) tex->blobOffset, (unsigned) tex->blobSize);
+    }
+    if (tex->blobOffset == 0 || tex->blobSize == 0) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: blob coordinates are zero — external texture?\n", txtrIndex);
+            g->logBudget--;
+        }
+        return 0;
+    }
 
     // Read PNG blob from disk. This is a one-shot per atlas: blob is
     // typically 100-500 KB compressed.
     uint8_t* compressed = (uint8_t*) malloc(tex->blobSize);
-    if (compressed == NULL) return 0;
+    if (compressed == NULL) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: malloc(%u) failed\n",
+                    txtrIndex, (unsigned) tex->blobSize);
+            g->logBudget--;
+        }
+        return 0;
+    }
     if (fseek(g->dataWinFile, (long) tex->blobOffset, SEEK_SET) != 0) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: fseek(%u) failed\n",
+                    txtrIndex, (unsigned) tex->blobOffset);
+            g->logBudget--;
+        }
         free(compressed);
         return 0;
     }
-    if (fread(compressed, 1, tex->blobSize, g->dataWinFile) != tex->blobSize) {
+    size_t got = fread(compressed, 1, tex->blobSize, g->dataWinFile);
+    if (got != tex->blobSize) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: fread short: got %zu, wanted %u\n",
+                    txtrIndex, got, (unsigned) tex->blobSize);
+            g->logBudget--;
+        }
         free(compressed);
         return 0;
+    }
+    if (g->logBudget > 0) {
+        fprintf(stderr, "[gles1] ensureTexture[%d]: read %zu bytes, magic=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                txtrIndex, got,
+                compressed[0], compressed[1], compressed[2], compressed[3],
+                compressed[4], compressed[5], compressed[6], compressed[7]);
     }
 
     int w = 0, h = 0, ch = 0;
     stbi_uc* pixels = stbi_load_from_memory(compressed, (int) tex->blobSize, &w, &h, &ch, 4);
     free(compressed);
     if (pixels == NULL || w <= 0 || h <= 0) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: stbi decode failed: %s (w=%d h=%d)\n",
+                    txtrIndex, stbi_failure_reason() ? stbi_failure_reason() : "(no reason)", w, h);
+            g->logBudget--;
+        }
         return 0;
+    }
+    if (g->logBudget > 0) {
+        fprintf(stderr, "[gles1] ensureTexture[%d]: decoded %dx%d (ch=%d)\n", txtrIndex, w, h, ch);
+        g->logBudget--;
     }
 
     // Make room.
@@ -633,4 +716,18 @@ Renderer* GLES1Renderer_create(void) {
     if (g == NULL) return NULL;
     g->base.vtable = &kGles1Vtable;
     return &g->base;
+}
+
+void GLES1Renderer_setDataWinPath(Renderer* r, const char* path) {
+    if (r == NULL || path == NULL) return;
+    GLES1Renderer* g = asGLES1(r);
+    if (g->dataWinPath != NULL) {
+        free(g->dataWinPath);
+        g->dataWinPath = NULL;
+    }
+    size_t n = strlen(path);
+    g->dataWinPath = (char*) malloc(n + 1);
+    if (g->dataWinPath != NULL) {
+        memcpy(g->dataWinPath, path, n + 1);
+    }
 }

@@ -39,6 +39,7 @@
 
 // From src/gles/gles1_renderer.h
 Renderer* GLES1Renderer_create(void);
+void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
 
 // ============================================================================
 // GameEntry — one playable folder
@@ -457,6 +458,10 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     [_glView makeContextCurrent];
     [_glView bindDrawable];
     _renderer = GLES1Renderer_create();
+    // Renderer needs to fopen its own FILE handle into data.win so it
+    // can stream TXTR PNG blobs without racing the parser's room
+    // lazy-loader on a shared file position.
+    GLES1Renderer_setDataWinPath(_renderer, [_game->dataWinPath UTF8String]);
 
     _runner = Runner_create(_dataWin, _vm, _renderer, _fileSystem, _audio);
     _runner->osType = OS_IOS;

@@ -29,6 +29,12 @@ extern "C" {
 // to call even though most draw functions are currently stubs.
 Renderer* GLES1Renderer_create(void);
 
+// Tell the renderer where data.win lives on disk so it can fopen its
+// own FILE handle (independent of dataWin->lazyLoadFile) and lazily
+// stream TXTR PNG blobs from that file. Must be called before
+// Runner_create / Renderer_init (the vtable init reads this path).
+void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
+
 #ifdef __cplusplus
 }
 #endif
