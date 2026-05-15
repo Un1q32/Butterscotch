@@ -1737,7 +1737,7 @@ static void parseSTRG(BinaryReader* reader, DataWin* dw) {
     free(ptrs);
 }
 
-static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
+static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd, bool skipBlobs) {
     Txtr* t = &dw->txtr;
 
     uint32_t count;
@@ -1810,14 +1810,19 @@ static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
         }
     }
 
-    // Load blob data into owned buffers
-    repeat(count, i) {
-        if (t->textures[i].blobOffset == 0 || t->textures[i].blobSize == 0) continue;
-        t->textures[i].blobData = BinaryReader_readBytesAt(reader, t->textures[i].blobOffset, t->textures[i].blobSize);
+    // Load blob data into owned buffers. RAM-constrained ports can
+    // opt out via DataWinParserOptions.skipLoadingTxtrBlobs and stream
+    // texture pixels from data.win on demand using
+    // texture.blobOffset / texture.blobSize.
+    if (!skipBlobs) {
+        repeat(count, i) {
+            if (t->textures[i].blobOffset == 0 || t->textures[i].blobSize == 0) continue;
+            t->textures[i].blobData = BinaryReader_readBytesAt(reader, t->textures[i].blobOffset, t->textures[i].blobSize);
+        }
     }
 }
 
-static void parseAUDO(BinaryReader* reader, DataWin* dw) {
+static void parseAUDO(BinaryReader* reader, DataWin* dw, bool skipBlobs) {
     Audo* a = &dw->audo;
 
     uint32_t count;
@@ -1831,8 +1836,9 @@ static void parseAUDO(BinaryReader* reader, DataWin* dw) {
         BinaryReader_seek(reader, ptrs[i]);
         a->entries[i].dataSize = BinaryReader_readUint32(reader);
         a->entries[i].dataOffset = (uint32_t)BinaryReader_getPosition(reader);
-        // Load audio data into owned buffer
-        if (a->entries[i].dataSize > 0) {
+        // Load audio data into owned buffer. Same opt-out mechanism as TXTR
+        // for RAM-constrained ports — see DataWinParserOptions.skipLoadingAudoBlobs.
+        if (a->entries[i].dataSize > 0 && !skipBlobs) {
             a->entries[i].data = safeMalloc(a->entries[i].dataSize);
             BinaryReader_readBytes(reader, a->entries[i].data, a->entries[i].dataSize);
         } else {
@@ -1976,9 +1982,23 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             (options.parseTxtr && memcmp(chunkName, "TXTR", 4) == 0) ||
             (options.parseAudo && memcmp(chunkName, "AUDO", 4) == 0);
 
-        // Bulk-read the chunk data into memory for fast parsing
+        // Bulk-read the chunk data into memory for fast parsing.
+        //
+        // EXCEPTION: when we have been asked to skip loading the blob
+        // bodies for TXTR / AUDO, we deliberately do NOT pre-buffer
+        // those chunks. Allocating a 40 MB buffer just to throw it away
+        // is what OOMs RAM-constrained ports (iPod Touch 2G has ~80 MB
+        // of usable RAM). Instead we leave the BinaryReader in FILE*
+        // mode and let parseTXTR / parseAUDO seek + read metadata
+        // directly from disk \u2014 the metadata is only a few KB even for
+        // games with thousands of textures.
         uint8_t* chunkBuffer = nullptr;
-        if (shouldParse && chunkLength > 0) {
+        bool isTxtrChunk = memcmp(chunkName, "TXTR", 4) == 0;
+        bool isAudoChunk = memcmp(chunkName, "AUDO", 4) == 0;
+        bool skipBuffering =
+            (isTxtrChunk && options.skipLoadingTxtrBlobs) ||
+            (isAudoChunk && options.skipLoadingAudoBlobs);
+        if (shouldParse && chunkLength > 0 && !skipBuffering) {
             chunkBuffer = safeMalloc(chunkLength);
             size_t read = fread(chunkBuffer, 1, chunkLength, reader.file);
             if (read != chunkLength) {
@@ -2049,9 +2069,9 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         } else if (options.parseStrg && memcmp(chunkName, "STRG", 4) == 0) {
             parseSTRG(&reader, dw);
         } else if (options.parseTxtr && memcmp(chunkName, "TXTR", 4) == 0) {
-            parseTXTR(&reader, dw, chunkEnd);
+            parseTXTR(&reader, dw, chunkEnd, options.skipLoadingTxtrBlobs);
         } else if (options.parseAudo && memcmp(chunkName, "AUDO", 4) == 0) {
-            parseAUDO(&reader, dw);
+            parseAUDO(&reader, dw, options.skipLoadingAudoBlobs);
         } else {
             printf("Unknown chunk: %.4s (length %u at offset 0x%zX)\n", chunkName, chunkLength, chunkDataStart - 8);
         }

@@ -10,4 +10,10 @@ CMakeUserPresets.json
 src/gles/ios/.theos/
 src/gles/ios/packages/
 src/gles/ios/.ipa-staging/
+src/gles/ios/.stamp
+src/gles/ios/ipa_build/
+# Stray theos *.o / *.Td artifacts that occasionally land outside .theos
+src/gles/**/vendor/md5/*.o
+src/gles/**/vendor/md5/*.Td
+src/gles/**/vendor/md5/*.d
 

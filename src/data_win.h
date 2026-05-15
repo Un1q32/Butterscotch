@@ -45,6 +45,15 @@ typedef struct {
     // When lazyLoadRooms is true, this list indicates which rooms should be loaded during load time instead of demand. They will also not be freed.
     StringBooleanEntry* eagerlyLoadedRooms;
 
+    // When true (the default) AND parseTxtr is true, parseTXTR will load the PNG blob for each texture into texture.blobData.
+    // When false, only the metadata (offsets, sizes, geometry) is parsed and blobData is left NULL. The renderer must then
+    // stream the texture pixels from data.win on demand using texture.blobOffset / texture.blobSize. This is what RAM-constrained
+    // ports (e.g. iPod Touch 2G with 128 MB RAM, Undertale data.win ~40 MB of TXTR pixels) need to avoid OOM at load time.
+    bool skipLoadingTxtrBlobs;
+
+    // Same as skipLoadingTxtrBlobs but for AUDO (WAV/OGG audio blobs).
+    bool skipLoadingAudoBlobs;
+
     // Optional progress callback, called before each chunk is parsed.
     // chunkName: 4-character chunk name (e.g. "GEN8", "SPRT")
     // chunkIndex: 0-based index of the current chunk being parsed
