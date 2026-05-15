@@ -647,6 +647,7 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             Instance* self = (Instance*) ctx->currentInstance;
             RValue* selfSlot = IntRValueHashMap_findSlot(&self->selfVars, varDef->varID);
             if (selfSlot != nullptr) {
+                if (access.isArray) return VM_arrayReadAt(selfSlot, access.arrayIndex);
                 RValue val = *selfSlot;
                 val.ownsReference = false;
                 return val;
