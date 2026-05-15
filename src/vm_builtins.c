@@ -8305,6 +8305,14 @@ static RValue builtinNullObject(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue
     return RValue_makeInt32(INSTANCE_NOONE);
 }
 
+// @@SetStatic@@() - GMS2.3+ internal function emitted at the top of constructor bodies.
+// TODO: Semi-stub! The native runner does more things than that
+static RValue builtinSetStatic(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    logSemiStubbedFunction(ctx, "@@SetStatic@@");
+    if (ctx->staticInitialized != nullptr) ctx->staticInitialized[ctx->currentCodeIndex] = true;
+    return RValue_makeUndefined();
+}
+
 // @@NewGMLObject@@(methodRef, ...args) - GMS2 internal function that allocates a fresh struct instance, runs the constructor method against it, and returns the new instance ID.
 // We reuse Instance (with objectIndex = -1) the same way globalScopeInstance is used for GLOB scripts, instead of introducing a separate struct type.
 static RValue builtinNewGMLObject(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -9720,6 +9728,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 #if IS_BC17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "@@NullObject@@", builtinNullObject);
     VM_registerBuiltin(ctx, "@@NewGMLObject@@", builtinNewGMLObject);
+    VM_registerBuiltin(ctx, "@@SetStatic@@", builtinSetStatic);
 #endif
 
     // Path
