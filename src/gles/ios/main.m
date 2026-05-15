@@ -409,7 +409,14 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     opts.parseTxtr = true;
     opts.parseAudo = true;
     opts.skipLoadingPreciseMasksForNonPreciseSprites = true;
-    opts.lazyLoadRooms = true;   // critical for 128 MB MBX Lite RAM budget
+    opts.lazyLoadRooms = true;       // critical for 128 MB MBX Lite RAM budget
+    // We parse the TXTR / AUDO metadata so we know each blob's
+    // offset+size inside data.win, but we deliberately do NOT load the
+    // PNG / audio bytes into RAM. The renderer (when it grows real
+    // texture support) and audio system can stream them on demand
+    // from data.win via dw->lazyLoadFile + texture.blobOffset.
+    opts.skipLoadingTxtrBlobs = true;
+    opts.skipLoadingAudoBlobs = true;
     opts.eagerlyLoadedRooms = NULL;
     opts.progressCallback = BSDataWinProgress;
     opts.progressCallbackUserData = NULL;
@@ -453,6 +460,16 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
     _runner = Runner_create(_dataWin, _vm, _renderer, _fileSystem, _audio);
     _runner->osType = OS_IOS;
+
+    // CRITICAL: Runner_create does NOT load the first room. Without this,
+    // Runner_step crashes in dispatchOutsideRoomEvents because
+    // runner->currentRoom is NULL. Mirrors what the PS2 port does at
+    // src/ps2/main.c:521.
+    [self setStatus:@"Initializing first room…"];
+    NSLog(@"[Butterscotch] Runner_initFirstRoom");
+    Runner_initFirstRoom(_runner);
+    NSLog(@"[Butterscotch] first room loaded: %s",
+          _runner->currentRoom != NULL ? _runner->currentRoom->name : "(NULL)");
 
     _runtimeReady = YES;
     _lastTickTime = [NSDate timeIntervalSinceReferenceDate];
