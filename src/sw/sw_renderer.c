@@ -372,14 +372,12 @@ static void SWRenderer_beginFrame(Renderer* renderer, int32_t gameW, int32_t gam
 // This used to be just one, "endFrame". Not sure what the different is.
 static void SWRenderer_endFrameInit(Renderer* renderer)
 {
-	UNIMP();
 	SWRenderer* swr = (SWRenderer*) renderer;
 	Runner_setNextFrame(swr->fb, swr->width, swr->height);
 }
 
 static void SWRenderer_endFrameEnd(Renderer* renderer)
 {
-	UNIMP();
 	SWRenderer* swr = (SWRenderer*) renderer;
 	Runner_setNextFrame(swr->fb, swr->width, swr->height);
 }
