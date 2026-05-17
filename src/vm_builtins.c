@@ -7651,6 +7651,66 @@ static RValue builtinInstancePlace(VMContext* ctx, RValue* args, int32_t argCoun
     return RValue_makeReal((GMLReal) resultId);
 }
 
+// instance_place_list(x, y, obj, list, ordered) -> count of colliding instances, appended to ds_list
+static RValue builtinInstancePlaceList(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (5 > argCount) return RValue_makeReal(0.0);
+
+    Runner* runner = (Runner*) ctx->runner;
+    Instance* caller = (Instance*) ctx->currentInstance;
+    if (caller == nullptr) return RValue_makeReal(0.0);
+
+    GMLReal testX = RValue_toReal(args[0]);
+    GMLReal testY = RValue_toReal(args[1]);
+    int32_t targetObjIndex = RValue_toInt32(args[2]);
+    int32_t listId = RValue_toInt32(args[3]);
+    // arg 4 (ordered) is currently ignored; instances are appended in iteration order
+
+    DsList* list = dsListGet(runner, listId);
+    if (list == nullptr) return RValue_makeReal(0.0);
+
+    GMLReal savedX = caller->x;
+    GMLReal savedY = caller->y;
+    caller->x = testX;
+    caller->y = testY;
+
+    InstanceBBox callerBBox = Collision_computeBBox(runner->dataWin, caller);
+    int32_t count = 0;
+
+    SpatialGrid_syncGrid(runner, runner->spatialGrid);
+
+    if (callerBBox.valid) {
+        SpatialGridQuery query = SpatialGrid_prepareQuery(runner, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom, targetObjIndex);
+
+        for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
+            for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
+                Instance** cell = runner->spatialGrid->grid[SpatialGrid_cellIndex(runner->spatialGrid, gx, gy)];
+                int32_t cellLen = (int32_t) arrlen(cell);
+                repeat(cellLen, ci) {
+                    Instance* other = cell[ci];
+                    if (!other->active || other == caller) continue;
+                    if (other->lastCollisionQueryId == query.queryId) continue;
+                    other->lastCollisionQueryId = query.queryId;
+
+                    if (query.filterByObject && !VM_isObjectOrDescendant(runner->dataWin, other->objectIndex, targetObjIndex)) continue;
+                    if (query.filterByInstanceId && other->instanceId != (uint32_t) targetObjIndex) continue;
+
+                    InstanceBBox otherBBox = Collision_computeBBox(runner->dataWin, other);
+                    if (!otherBBox.valid) continue;
+
+                    if (Collision_instancesOverlapPrecise(runner->dataWin, runner->collisionCompatibilityMode, caller, other, callerBBox, otherBBox)) {
+                        arrput(list->items, RValue_makeReal((GMLReal) other->instanceId));
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    caller->x = savedX;
+    caller->y = savedY;
+    return RValue_makeReal((GMLReal) count);
+}
+
 // instance_position(x, y, obj)
 static RValue builtinInstancePosition(VMContext* ctx, RValue* args, int32_t argCount) {
     if (3 > argCount) return RValue_makeReal((GMLReal) INSTANCE_NOONE);
@@ -10083,6 +10143,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "collision_point", builtinCollisionPoint);
     VM_registerBuiltin(ctx, "collision_circle", builtinCollisionCircle);
     VM_registerBuiltin(ctx, "instance_place", builtinInstancePlace);
+    VM_registerBuiltin(ctx, "instance_place_list", builtinInstancePlaceList);
     VM_registerBuiltin(ctx, "instance_position", builtinInstancePosition);
     VM_registerBuiltin(ctx, "position_meeting", builtinPositionMeeting);
     VM_registerBuiltin(ctx, "place_free", builtinPlaceFree);
