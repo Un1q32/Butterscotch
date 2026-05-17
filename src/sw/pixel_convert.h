@@ -17,7 +17,7 @@ typedef uint32_t uintpixel_t;
 typedef uint16_t uintpixel_t;
 #elif PIXEL_SIZE == 8
 typedef uint8_t uintpixel_t;
-#define PXL_TRANSPARENT (0b10101010)
+#define PXL_TRANSPARENT (0xAA)
 #else
 #error "Unknown pixel size!"
 #endif
