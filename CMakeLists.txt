@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
+
+if(PLATFORM STREQUAL "ps3")
+set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/cmake/ppu.cmake)
+endif()
+
 project(butterscotch C)
 
 set(CMAKE_C_STANDARD 99)

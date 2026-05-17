@@ -41,36 +41,10 @@ extern GLint  gPalettedUPaletteVLoc;
 #include "stb_ds.h"
 #include "utils.h"
 #include "image_decoder.h"
-#ifndef PLATFORM_PS3
 #include "gl_common.h"
-#endif
 
 // ===[ Helpers ]===
 
-#ifdef PLATFORM_PS3
-static void glApplyViewport(GLLegacyRenderer* gl, int32_t x, int32_t y, int32_t w, int32_t h) {
-    int32_t effW, effH;
-    if ((gl->gameW * gl->windowH) / gl->gameH < gl->windowW) {
-        effW = (gl->gameW * gl->windowH) / gl->gameH;
-        effH = gl->windowH;
-    } else {
-        effW = gl->windowW;
-        effH = (gl->gameH * gl->windowW) / gl->gameW;
-    }
-    float scale = (float)effW / (float)gl->gameW;
-    int32_t offsetX = (gl->windowW - effW) / 2;
-    int32_t offsetY = (gl->windowH - effH) / 2;
-
-    int32_t vpX = offsetX + (int32_t)(x * scale);
-    int32_t vpY = offsetY + (int32_t)((gl->gameH - y - h) * scale);
-    int32_t vpW = (int32_t)(w * scale);
-    int32_t vpH = (int32_t)(h * scale);
-
-    glViewport(vpX, vpY, vpW, vpH);
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(vpX, vpY, vpW, vpH);
-}
-#else
 static void glApplyViewport(GLLegacyRenderer* gl, int32_t x, int32_t y, int32_t w, int32_t h) {
     int32_t glY = gl->gameH - y - h;
     glViewport(x, glY, w, h);
@@ -82,7 +56,6 @@ static void glApplyViewport(GLLegacyRenderer* gl, int32_t x, int32_t y, int32_t 
     gl->base.CPortW = w;
     gl->base.CPortH = h;
 }
-#endif
 
 // ===[ Vtable Implementations ]===
 
@@ -133,7 +106,6 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->originalTpagCount = dataWin->tpag.count;
     gl->originalSpriteCount = dataWin->sprt.count;
 
-#ifndef PLATFORM_PS3
     // Create FBO
     glGenFramebuffers(1, &gl->fbo);
     gl->fboTexture = 0;
@@ -145,7 +117,6 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->surfaceWidth = nullptr;
     gl->surfaceHeight = nullptr;
     gl->surfaceCount = 0;
-#endif
 
     fprintf(stderr, "GL: Renderer initialized (%u texture pages)\n", gl->textureCount);
 }
@@ -157,7 +128,6 @@ static void glDestroy(Renderer* renderer) {
 
     glDeleteTextures((GLsizei) gl->textureCount, gl->glTextures);
 
-#ifndef PLATFORM_PS3
     if (gl->fboTexture != 0) glDeleteTextures(1, &gl->fboTexture);
     if (gl->fbo != 0) glDeleteFramebuffers(1, &gl->fbo);
     for (uint32_t i = 0; gl->surfaceCount > i; i++) {
@@ -168,7 +138,6 @@ static void glDestroy(Renderer* renderer) {
     free(gl->surfaceTexture);
     free(gl->surfaceWidth);
     free(gl->surfaceHeight);
-#endif
 
     free(gl->glTextures);
     free(gl->textureWidths);
@@ -184,7 +153,6 @@ static void glBeginFrame(Renderer* renderer, int32_t gameW, int32_t gameH, int32
     gl->gameW = gameW;
     gl->gameH = gameH;
 
-#ifndef PLATFORM_PS3
     if (gameW != gl->fboWidth || gameH != gl->fboHeight) {
         GLCommon_resizeMainFBO(&gl->fboTexture, gl->fbo, &gl->fboWidth, &gl->fboHeight, gameW, gameH);
     }
@@ -195,9 +163,6 @@ static void glBeginFrame(Renderer* renderer, int32_t gameW, int32_t gameH, int32
     gl->base.CPortY = 0;
     gl->base.CPortW = gameW;
     gl->base.CPortH = gameH;
-#else
-    glApplyViewport(gl, 0, 0, gameW, gameH);
-#endif
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -281,23 +246,19 @@ static void glEndGUI(MAYBE_UNUSED Renderer* renderer) {
 
 static void glEndFrameInit(Renderer* renderer) {
     MAYBE_UNUSED GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
-#ifndef PLATFORM_PS3
     if (renderer->usingAppSurface && !renderer->appSurfaceAutoDraw) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return;
     }
     GLCommon_beginLetterboxBlit(gl->fbo);
-#endif
 }
 
 static void glEndFrameEnd(Renderer* renderer) {
     MAYBE_UNUSED GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
-#ifndef PLATFORM_PS3
     if (renderer->usingAppSurface && !renderer->appSurfaceAutoDraw) {
         return;
     }
     GLCommon_endLetterboxBlit(gl->fboWidth, gl->fboHeight, gl->gameW, gl->gameH, gl->windowW, gl->windowH);
-#endif
 }
 
 static void glRendererFlush(MAYBE_UNUSED Renderer* renderer) {}
@@ -680,9 +641,61 @@ static void glDrawRectangle(Renderer* renderer, float x1, float y1, float x2, fl
     }
 }
 
-static void glDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color1, MAYBE_UNUSED uint32_t color2, MAYBE_UNUSED uint32_t color3, MAYBE_UNUSED uint32_t color4, float alpha, bool outline) {
-    // Stub! Please implement me later. :3
-    glDrawRectangle(renderer, x1, y1, x2, y2, color1, alpha, outline);
+static void glDrawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uint32_t color1, uint32_t color2, float alpha);
+static void glDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4, float alpha, bool outline) {
+    GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
+
+    float r1 = (float) BGR_R(color1) / 255.0f;
+    float g1 = (float) BGR_G(color1) / 255.0f;
+    float b1 = (float) BGR_B(color1) / 255.0f;
+
+    float r2 = (float) BGR_R(color2) / 255.0f;
+    float g2 = (float) BGR_G(color2) / 255.0f;
+    float b2 = (float) BGR_B(color2) / 255.0f;
+
+    float r3 = (float) BGR_R(color3) / 255.0f;
+    float g3 = (float) BGR_G(color3) / 255.0f;
+    float b3 = (float) BGR_B(color3) / 255.0f;
+
+    float r4 = (float) BGR_R(color4) / 255.0f;
+    float g4 = (float) BGR_G(color4) / 255.0f;
+    float b4 = (float) BGR_B(color4) / 255.0f;
+
+    glBindTexture(GL_TEXTURE_2D, gl->whiteTexture);
+
+    if (outline) {
+        // Draw 4 one-pixel-wide edges: top, bottom, left, right
+        glDrawLineColor(renderer, x1, y1, x2, y1, 1.0, color1, color2, alpha);
+        glDrawLineColor(renderer, x2, y1, x2, y2, 1.0, color2, color3, alpha);
+        glDrawLineColor(renderer, x2, y2, x1, y2, 1.0, color3, color4, alpha);
+        glDrawLineColor(renderer, x1, y2, x1, y1, 1.0, color4, color1, alpha);
+    } else {
+        // Filled rectangle: GML adds +1 to width/height for filled rects
+
+        // All UVs point to (0.5, 0.5) center of the 1x1 white texture
+        glBegin(GL_QUADS);
+            // Vertex 0: top-left
+            glColor4f(r1, g1, b1, alpha);
+            glTexCoord2f(0.5f, 0.5f);
+            glVertex2f(x1, y1); 
+
+            // Vertex 1: top-right
+            glColor4f(r2, g2, b2, alpha);
+            glTexCoord2f(0.5f, 0.5f);
+            glVertex2f(x2+1, y1);
+
+            // Vertex 2: bottom-right
+            glColor4f(r3, g3, b3, alpha);
+            glTexCoord2f(0.5f, 0.5f);
+            glVertex2f(x2+1, y2+1);
+
+            // Vertex 3: bottom-left
+            glColor4f(r4, g4, b4, alpha);
+            glTexCoord2f(0.5f, 0.5f);
+            glVertex2f(x1, y2+1); 
+
+        glEnd();
+    }
 }
 
 // ===[ Line Drawing ]===
@@ -1218,7 +1231,6 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
 
     if (0 >= w || 0 >= h) return -1;
 
-#ifndef PLATFORM_PS3
     // Bind the source FBO and figure out its height for the GL bottom-up flip.
     // application_surface (-1) reads from the main FBO; otherwise read from the matching surface FBO.
     int32_t srcHeight;
@@ -1231,40 +1243,12 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, gl->surfaces[surfaceID]);
         srcHeight = gl->surfaceHeight[surfaceID];
     }
-#endif
 
     uint8_t* pixels = safeMalloc((size_t) w * (size_t) h * 4);
     if (pixels == nullptr)
         return -1;
 
-#ifdef PLATFORM_PS3
-    if (0 > x || 0 > y || (uint32_t) (x + w) > display_width || (uint32_t) (y + h) > display_height) {
-        free(pixels);
-        return -1;
-    }
-    // Ensure that the draw calls were executed
-    waitFinish();
-    const uint8_t* src = (const uint8_t*) color_buffer[curr_fb];
-    size_t srcRowBytes = color_pitch;
-    size_t dstRowBytes = (size_t) w * 4;
-    repeat(h, row) {
-        const uint8_t* srcLine = src + ((size_t) (y + row)) * srcRowBytes + (size_t) (x * 4);
-        uint8_t* dstLine = pixels + (size_t) row * dstRowBytes;
-        repeat(w, px) {
-            // Swizzle from ARGB to RGBA
-            uint8_t a = srcLine[px * 4 + 0];
-            uint8_t r = srcLine[px * 4 + 1];
-            uint8_t g = srcLine[px * 4 + 2];
-            uint8_t b = srcLine[px * 4 + 3];
-            dstLine[px * 4 + 0] = r;
-            dstLine[px * 4 + 1] = g;
-            dstLine[px * 4 + 2] = b;
-            dstLine[px * 4 + 3] = a;
-        }
-    }
-    // We don't need to flip vertically because the PlayStation 3 framebuffer is already top-down
-#else
-    // OpenGL Y is bottom-up, GML Y is top-down, so flip the Y coordinate against the source FBO's height
+    // OpenGL Y is bottom-up, GML Y is top-down, so flip the Y coordinate
     int32_t glY = srcHeight - y - h;
     glReadPixels(x, glY, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
@@ -1279,7 +1263,6 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
         memcpy(bot, rowTemp, rowBytes);
     }
     free(rowTemp);
-#endif
 
     // Create a new GL texture from the captured pixels
     GLuint newTexId;
@@ -1415,8 +1398,6 @@ static void glGpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green,
 }
 
 // ===[ Surfaces ]===
-
-#ifndef PLATFORM_PS3
 
 static int32_t glLegacyCreateSurface(Renderer* renderer, int32_t width, int32_t height) {
     GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
@@ -1570,8 +1551,13 @@ static void glLegacyDrawSurface(Renderer* renderer, int32_t surfaceId, int32_t s
     // top-down GML coords -> flipped V for our bottom-up texture
     float u0 = (float) srcLeft / (float) texW;
     float u1 = (float) (srcLeft + srcWidth) / (float) texW;
+#ifndef PLATFORM_PS3
     float v0 = 1.0f - (float) srcTop / (float) texH;
     float v1 = 1.0f - (float) (srcTop + srcHeight) / (float) texH;
+#else
+    float v1 = 1.0f - (float) srcTop / (float) texH;
+    float v0 = 1.0f - (float) (srcTop + srcHeight) / (float) texH;
+#endif
 
     float r = (float) BGR_R(color) / 255.0f;
     float g = (float) BGR_G(color) / 255.0f;
@@ -1605,23 +1591,6 @@ static bool glLegacySurfaceGetPixels(Renderer* renderer, int32_t surfaceId, uint
     GLLegacyRenderer* gl = (GLLegacyRenderer*) renderer;
     return GLCommon_surfaceGetPixels(gl->surfaces, gl->surfaceWidth, gl->surfaceHeight, gl->surfaceCount, surfaceId, outRGBA);
 }
-
-#else
-
-// TODO: Add support for surfaces in ps3gl!
-
-static int32_t glLegacyCreateSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) { return -1; }
-static bool glLegacySurfaceExists(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
-static bool glLegacySetRenderTarget(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return false; }
-static float glLegacyGetSurfaceWidth(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
-static float glLegacyGetSurfaceHeight(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) { return 0.0f; }
-static void glLegacyDrawSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t srcLeft, MAYBE_UNUSED int32_t srcTop, MAYBE_UNUSED int32_t srcWidth, MAYBE_UNUSED int32_t srcHeight, MAYBE_UNUSED float x, MAYBE_UNUSED float y, MAYBE_UNUSED float xscale, MAYBE_UNUSED float yscale, MAYBE_UNUSED float angleDeg, MAYBE_UNUSED uint32_t color, MAYBE_UNUSED float alpha) {}
-static void glLegacySurfaceResize(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) {}
-static void glLegacySurfaceFree(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID) {}
-static void glLegacySurfaceCopy(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t DestSurfaceID, MAYBE_UNUSED int32_t DestX, MAYBE_UNUSED int32_t DestY, MAYBE_UNUSED int32_t SrcSurfaceID, MAYBE_UNUSED int32_t SrcX, MAYBE_UNUSED int32_t SrcY, MAYBE_UNUSED int32_t SrcW, MAYBE_UNUSED int32_t SrcH, MAYBE_UNUSED bool part) {}
-static bool glLegacySurfaceGetPixels(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED uint8_t* outRGBA) { return false; }
-
-#endif
 
 
 // ===[ Vtable ]===

@@ -18,6 +18,7 @@
 #include <ppu-asm.h>
 
 #define MAX_TEXTURES 1024
+#define MAX_FRAMEBUFFERS 1024
 #define MAX_PROJ_STACK 4
 #define MAX_MODV_STACK 16
 #define MAX_SHADERS 64
@@ -71,7 +72,7 @@ struct ps3gl_shader {
 	// For VP: ucode pointer comes from rsxVertexProgramGetUCode, no extra alloc
 	// For FP: ucode must live in RSX-visible memory; we allocate it here
 	void *fpUcode;     // rsxMemalign'd buffer (FP only)
-	u32 fpOffset;      // RSX offset for FP (FP only)
+	uint32_t fpOffset;      // RSX offset for FP (FP only)
 };
 
 struct ps3gl_program_uniform {
@@ -97,13 +98,65 @@ struct ps3gl_program {
 	GLuint uniformCount;
 };
 
+#ifndef PLATFORM_PS3
+#define GCM_MAX_MRT_COUNT							4
+typedef struct _gcmSurface
+{
+	uint8_t type;
+	uint8_t antiAlias;
+	uint8_t colorFormat;
+	uint8_t colorTarget;
+	uint8_t colorLocation[GCM_MAX_MRT_COUNT];
+	uint32_t colorOffset[GCM_MAX_MRT_COUNT];
+	uint32_t colorPitch[GCM_MAX_MRT_COUNT];
+	uint8_t depthFormat;
+	uint8_t depthLocation;
+	uint8_t _pad[2];
+	uint32_t depthOffset;
+	uint32_t depthPitch;
+	uint16_t width;
+	uint16_t height;
+	uint16_t x;
+	uint16_t y;
+} gcmSurface;
+
+/*! \brief RSX Texture data structure. */
+typedef struct _gcmTexture {
+	uint8_t format;
+	uint8_t mipmap;
+	uint8_t dimension;
+	uint8_t cubemap;
+	uint32_t remap;
+	uint16_t width;
+	uint16_t height;
+	uint16_t depth;
+	uint8_t location;
+	uint8_t _pad;
+	uint32_t pitch;
+	uint32_t offset;
+} gcmTexture;
+#endif
+
 struct ps3gl_texture {
 	GLuint id, target;
 	GLboolean allocated;
 	GLubyte* data;
 	GLint minFilter, magFilter;
 	GLint wrapS, wrapR, wrapT;
+	bool fboTex;
 	gcmTexture gcmTexture;
+};
+
+struct ps3gl_framebuffer {
+	GLuint id, target;
+	GLboolean allocated;
+	GLint minFilter, magFilter;
+	GLint wrapS, wrapR, wrapT;
+	struct ps3gl_texture *fbTexture;
+	gcmSurface gcmSurface;
+	// Per-FBO depth buffer in RSX-local memory. Sized to match the bound color attachment.
+	void* depthData;
+	uint32_t depthSize;
 };
 
 struct ps3gl_opengl_state
@@ -163,9 +216,13 @@ struct ps3gl_opengl_state
 	GLfloat texEnvMode;
 	struct ps3gl_texture textures[MAX_TEXTURES];
 	struct ps3gl_texture *bound_textures[MAX_TEX_UNITS];
+	struct ps3gl_framebuffer framebuffers[MAX_TEXTURES];
+	struct ps3gl_framebuffer *bound_read_framebuffer;
+	struct ps3gl_framebuffer *bound_draw_framebuffer;
 	GLboolean texture_unit_enabled[MAX_TEX_UNITS];
 	GLuint active_texture_unit;         // index into bound_textures[]
 	GLuint nextTextureID;
+	GLuint nextFramebufferID;
 
 	// Lighting
 	GLuint shade_model;
