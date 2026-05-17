@@ -1216,7 +1216,7 @@ int main(int argc, char* argv[]) {
         if (!args.headless && runner->currentRoom->speed > 0) {
             static bool fastForwardActive = false;
             static bool fastForwardTabPrev = false;
-            bool fastForwardTabNow = false;
+            bool fastForwardTabNow = RunnerKeyboard_checkPressed(runner->keyboard, '\t');
             if (args.fastForwardSpeed > 0.0 && fastForwardTabNow && !fastForwardTabPrev) {
                 fastForwardActive = !fastForwardActive;
                 lastFrameTime = (SDL_GetTicks()/1000.0f);

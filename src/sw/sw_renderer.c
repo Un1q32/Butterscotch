@@ -18,6 +18,8 @@
 
 #define TEXTURE_LRU_LENGTH 16
 
+#define SURFACE_MAX_COUNT 16
+
 typedef struct
 {
 	uintpixel_t* buffer;
@@ -36,11 +38,20 @@ typedef struct
 	uintpixel_t* fb;
 	uint16_t fbPitch; // in sizeof(uintpixel_t) units, NOT in bytes!
 	
+	uintpixel_t* mainFb;
+	uint16_t mainWidth;
+	uint16_t mainHeight;
+	uint16_t mainPitch;
+	bool drawingToSurface;
+	
 	SWTexture** textures;
 	uint32_t* textureIndexLRU;
 	uint32_t textureIndexLRUHead;
 	uint32_t textureIndexLRUTail;
 	size_t textureCount;
+	
+	SWTexture** surfaces;
+	size_t surfaceCount;
 	
 	bool viewActive;
 	int viewX, viewY, viewW, viewH;
@@ -339,6 +350,10 @@ static void SWRenderer_init(Renderer* renderer, DataWin* dataWin)
 	swr->fb = safeCalloc(swr->width * swr->height, sizeof(uintpixel_t));
 	swr->fbPitch = swr->width;
 	
+	//allocate surface buffer
+	swr->surfaces = safeCalloc(SURFACE_MAX_COUNT, sizeof(SWTexture*));
+	swr->surfaceCount = SURFACE_MAX_COUNT;
+	
 	//allocate texture buffer
 	swr->textureCount = dataWin->txtr.count;
 	swr->textures = safeCalloc(swr->textureCount, sizeof(SWTexture*));
@@ -367,18 +382,21 @@ static void SWRenderer_beginFrame(Renderer* renderer, int32_t gameW, int32_t gam
 	swr->gameH = gameH;
 	swr->windowW = windowW;
 	swr->windowH = windowH;
+	swr->drawingToSurface = false;
 }
 
 // This used to be just one, "endFrame". Not sure what the different is.
 static void SWRenderer_endFrameInit(Renderer* renderer)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
+	assert(!swr->drawingToSurface);
 	Runner_setNextFrame(swr->fb, swr->width, swr->height);
 }
 
 static void SWRenderer_endFrameEnd(Renderer* renderer)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
+	assert(!swr->drawingToSurface);
 	Runner_setNextFrame(swr->fb, swr->width, swr->height);
 }
 
@@ -391,8 +409,17 @@ static void SWRenderer_beginView(Renderer* renderer, int32_t viewX, int32_t view
 	
 	SWRenderer* swr = (SWRenderer*) renderer;
 	
-	float xratio = (float) swr->windowW / swr->gameW;
-	float yratio = (float) swr->windowH / swr->gameH;
+	float xratio, yratio;
+	
+	if (swr->drawingToSurface) {
+		UNIMP();
+		xratio = 1.0f;
+		yratio = 1.0f;
+	}
+	else {
+		xratio = (float) swr->windowW / swr->gameW;
+		yratio = (float) swr->windowH / swr->gameH;
+	}
 
 	portX = (int)(portX * xratio);
 	portY = (int)(portY * yratio);
