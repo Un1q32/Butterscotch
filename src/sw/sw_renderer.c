@@ -1326,94 +1326,6 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
 	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha);
 }
 
-static void SWRenderer_flush(Renderer* renderer)
-{
-	(void)renderer;
-	UNIMP();
-}
-
-static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
-{
-	(void)renderer; (void)color; (void)alpha;
-	UNIMP();
-}
-
-static int32_t SWRenderer_createSpriteFromSurface(Renderer* renderer, int32_t surfaceID,
-												   int32_t x, int32_t y, int32_t w, int32_t h,
-												   bool removeback, bool smooth,
-												   int32_t xorig, int32_t yorig)
-{
-	(void)renderer; (void)surfaceID; (void)x; (void)y; (void)w; (void)h;
-	(void)removeback; (void)smooth; (void)xorig; (void)yorig;
-	UNIMP();
-	return 0;
-}
-
-static void SWRenderer_deleteSprite(Renderer* renderer, int32_t spriteIndex)
-{
-	UNIMP();
-	(void)renderer; (void)spriteIndex;
-}
-
-static void SWRenderer_gpuSetBlendMode(Renderer* renderer, int32_t mode)
-{
-	UNIMP();
-	(void)renderer; (void)mode;
-}
-
-static void SWRenderer_gpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t dfactor)
-{
-	UNIMP();
-	(void)renderer; (void)sfactor; (void)dfactor;
-}
-
-static void SWRenderer_gpuSetBlendEnable(Renderer* renderer, bool enable)
-{
-	UNIMP();
-	(void)renderer; (void)enable;
-}
-
-static void SWRenderer_gpuSetAlphaTestEnable(Renderer* renderer, bool enable)
-{
-	UNIMP();
-	(void)renderer; (void)enable;
-}
-
-static void SWRenderer_gpuSetAlphaTestRef(Renderer* renderer, uint8_t ref)
-{
-	UNIMP();
-	(void)renderer; (void)ref;
-}
-
-static void SWRenderer_gpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha)
-{
-	UNIMP();
-	(void)renderer; (void)red; (void)green; (void)blue; (void)alpha;
-}
-
-static void SWRenderer_gpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha)
-{
-	UNIMP();
-	*red = false;
-	*green = false;
-	*blue = false;
-	*alpha = false;
-	(void)renderer; (void)red; (void)green; (void)blue; (void)alpha;
-}
-
-static bool SWRenderer_gpuGetBlendEnable(Renderer* renderer)
-{
-	UNIMP();
-	(void)renderer;
-	return false;
-}
-
-static void SWRenderer_gpuSetFog(Renderer* renderer, bool enable, uint32_t color)
-{
-	UNIMP();
-	(void)renderer; (void)enable; (void)color;
-}
-
 static void SWRenderer_drawTiled(Renderer* renderer, int32_t tpagIndex,
 								 float originX, float originY, float x, float y,
 								 float xscale, float yscale, bool tileX, bool tileY,
@@ -1482,6 +1394,77 @@ static void SWRenderer_drawTiled(Renderer* renderer, int32_t tpagIndex,
 			swrDrawSprite(renderer, vx0, vy0, dw, dh, swr->textures[pageId], sx, sy, sw, sh, color, alpha);
 		}
 	}
+}
+
+static void SWRenderer_flush(Renderer* renderer)
+{
+	(void)renderer;
+	UNIMP();
+}
+
+static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
+{
+	(void)renderer; (void)color; (void)alpha;
+	UNIMP();
+}
+
+static void SWRenderer_gpuSetBlendMode(Renderer* renderer, int32_t mode)
+{
+	UNIMP();
+	(void)renderer; (void)mode;
+}
+
+static void SWRenderer_gpuSetBlendModeExt(Renderer* renderer, int32_t sfactor, int32_t dfactor)
+{
+	UNIMP();
+	(void)renderer; (void)sfactor; (void)dfactor;
+}
+
+static void SWRenderer_gpuSetBlendEnable(Renderer* renderer, bool enable)
+{
+	UNIMP();
+	(void)renderer; (void)enable;
+}
+
+static void SWRenderer_gpuSetAlphaTestEnable(Renderer* renderer, bool enable)
+{
+	UNIMP();
+	(void)renderer; (void)enable;
+}
+
+static void SWRenderer_gpuSetAlphaTestRef(Renderer* renderer, uint8_t ref)
+{
+	UNIMP();
+	(void)renderer; (void)ref;
+}
+
+static void SWRenderer_gpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha)
+{
+	UNIMP();
+	(void)renderer; (void)red; (void)green; (void)blue; (void)alpha;
+}
+
+static void SWRenderer_gpuGetColorWriteEnable(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha)
+{
+	UNIMP();
+	*red = false;
+	*green = false;
+	*blue = false;
+	*alpha = false;
+	(void)renderer; (void)red; (void)green; (void)blue; (void)alpha;
+}
+
+static bool SWRenderer_gpuGetBlendEnable(Renderer* renderer)
+{
+	UNIMP();
+	(void)renderer;
+	return false;
+}
+
+static void SWRenderer_gpuSetFog(Renderer* renderer, bool enable, uint32_t color)
+{
+	UNIMP();
+	(void)renderer; (void)enable; (void)color;
 }
 
 static int32_t SWRenderer_createSurface(Renderer* renderer, int32_t width, int32_t height)
@@ -1560,6 +1543,23 @@ static bool SWRenderer_surfaceGetPixels(Renderer* renderer, int32_t surfaceID, u
 	UNIMP();
 	(void)renderer; (void)surfaceID; (void)outRGBA;
 	return false;
+}
+
+static int32_t SWRenderer_createSpriteFromSurface(Renderer* renderer, int32_t surfaceID,
+												   int32_t x, int32_t y, int32_t w, int32_t h,
+												   bool removeback, bool smooth,
+												   int32_t xorig, int32_t yorig)
+{
+	(void)renderer; (void)surfaceID; (void)x; (void)y; (void)w; (void)h;
+	(void)removeback; (void)smooth; (void)xorig; (void)yorig;
+	UNIMP();
+	return 0;
+}
+
+static void SWRenderer_deleteSprite(Renderer* renderer, int32_t spriteIndex)
+{
+	UNIMP();
+	(void)renderer; (void)spriteIndex;
 }
 
 static void SWRenderer_drawTiledPart(Renderer* renderer, int32_t tpagIndex,
