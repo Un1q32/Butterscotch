@@ -233,21 +233,20 @@ elseif(PLATFORM STREQUAL "sdl")
     if (NOT ENABLE_LEGACY_GL AND NOT ENABLE_SW_RENDERER)
         message(FATAL_ERROR "SDL requires legacy GL or the software renderer!")
     endif()
-    
+
     if(ENABLE_LEGACY_GL)
         file(GLOB GL_SOURCES src/gl_legacy/*.c src/gl_common/*.c src/image/*.c)
         target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_legacy)
         target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_common)
         target_sources(butterscotch PRIVATE ${GL_SOURCES})
         target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
-        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
     elseif(ENABLE_SW_RENDERER)
         file(GLOB SWR_SOURCES src/sw/*.c src/image/*.c)
         add_compile_definitions(ENABLE_SW_RENDERER)
         target_sources(butterscotch PRIVATE ${SWR_SOURCES})
         target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/sw)
-        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
     endif()
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
 
     # Butterscotch VM/interpreter profiler
     option(ENABLE_VM_GML_PROFILER "Enable Butterscotch VM/interpreter profiler" ON)
