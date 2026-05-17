@@ -8754,6 +8754,127 @@ static RValue builtinPathDelete(VMContext* ctx, RValue* args, int32_t argCount) 
     return RValue_makeUndefined();
 }
 
+// ===[ ANIMCURVE FUNCTIONS ]===
+
+// Resolve the first argument of animcurve_get_channel / animcurve_get_channel_index, which can be either an animcurve asset id (int / assetref) or a curve struct/object reference.
+// We don't support runtime-constructed curve objects, so we treat anything non-int as invalid.
+static AnimCurve* resolveAnimCurveArg(Runner* runner, RValue arg) {
+    int32_t idx = RValue_toInt32(arg);
+    if (0 > idx || (uint32_t) idx >= runner->dataWin->acrv.count) return nullptr;
+    AnimCurve* cur = &runner->dataWin->acrv.curves[idx];
+    if (!cur->present) return nullptr;
+    return cur;
+}
+
+// animcurve_get(index) - returns an asset reference to the animation curve
+static RValue builtinAnimcurveGet(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    int32_t idx = RValue_toInt32(args[0]);
+    if (0 > idx || (uint32_t) idx >= runner->dataWin->acrv.count) return RValue_makeUndefined();
+    return RValue_makeAssetRef(idx, ASSET_TYPE_ANIMCURVE);
+}
+
+// animcurve_get_channel(curve, name_or_index) - returns an integer handle that animcurve_channel_evaluate can resolve back to a channel
+static RValue builtinAnimcurveGetChannel(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    Runner* runner = (Runner*) ctx->runner;
+    AnimCurve* cur = resolveAnimCurveArg(runner, args[0]);
+    if (cur == nullptr) return RValue_makeUndefined();
+
+    if (args[1].type == RVALUE_STRING) {
+        const char* needle = args[1].string;
+        if (needle == nullptr) return RValue_makeUndefined();
+        repeat(cur->channelCount, c) {
+            const char* name = cur->channels[c].name;
+            if (name != nullptr && strcmp(name, needle) == 0) {
+                return RValue_makeInt32(cur->channels[c].globalId);
+            }
+        }
+        return RValue_makeUndefined();
+    }
+
+    int32_t channelIdx = RValue_toInt32(args[1]);
+    if (0 > channelIdx || (uint32_t) channelIdx >= cur->channelCount) return RValue_makeUndefined();
+    return RValue_makeInt32(cur->channels[channelIdx].globalId);
+}
+
+// animcurve_get_channel_index(curve, name) - returns the integer index of the named channel within the curve
+static RValue builtinAnimcurveGetChannelIndex(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeReal(-1.0);
+    Runner* runner = (Runner*) ctx->runner;
+    AnimCurve* cur = resolveAnimCurveArg(runner, args[0]);
+    if (cur == nullptr || args[1].type != RVALUE_STRING || args[1].string == nullptr) return RValue_makeReal(-1.0);
+    const char* needle = args[1].string;
+    repeat(cur->channelCount, c) {
+        const char* name = cur->channels[c].name;
+        if (name != nullptr && strcmp(name, needle) == 0) {
+            return RValue_makeInt32((int32_t) c);
+        }
+    }
+    return RValue_makeReal(-1.0);
+}
+
+// Catmull-Rom interpolation: 4 control points P0..P3, parameter t in [0,1] from P1 to P2.
+static float animcurveCatmullRom(float p0, float p1, float p2, float p3, float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    return 0.5f * ((2.0f * p1) +
+                   (-p0 + p2) * t +
+                   (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+}
+
+static float animcurveChannelEvaluate(const AnimCurveChannel* ch, float x) {
+    if (ch == nullptr || ch->pointCount == 0) return 0.0f;
+    if (ch->pointCount == 1) return ch->points[0].value;
+
+    // Clamp to the channel's x range
+    float x0 = ch->points[0].x;
+    float xn = ch->points[ch->pointCount - 1].x;
+    if (x0 > x) return ch->points[0].value;
+    if (x > xn) return ch->points[ch->pointCount - 1].value;
+
+    // Binary search for the interval [i, i+1] containing x
+    uint32_t lo = 0;
+    uint32_t hi = ch->pointCount - 1;
+    while (hi - lo > 1) {
+        uint32_t mid = (lo + hi) / 2;
+        if (ch->points[mid].x <= x) lo = mid;
+        else hi = mid;
+    }
+
+    const AnimCurvePoint* a = &ch->points[lo];
+    const AnimCurvePoint* b = &ch->points[lo + 1];
+    float span = b->x - a->x;
+    if (0.0f >= span) return a->value;
+    float t = (x - a->x) / span;
+
+    if (ch->curveType == ANIMCURVE_TYPE_SMOOTH) {
+        // Catmull-Rom on the value channel, using neighbor points clamped at the ends
+        float p0 = (lo > 0) ? ch->points[lo - 1].value : a->value;
+        float p1 = a->value;
+        float p2 = b->value;
+        float p3 = (lo + 2 < ch->pointCount) ? ch->points[lo + 2].value : b->value;
+        return animcurveCatmullRom(p0, p1, p2, p3, t);
+    }
+
+    // Linear (also used as fallback for bezier; full bezier handle eval not yet implemented)
+    return a->value + (b->value - a->value) * t;
+}
+
+// animcurve_channel_evaluate(channel_handle, posx)
+static RValue builtinAnimcurveChannelEvaluate(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeReal(0.0);
+    Runner* runner = (Runner*) ctx->runner;
+    Acrv* a = &runner->dataWin->acrv;
+    int32_t handle = RValue_toInt32(args[0]);
+    if (0 > handle || (uint32_t) handle >= a->allChannelsCount) return RValue_makeReal(0.0);
+    AnimCurveChannel* ch = a->allChannels[handle];
+    float x = (float) RValue_toReal(args[1]);
+    return RValue_makeReal((GMLReal) animcurveChannelEvaluate(ch, x));
+}
+
 // ===[ MP_GRID FUNCTIONS ]===
 
 static MpGrid* mpGridGet(Runner* runner, int32_t id) {
@@ -10056,6 +10177,12 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "path_add_point", builtinPathAddPoint);
     VM_registerBuiltin(ctx, "path_exists", builtinPathExists);
     VM_registerBuiltin(ctx, "path_delete", builtinPathDelete);
+
+    // Animation curves
+    VM_registerBuiltin(ctx, "animcurve_get", builtinAnimcurveGet);
+    VM_registerBuiltin(ctx, "animcurve_get_channel", builtinAnimcurveGetChannel);
+    VM_registerBuiltin(ctx, "animcurve_get_channel_index", builtinAnimcurveGetChannelIndex);
+    VM_registerBuiltin(ctx, "animcurve_channel_evaluate", builtinAnimcurveChannelEvaluate);
 
     // Motion planning grid
     VM_registerBuiltin(ctx, "mp_grid_create", builtinMpGridCreate);

@@ -688,6 +688,46 @@ typedef struct {
     Room* rooms;
 } RoomChunk;
 
+// ===[ ACRV - Animation Curves ]===
+typedef enum {
+    ANIMCURVE_TYPE_LINEAR = 0,
+    ANIMCURVE_TYPE_SMOOTH = 1,
+    ANIMCURVE_TYPE_BEZIER = 2,
+} AnimCurveType;
+
+typedef struct {
+    float x;        // position along curve, normally in [0, 1]
+    float value;    // output value at this point
+    // Only meaningful when the channel uses ANIMCURVE_TYPE_BEZIER (GMS 2.3.1+ format).
+    float bezierX0, bezierY0, bezierX1, bezierY1;
+} AnimCurvePoint;
+
+typedef struct {
+    const char* name;
+    AnimCurveType curveType;
+    uint32_t iterations;
+    uint32_t pointCount;
+    AnimCurvePoint* points;
+    int32_t globalId;   // index into Acrv.allChannels
+} AnimCurveChannel;
+
+typedef struct {
+    bool present;
+    const char* name;
+    uint32_t graphType;
+    uint32_t channelCount;
+    AnimCurveChannel* channels;
+} AnimCurve;
+
+typedef struct {
+    uint32_t count;
+    AnimCurve* curves;
+    // Flat global table of channel pointers, used as the handle returned by animcurve_get_channel.
+    // animcurve_channel_evaluate uses this to resolve the int handle back to a channel.
+    uint32_t allChannelsCount;
+    AnimCurveChannel** allChannels;
+} Acrv;
+
 // ===[ TPAG - Texture Page Items ]===
 typedef struct {
     bool present;
@@ -845,6 +885,7 @@ struct DataWin {
     Objt objt;
     RoomChunk room;
     // DAFL is empty, no field needed
+    Acrv acrv;
     Tpag tpag;
     Code code;
     Vari vari;

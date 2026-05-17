@@ -702,6 +702,82 @@ static void parseSCPT(BinaryReader* reader, DataWin* dw) {
     free(ptrs);
 }
 
+static void parseACRV(BinaryReader* reader, DataWin* dw) {
+    Acrv* a = &dw->acrv;
+
+    // Align to 4-byte boundary
+    while (BinaryReader_getPosition(reader) % 4 != 0) BinaryReader_readUint8(reader);
+
+    uint32_t version = BinaryReader_readUint32(reader);
+    if (version != 1) {
+        fprintf(stderr, "ACRV: unexpected version %u (expected 1)\n", version);
+        return;
+    }
+
+    uint32_t count;
+    uint32_t* ptrs = readPointerTable(reader, &count);
+    a->count = count;
+    if (count == 0) { free(ptrs); a->curves = nullptr; return; }
+
+    // Whether the per-point format includes the 4 trailing float bezier handles (24 bytes) instead of the 2.3.0 layout (12 bytes, just X/Value + 4 pad).
+    bool isV231Plus = DataWin_isVersionAtLeast(dw, 2, 3, 1, 0);
+
+    a->curves = safeCalloc(count, sizeof(AnimCurve));
+
+    uint32_t globalChannelCount = 0;
+    repeat(count, i) {
+        if (ptrs[i] == 0) continue;
+        BinaryReader_seek(reader, ptrs[i]);
+        AnimCurve* cur = &a->curves[i];
+        cur->present = true;
+        cur->name = readStringPtr(reader, dw);
+        cur->graphType = BinaryReader_readUint32(reader);
+        cur->channelCount = BinaryReader_readUint32(reader);
+        cur->channels = (cur->channelCount > 0) ? safeCalloc(cur->channelCount, sizeof(AnimCurveChannel)) : nullptr;
+        repeat(cur->channelCount, c) {
+            AnimCurveChannel* ch = &cur->channels[c];
+            ch->name = readStringPtr(reader, dw);
+            ch->curveType = (AnimCurveType) BinaryReader_readUint32(reader);
+            ch->iterations = BinaryReader_readUint32(reader);
+            ch->pointCount = BinaryReader_readUint32(reader);
+            ch->points = (ch->pointCount > 0) ? safeMalloc(ch->pointCount * sizeof(AnimCurvePoint)) : nullptr;
+            repeat(ch->pointCount, p) {
+                AnimCurvePoint* pt = &ch->points[p];
+                pt->x = BinaryReader_readFloat32(reader);
+                pt->value = BinaryReader_readFloat32(reader);
+                if (isV231Plus) {
+                    pt->bezierX0 = BinaryReader_readFloat32(reader);
+                    pt->bezierY0 = BinaryReader_readFloat32(reader);
+                    pt->bezierX1 = BinaryReader_readFloat32(reader);
+                    pt->bezierY1 = BinaryReader_readFloat32(reader);
+                } else {
+                    BinaryReader_readUint32(reader); // padding
+                    pt->bezierX0 = pt->bezierY0 = pt->bezierX1 = pt->bezierY1 = 0.0f;
+                }
+            }
+            ch->globalId = (int32_t) globalChannelCount;
+            globalChannelCount++;
+        }
+    }
+    free(ptrs);
+
+    // Build the flat global channel table for handle resolution
+    a->allChannelsCount = globalChannelCount;
+    if (globalChannelCount > 0) {
+        a->allChannels = safeMalloc(globalChannelCount * sizeof(AnimCurveChannel*));
+        uint32_t idx = 0;
+        repeat(count, i) {
+            AnimCurve* cur = &a->curves[i];
+            if (!cur->present) continue;
+            repeat(cur->channelCount, c) {
+                a->allChannels[idx++] = &cur->channels[c];
+            }
+        }
+    } else {
+        a->allChannels = nullptr;
+    }
+}
+
 static void parseGLOB(BinaryReader* reader, DataWin* dw) {
     Glob* g = &dw->glob;
 
@@ -2060,7 +2136,8 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             (options.parseFunc && memcmp(chunkName, "FUNC", 4) == 0) ||
             (options.parseStrg && memcmp(chunkName, "STRG", 4) == 0) ||
             (options.parseTxtr && memcmp(chunkName, "TXTR", 4) == 0) ||
-            (options.parseAudo && memcmp(chunkName, "AUDO", 4) == 0);
+            (options.parseAudo && memcmp(chunkName, "AUDO", 4) == 0) ||
+            (memcmp(chunkName, "ACRV", 4) == 0);
 
         // Bulk-read the chunk data into memory for fast parsing
         uint8_t* chunkBuffer = nullptr;
@@ -2115,6 +2192,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         } else if (memcmp(chunkName, "ACRV", 4) == 0) {
             // Animation Curves chunk (GMS 2.3+)
             DataWin_bumpVersionTo(dw, 2, 3, 0, 0);
+            parseACRV(&reader, dw);
         } else if (memcmp(chunkName, "SEQN", 4) == 0) {
             // Sequences chunk (GMS 2.3+)
             DataWin_bumpVersionTo(dw, 2, 3, 0, 0);
@@ -2317,6 +2395,21 @@ void DataWin_free(DataWin* dw) {
         }
         free(dw->objt.objects);
     }
+
+    // ACRV
+    if (dw->acrv.curves) {
+        repeat(dw->acrv.count, i) {
+            AnimCurve* cur = &dw->acrv.curves[i];
+            if (cur->channels) {
+                repeat(cur->channelCount, c) {
+                    free(cur->channels[c].points);
+                }
+                free(cur->channels);
+            }
+        }
+        free(dw->acrv.curves);
+    }
+    free(dw->acrv.allChannels);
 
     // ROOM
     if (dw->room.rooms) {
