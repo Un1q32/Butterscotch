@@ -215,7 +215,7 @@ static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t p
 
     glBindTexture(GL_TEXTURE_2D, 0);
 
-GLint boundFbo = 0;
+    GLint boundFbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
     if (boundFbo == 0) {
         glViewport(0, 0, portW, portH);
