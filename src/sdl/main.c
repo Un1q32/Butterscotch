@@ -1,12 +1,9 @@
 #include "data_win.h"
 #include "vm.h"
+#include <SDL/SDL_events.h>
 
-#include <glad/glad.h>
-#ifdef USE_GLFW2
-#include <GL/glfw.h>
-#else
-#include <GLFW/glfw3.h>
-#endif
+#include <SDL/SDL.h>
+#include <SDL/SDL_video.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,15 +23,14 @@
 #endif
 
 #include "runner_keyboard.h"
-#ifndef USE_GLFW2
-#include "glfw_gamepad.h"
-#endif
 #include "runner.h"
 #include "input_recording.h"
 #include "debug_overlay.h"
-#include "gl_renderer.h"
 #ifdef ENABLE_LEGACY_GL
 #include "gl_legacy_renderer.h"
+#endif
+#ifdef ENABLE_SW_RENDERER
+#include "sw_renderer.h"
 #endif
 #include "overlay_file_system.h"
 #if defined(USE_OPENAL)
@@ -48,64 +44,6 @@
 
 #include "utils.h"
 #include "profiler.h"
-
-#ifndef USE_GLFW2
-static void glfwErrorCallback(int code, const char* description) {
-    fprintf(stderr, "GLFW error 0x%x: %s\n", code, description);
-}
-#endif
-
-#ifndef ENABLE_GLES
-static void APIENTRY glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, MAYBE_UNUSED GLsizei length, const GLchar* message, MAYBE_UNUSED const void* userParam) {
-    const char* sourceStr;
-    switch (source) {
-        case GL_DEBUG_SOURCE_API: sourceStr = "API"; break;
-        case GL_DEBUG_SOURCE_WINDOW_SYSTEM: sourceStr = "Window System"; break;
-        case GL_DEBUG_SOURCE_SHADER_COMPILER: sourceStr = "Shader Compiler"; break;
-        case GL_DEBUG_SOURCE_THIRD_PARTY: sourceStr = "Third Party"; break;
-        case GL_DEBUG_SOURCE_APPLICATION: sourceStr = "Application"; break;
-        case GL_DEBUG_SOURCE_OTHER: sourceStr = "Other"; break;
-        default: sourceStr = "Unknown"; break;
-    }
-
-    const char* typeStr;
-    switch (type) {
-        case GL_DEBUG_TYPE_ERROR: typeStr = "Error"; break;
-        case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: typeStr = "Deprecated Behaviour"; break;
-        case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: typeStr = "Undefined Behaviour"; break;
-        case GL_DEBUG_TYPE_PORTABILITY: typeStr = "Portability"; break;
-        case GL_DEBUG_TYPE_PERFORMANCE: typeStr = "Performance"; break;
-        case GL_DEBUG_TYPE_MARKER: typeStr = "Marker"; break;
-        case GL_DEBUG_TYPE_PUSH_GROUP: typeStr = "Push Group"; break;
-        case GL_DEBUG_TYPE_POP_GROUP: typeStr = "Pop Group"; break;
-        case GL_DEBUG_TYPE_OTHER: typeStr = "Other"; break;
-        default: typeStr = "Unknown"; break;
-    }
-
-    const char* severityStr;
-    switch (severity) {
-        case GL_DEBUG_SEVERITY_HIGH: severityStr = "High"; break;
-        case GL_DEBUG_SEVERITY_MEDIUM: severityStr = "Medium"; break;
-        case GL_DEBUG_SEVERITY_LOW: severityStr = "Low"; break;
-        case GL_DEBUG_SEVERITY_NOTIFICATION: severityStr = "Notification"; break;
-        default: severityStr = "Unknown"; break;
-    }
-
-    fprintf(stderr, "[OpenGL %s] id=%u Type: %s; Severity: %s; Message: %.*s\n", sourceStr, id, typeStr, severityStr, (int) length, message);
-}
-
-static void installGLDebugCallback(void) {
-    if (!GLAD_GL_KHR_debug) {
-        fprintf(stderr, "OpenGL debug callback not available (driver does not expose GL_KHR_debug)\n");
-        return;
-    }
-
-    glEnable(GL_DEBUG_OUTPUT);
-    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-    glDebugMessageCallbackKHR(glDebugCallback, nullptr);
-    glDebugMessageControlKHR(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
-}
-#endif
 
 // ===[ COMMAND LINE ARGUMENTS ]===
 typedef struct {
@@ -262,14 +200,10 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->traceBytecodeAfterFrame = 0;
     args->speedMultiplier = 1.0;
     args->fastForwardSpeed = 0.0;
-#ifdef ENABLE_MODERN_GL
-#if defined(USE_GLFW2) && defined(ENABLE_LEGACY_GL)
+#ifdef ENABLE_LEGACY_GL
     args->renderer = "legacy-gl";
 #else
-    args->renderer = "gl";
-#endif
-#else
-    args->renderer = "legacy-gl";
+    args->renderer = "software";
 #endif
     args->osType = OS_WINDOWS;
     args->profilerFramesBetween = 0;
@@ -478,7 +412,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 break;
             default:
                 fprintf(stderr, "Usage: %s "
-#ifndef USE_GLFW2
+#ifdef ENABLE_SW_RENDERER
                         "[--headless] "
 #endif
                         "[--screenshot=PATTERN] [--screenshot-at-frame=N ...] <path to data.win or game.unx>\n", argv[0]);
@@ -488,11 +422,21 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
 
     if (optind >= argc) {
         fprintf(stderr, "Usage: %s "
-#ifndef USE_GLFW2
+#ifdef ENABLE_SW_RENDERER
                 "[--headless] "
 #endif
                 "[--screenshot=PATTERN] [--screenshot-at-frame=N ...] <path to data.win or game.unx>\n", argv[0]);
         exit(1);
+    }
+
+    if (args->headless) {
+#ifdef ENABLE_SW_RENDERER
+        args->renderer = "software";
+        fprintf(stderr, "Warning: forcing software rendering in headless mode!\n");
+#else
+        fprintf(stderr, "Error: headless mode requires the software renderer, but it is not enabled!\n");
+        exit(1);
+#endif
     }
 
     args->dataWinPath = argv[optind];
@@ -507,18 +451,10 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
         exit(1);
     }
 
-#ifdef USE_GLFW2
-    if (args->headless) {
-        fprintf(stderr, "Headless mode is not supported with GLFW2\n");
-        exit(1);
-    }
-#else
     if (args->headless && args->speedMultiplier != 1.0) {
         fprintf(stderr, "You can't set the speed multiplier while running in headless mode! Headless mode always run in real time\n");
         exit(1);
     }
-#endif
-
 }
 
 static void freeCommandLineArgs(CommandLineArgs* args) {
@@ -539,115 +475,48 @@ static void freeCommandLineArgs(CommandLineArgs* args) {
     shfree(args->tilesToBeTraced);
 }
 
-// ===[ SCREENSHOT ]===
-// Reads the contents of an FBO (use 0 for the default framebuffer) into a PNG file.
-// If forceOpaque is true, the alpha channel is overwritten with 255, fixing any clobbering done by blending modes.
-static void writeFramebufferAsPng(GLuint fbo, int width, int height, const char* filename, const char* logPrefix, bool forceOpaque) {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-
-    int stride = width * 4;
-    unsigned char* pixels = safeMalloc(stride * height);
-    if (pixels == nullptr) {
-        fprintf(stderr, "Error: Failed to allocate memory for %s (%dx%d)\n", logPrefix, width, height);
-        return;
-    }
-
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-
-    if (forceOpaque) {
-        int totalPixels = width * height;
-        repeat(totalPixels, i) pixels[i * 4 + 3] = 255;
-    }
-
-    // OpenGL reads bottom-to-top, but PNG is top-to-bottom.
-    // Use stb's negative stride trick: point to the last row and use a negative stride to flip vertically.
-    unsigned char* lastRow = pixels + (height - 1) * stride;
-    stbi_write_png(filename, width, height, 4, lastRow, -stride);
-
-    free(pixels);
-    printf("%s: %s (%dx%d)\n", logPrefix, filename, width, height);
-}
-
-static void captureScreenshot(GLuint fbo, const char* filenamePattern, int frameNumber, int width, int height) {
-    char filename[512];
-    snprintf(filename, sizeof(filename), filenamePattern, frameNumber);
-    writeFramebufferAsPng(fbo, width, height, filename, "Screenshot saved", true);
-}
-
-// Dumps every live surface in the GL renderer as a PNG.
-// Filename pattern takes two %d slots: frame number, then surface ID.
-static void dumpAllSurfaces(GLRenderer* gl, const char* filenamePattern, int frameNumber) {
-    repeat(gl->surfaceCount, surfaceId) {
-        if (gl->surfaces[surfaceId] == 0)
-            continue;
-
-        int width = gl->surfaceWidth[surfaceId];
-        int height = gl->surfaceHeight[surfaceId];
-        if (0 >= width || 0 >= height) continue;
-
-        char filename[512];
-        snprintf(filename, sizeof(filename), filenamePattern, frameNumber, (int) surfaceId);
-        writeFramebufferAsPng(gl->surfaces[surfaceId], width, height, filename, "Surface dump", false);
-    }
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, gl->fbo);
-}
-
 // ===[ KEYBOARD INPUT ]===
 
-#ifdef USE_GLFW2
-#define GLFW_KEY_ESCAPE GLFW_KEY_ESC
-#define GLFW_KEY_LEFT_SHIFT GLFW_KEY_LSHIFT
-#define GLFW_KEY_RIGHT_SHIFT GLFW_KEY_RSHIFT
-#define GLFW_KEY_LEFT_CONTROL GLFW_KEY_LCTRL
-#define GLFW_KEY_RIGHT_CONTROL GLFW_KEY_RCTRL
-#define GLFW_KEY_LEFT_ALT GLFW_KEY_LALT
-#define GLFW_KEY_RIGHT_ALT GLFW_KEY_RALT
-#define GLFW_KEY_DELETE GLFW_KEY_DEL
-#define GLFW_KEY_PAGE_UP GLFW_KEY_PAGEUP
-#define GLFW_KEY_PAGE_DOWN GLFW_KEY_PAGEDOWN
-#endif
-
-static int32_t glfwKeyToGml(int glfwKey) {
+static int32_t SDLKeyToGml(int sdlkey) {
     // Letters and numbers are the same as GML
-    if (glfwKey >= 'A' && glfwKey <= 'Z') return glfwKey;
-    if (glfwKey >= '0' && glfwKey <= '9') return glfwKey;
+    if (sdlkey >= 'a' && sdlkey <= 'z') return toupper(sdlkey);
+    if (sdlkey >= '0' && sdlkey <= '9') return sdlkey;
     // Special keys need mapping
-    switch (glfwKey) {
-        case GLFW_KEY_ESCAPE:        return VK_ESCAPE;
-        case GLFW_KEY_ENTER:         return VK_ENTER;
-        case GLFW_KEY_TAB:           return VK_TAB;
-        case GLFW_KEY_BACKSPACE:     return VK_BACKSPACE;
-        case GLFW_KEY_SPACE:         return VK_SPACE;
-        case GLFW_KEY_LEFT_SHIFT:
-        case GLFW_KEY_RIGHT_SHIFT:   return VK_SHIFT;
-        case GLFW_KEY_LEFT_CONTROL:
-        case GLFW_KEY_RIGHT_CONTROL: return VK_CONTROL;
-        case GLFW_KEY_LEFT_ALT:
-        case GLFW_KEY_RIGHT_ALT:     return VK_ALT;
-        case GLFW_KEY_UP:            return VK_UP;
-        case GLFW_KEY_DOWN:          return VK_DOWN;
-        case GLFW_KEY_LEFT:          return VK_LEFT;
-        case GLFW_KEY_RIGHT:         return VK_RIGHT;
-        case GLFW_KEY_F1:            return VK_F1;
-        case GLFW_KEY_F2:            return VK_F2;
-        case GLFW_KEY_F3:            return VK_F3;
-        case GLFW_KEY_F4:            return VK_F4;
-        case GLFW_KEY_F5:            return VK_F5;
-        case GLFW_KEY_F6:            return VK_F6;
-        case GLFW_KEY_F7:            return VK_F7;
-        case GLFW_KEY_F8:            return VK_F8;
-        case GLFW_KEY_F9:            return VK_F9;
-        case GLFW_KEY_F10:           return VK_F10;
-        case GLFW_KEY_F11:           return VK_F11;
-        case GLFW_KEY_F12:           return VK_F12;
-        case GLFW_KEY_INSERT:        return VK_INSERT;
-        case GLFW_KEY_DELETE:        return VK_DELETE;
-        case GLFW_KEY_HOME:          return VK_HOME;
-        case GLFW_KEY_END:           return VK_END;
-        case GLFW_KEY_PAGE_UP:       return VK_PAGEUP;
-        case GLFW_KEY_PAGE_DOWN:     return VK_PAGEDOWN;
-        default:                     return -1; // Unknown
+    switch (sdlkey) {
+        case SDLK_ESCAPE:    return VK_ESCAPE;
+        case SDLK_RETURN:    return VK_ENTER;
+        case SDLK_TAB:       return VK_TAB;
+        case SDLK_BACKSPACE: return VK_BACKSPACE;
+        case SDLK_SPACE:     return VK_SPACE;
+        case SDLK_LSHIFT:
+        case SDLK_RSHIFT:    return VK_SHIFT;
+        case SDLK_LCTRL:
+        case SDLK_RCTRL:     return VK_CONTROL;
+        case SDLK_LALT:
+        case SDLK_RALT:      return VK_ALT;
+        case SDLK_UP:        return VK_UP;
+        case SDLK_DOWN:      return VK_DOWN;
+        case SDLK_LEFT:      return VK_LEFT;
+        case SDLK_RIGHT:     return VK_RIGHT;
+        case SDLK_F1:        return VK_F1;
+        case SDLK_F2:        return VK_F2;
+        case SDLK_F3:        return VK_F3;
+        case SDLK_F4:        return VK_F4;
+        case SDLK_F5:        return VK_F5;
+        case SDLK_F6:        return VK_F6;
+        case SDLK_F7:        return VK_F7;
+        case SDLK_F8:        return VK_F8;
+        case SDLK_F9:        return VK_F9;
+        case SDLK_F10:       return VK_F10;
+        case SDLK_F11:       return VK_F11;
+        case SDLK_F12:       return VK_F12;
+        case SDLK_INSERT:    return VK_INSERT;
+        case SDLK_DELETE:    return VK_DELETE;
+        case SDLK_HOME:      return VK_HOME;
+        case SDLK_END:       return VK_END;
+        case SDLK_PAGEUP:    return VK_PAGEUP;
+        case SDLK_PAGEDOWN:  return VK_PAGEDOWN;
+        default:             return -1; // Unknown
     }
 }
 
@@ -695,56 +564,39 @@ static void installCrashHandlers(void) {
     signal(SIGILL,  crashSignalHandler);
 }
 
-#ifdef USE_GLFW2
-static Runner *g_runner = nullptr;
-#endif
 
-#ifdef USE_GLFW2
-static void keyCallback(int key, int action) {
-    Runner* runner = g_runner;
-#else
-static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    (void) scancode; (void) mods;
-    Runner* runner = (Runner*) glfwGetWindowUserPointer(window);
-#endif
-    // During playback, suppress real keyboard input (window events like close still work)
-    if (InputRecording_isPlaybackActive(globalInputRecording)) return;
-    int32_t gmlKey = glfwKeyToGml(key);
-    if (action == GLFW_PRESS) RunnerKeyboard_onKeyDown(runner->keyboard, gmlKey);
-    else if (action == GLFW_RELEASE) RunnerKeyboard_onKeyUp(runner->keyboard, gmlKey);
-    // GLFW_REPEAT is ignored (GML doesn't use key repeat)
-}
-
-#ifdef USE_GLFW2
-static void characterCallback(int codepoint, int action) {
-    if (action != GLFW_PRESS) return;
-    Runner* runner = g_runner;
-#else
-static void characterCallback(GLFWwindow* window, unsigned int codepoint) {
-    Runner* runner = (Runner*) glfwGetWindowUserPointer(window);
-#endif
-    if (InputRecording_isPlaybackActive(globalInputRecording)) return;
-    RunnerKeyboard_onCharacter(runner->keyboard, codepoint);
-}
-
-static void setGlfwWindowTitle(void* window, const char* title) {
+static void setSDLWindowTitle(void* window, const char* title) {
     char windowTitle[256];
     snprintf(windowTitle, sizeof(windowTitle), "Butterscotch - %s", title);
-#ifdef USE_GLFW2
-    (void)window;
-    glfwSetWindowTitle(windowTitle);
-#else
-    glfwSetWindowTitle((GLFWwindow*) window, windowTitle);
-#endif
+    SDL_WM_SetCaption(windowTitle, NULL);
 }
 
-static bool getGlfwWindowFocus(void *window) {
-#ifdef USE_GLFW2
-    (void)window;
-    return glfwGetWindowParam(GLFW_ACTIVE);
-#else
-    return glfwGetWindowAttrib((GLFWwindow*) window, GLFW_FOCUSED) != 0;
-#endif
+static bool getSDLWindowFocus(void *window) {
+    return true;
+}
+
+static SDL_Surface* nextFb = NULL;
+static uint32_t fbW = 0, fbH = 0;
+void Runner_setNextFrame(uint32_t* framebuffer, int width, int height)
+{
+    if (nextFb != NULL) {
+        SDL_FreeSurface(nextFb);
+        nextFb = NULL;
+    }
+
+    fbW = width;
+    fbH = height;
+    nextFb = SDL_CreateRGBSurfaceFrom(
+        framebuffer,
+        width,
+        height,
+        32,
+        width * 4,
+        0xff0000,
+        0x00ff00,
+        0x0000ff,
+        0
+    );
 }
 
 void saveInputRecording() {
@@ -770,23 +622,8 @@ static void onCrashSignal(int sig) {
 }
 #endif
 
-#if defined(_WIN32) && defined(USE_GLFW2)
-// glfw2's glfwGetProcAddress is broken on Windows.
-// This just implements it in a way that's fixed
-// so it can be passed to GLAD.
-#define glfwGetProcAddress fixed_glfwGetProcAddress
-static void *fixed_glfwGetProcAddress(const char *name) {
-    void *ret = (void *)wglGetProcAddress(name);
-    if (ret == 0 || ret == (void *)1 || ret == (void *)2 || ret == (void *)3 || ret == (void *)-1) { // ChatGPT says this is needed because some OpenGL drivers do this
-        HMODULE handle = GetModuleHandle("opengl32.dll");
-        if (handle)
-            ret = (void *)GetProcAddress(handle, name);
-    }
-    return ret;
-}
-#endif
-
 // ===[ MAIN ]===
+static bool shouldExit = false;
 int main(int argc, char* argv[]) {
     CommandLineArgs args;
     parseCommandLineArgs(&args, argc, argv);
@@ -946,151 +783,94 @@ int main(int argc, char* argv[]) {
     OverlayFileSystem* overlayFs = OverlayFileSystem_create(dataWinDir, savePath);
     free(dataWinDir);
 
-    // Init GLFW
-#ifndef USE_GLFW2
-    glfwSetErrorCallback(glfwErrorCallback);
-#endif
-    if (!glfwInit()) {
-        fprintf(stderr, "Failed to initialize GLFW\n");
+    // Init SDL
+    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)) {
+        fprintf(stderr, "Failed to initialize SDL\n");
         DataWin_free(dataWin);
         freeCommandLineArgs(&args);
         return 1;
     }
 
-    bool modernGL = strcmp(args.renderer, "gl") == 0;
-    bool legacyGL = strcmp(args.renderer, "legacy-gl") == 0;
-
+    bool useSWRend = strcmp(args.renderer, "software") == 0;
+    bool useLegacyGL = strcmp(args.renderer, "legacy-gl") == 0;
 #ifndef ENABLE_LEGACY_GL
-    if (legacyGL) {
+    if (useLegacyGL) {
         fprintf(stderr, "The legacy-gl renderer is not available in this build!\n");
-        return 0;
+        DataWin_free(dataWin);
+        freeCommandLineArgs(&args);
+        return 1;
     }
 #endif
-#ifndef ENABLE_MODERN_GL
-    if (modernGL) {
-        fprintf(stderr, "The modern gl renderer is not available in this build!\n");
-        return 0;
+#ifndef ENABLE_SW_RENDERER
+    if (useSWRend) {
+        fprintf(stderr, "The software renderer is not available in this build!\n");
+        DataWin_free(dataWin);
+        freeCommandLineArgs(&args);
+        return 1;
     }
 #endif
-    if (!modernGL && !legacyGL) {
+    if (!useSWRend && !useLegacyGL) {
         fprintf(stderr, "Unknown renderer: %s!\n", args.renderer);
-        return 0;
+        DataWin_free(dataWin);
+        freeCommandLineArgs(&args);
+        return 1;
     }
 
-    if (!modernGL && hmlen(args.screenshotSurfacesFrames)) {
-        fprintf(stderr, "You can't use --screenshot-surfaces with --renderer legacy-gl!\n");
-        return 0;
-    }
-
-#ifndef USE_GLFW2
-    if (!modernGL) {
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 1);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    } else {
-#ifdef ENABLE_GLES
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-#else
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-#endif
-    }
-#endif
-
-#ifndef USE_GLFW2
-    // Load SDL gamecontroller mappings
-    {
-        const char* dbPath = "gamecontrollerdb.txt";
-        FILE* f = fopen(dbPath, "r");
-        if (f != NULL) {
-            fseek(f, 0, SEEK_END);
-            long len = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            char* buffer = (char*) malloc(len + 1);
-            if (buffer != NULL) {
-                fread(buffer, 1, len, f);
-                buffer[len] = '\0';
-                GlfwGamepad_loadMappings(buffer);
-                free(buffer);
+    SDL_Surface* scr = nullptr;
+    int reqW = (int) gen8->defaultWindowWidth;
+    int reqH = (int) gen8->defaultWindowHeight;
+    int fbWidth = reqW, fbHeight = reqH;
+    if(!args.headless) {
+        scr = SDL_SetVideoMode(reqW, reqH, 0, useSWRend ? 0 : (SDL_OPENGL | SDL_RESIZABLE));
+        if (!scr && useSWRend) {
+            SDL_Rect** modes = SDL_ListModes(NULL, SDL_FULLSCREEN);
+            if (modes && modes != (SDL_Rect**) -1 && modes[0]) {
+                fprintf(stderr, "Warning: %dx%d unavailable, falling back to %dx%d: %s\n",
+                        reqW, reqH, modes[0]->w, modes[0]->h, SDL_GetError());
+                scr = SDL_SetVideoMode(modes[0]->w, modes[0]->h, 0, 0);
+                fbWidth = modes[0]->w;
+                fbHeight = modes[0]->h;
             }
-            fclose(f);
-        } else {
-            fprintf(stderr, "Gamepad: SDL gamecontrollerdb.txt not found at %s, using defaults\n", dbPath);
+        }
+        if (!scr) {
+            fprintf(stderr, "Fatal: Could not set any video mode: %s\n", SDL_GetError());
+            SDL_Quit();
+            DataWin_free(dataWin);
+            freeCommandLineArgs(&args);
+            return 1;
         }
     }
 
-    if (args.headless) {
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    SDL_EnableKeyRepeat(0, 0);
+
+#ifdef ENABLE_LEGACY_GL
+    if(!useSWRend) {
+        // Load OpenGL function pointers via GLAD
+        if (!gladLoadGLLoader((GLADloadproc) SDL_GL_GetProcAddress)) {
+            fprintf(stderr, "Failed to initialize GLAD\n");
+            SDL_Quit();
+            DataWin_free(dataWin);
+            freeCommandLineArgs(&args);
+            return 1;
+        }
     }
-#endif
-
-#ifdef USE_GLFW2
-    int window = glfwOpenWindow((int) gen8->defaultWindowWidth, (int) gen8->defaultWindowHeight, 8, 8, 8, 8, 24, 8, GLFW_WINDOW);
-#else
-    GLFWwindow* window = glfwCreateWindow((int) gen8->defaultWindowWidth, (int) gen8->defaultWindowHeight, windowTitle, nullptr, nullptr);
-#endif
-    if (!window) {
-        fprintf(stderr, "Failed to create GLFW window\n");
-        glfwTerminate();
-        DataWin_free(dataWin);
-        freeCommandLineArgs(&args);
-        return 1;
-    }
-
-#ifndef USE_GLFW2
-    glfwMakeContextCurrent(window);
-#endif
-    glfwSwapInterval(0); // Disable v-sync, we control timing ourselves
-
-    // Load OpenGL function pointers via GLAD
-#ifdef ENABLE_GLES
-    if (!gladLoadGLES2Loader((GLADloadproc) glfwGetProcAddress)) {
-#else
-    if (!gladLoadGLLoader((GLADloadproc) glfwGetProcAddress)) {
-#endif
-        fprintf(stderr, "Failed to initialize GLAD\n");
-#ifdef USE_GLFW2
-        glfwCloseWindow();
-#else
-        glfwDestroyWindow(window);
-#endif
-        glfwTerminate();
-        DataWin_free(dataWin);
-        freeCommandLineArgs(&args);
-        return 1;
-    }
-
-    // Install the OpenGL debug message callback
-#ifndef ENABLE_GLES
-    if (modernGL)
-        installGLDebugCallback();
 #endif
 
     // Initialize the renderer
-    Renderer* renderer = nullptr;
-#ifdef ENABLE_GLES
-    if (strcmp(args.renderer, "legacy-gl") == 0) {
-        fprintf(stderr, "--renderer legacy-gl is not available in GLES builds; falling back to gl\n");
-    }
-    renderer = GLRenderer_create();
-#else
-    if(strcmp(args.renderer, "legacy-gl") == 0) {
-#ifdef ENABLE_LEGACY_GL
+    Renderer* renderer;
+#if defined(ENABLE_LEGACY_GL) && defined(ENABLE_SW_RENDERER)
+    if(useSWRend)
+        renderer = SWRenderer_create(fbWidth, fbHeight);
+    else
         renderer = GLLegacyRenderer_create();
-#endif
-    } else {
-#ifdef ENABLE_MODERN_GL
-        renderer = GLRenderer_create();
-#endif
-    }
+#elif defined(ENABLE_LEGACY_GL)
+    renderer = GLLegacyRenderer_create();
+#else
+    renderer = SWRenderer_create(fbWidth, fbHeight);
 #endif
 
     // Initialize the audio system
-    AudioSystem* audioSystem = nullptr;
+    AudioSystem* audioSystem;
     if (args.headless) {
         audioSystem = (AudioSystem*) NoopAudioSystem_create();
     } else {
@@ -1107,14 +887,9 @@ int main(int argc, char* argv[]) {
     Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem);
     runner->debugMode = args.debug;
     runner->osType = args.osType;
-    runner->setWindowTitle = setGlfwWindowTitle;
-    runner->windowHasFocus = getGlfwWindowFocus;
-#ifdef USE_GLFW2
+    runner->setWindowTitle = setSDLWindowTitle;
+    runner->windowHasFocus = getSDLWindowFocus;
     runner->nativeWindow = (void*)0xDEADBEEF;
-    g_runner = runner;
-#else
-    runner->nativeWindow = window;
-#endif
 
     // Set up input recording/playback (both can be active: playback then continue recording)
     if (args.playbackInputsPath != nullptr) {
@@ -1140,15 +915,6 @@ int main(int argc, char* argv[]) {
     runner->vmContext->alwaysLogStubbedFunctions = args.alwaysLogStubbedFunctions;
     runner->vmContext->traceEventInherited = args.traceEventInherited;
 
-    // Set up keyboard input
-#ifdef USE_GLFW2
-    glfwSetKeyCallback(keyCallback);
-    glfwSetCharCallback(characterCallback);
-#else
-    glfwSetWindowUserPointer(window, runner);
-    glfwSetKeyCallback(window, keyCallback);
-    glfwSetCharCallback(window, characterCallback);
-#endif
 
 #ifndef _WIN32
     struct sigaction sa = { .sa_handler = onCrashSignal };
@@ -1172,25 +938,36 @@ int main(int argc, char* argv[]) {
     // Main loop
     bool debugPaused = false;
     bool debugShowCollisionMasks = false;
-    double lastFrameTime = glfwGetTime();
-    while (true) {
-#ifdef USE_GLFW2
-        bool shouldWindowClose = !glfwGetWindowParam(GLFW_OPENED);
-#else
-        bool shouldWindowClose = glfwWindowShouldClose(window);
-#endif
-        if (runner->shouldExit || shouldWindowClose)
-            break;
-
+    double lastFrameTime = (SDL_GetTicks()/1000.0f);
+    SDL_Event e;
+    while (!runner->shouldExit && !shouldExit) {
         // Clear last frame's pressed/released state, then poll new input events
         RunnerKeyboard_beginFrame(runner->keyboard);
         RunnerGamepad_beginFrame(runner->gamepads);
-        glfwPollEvents();
-#ifndef USE_GLFW2
-        GlfwGamepad_poll(runner->gamepads);
-#endif
+        while (SDL_PollEvent(&e)) {
+            switch(e.type) {
+                case SDL_KEYDOWN:
+                    RunnerKeyboard_onKeyDown(runner->keyboard, SDLKeyToGml(e.key.keysym.sym));
+                    break;
+                case SDL_KEYUP:
+                    RunnerKeyboard_onKeyUp(runner->keyboard, SDLKeyToGml(e.key.keysym.sym));
+                    break;
+                case SDL_VIDEORESIZE:
+                    if (useSWRend)
+                        break;
+                    fbWidth = e.resize.w;
+                    fbHeight = e.resize.h;
+                    scr = SDL_SetVideoMode(fbWidth, fbHeight, 0, (useSWRend ? 0 : SDL_OPENGL) | SDL_RESIZABLE);
+                    break;
+                case SDL_QUIT:
+                    shouldExit = true;
+                    break;
+                default:
+                    break;
+            }
+        }
 
-        // Process input recording/playback (must happen after glfwPollEvents, before Runner_step)
+        // Process input recording/playback (must happen after SDL_PollEvents, before Runner_step)
         InputRecording_processFrame(globalInputRecording, runner->keyboard, runner->frameCount);
 
         // Debug key bindings
@@ -1278,7 +1055,7 @@ int main(int argc, char* argv[]) {
 
         if (shouldStep) {
             if (args.traceFrames) {
-                frameStartTime = glfwGetTime();
+                frameStartTime = (SDL_GetTicks()/1000.0f);
                 fprintf(stderr, "Frame %d (Start)\n", runner->frameCount);
             }
 
@@ -1295,7 +1072,7 @@ int main(int argc, char* argv[]) {
             }
 
             // Update audio system (gain fading, cleanup ended sounds)
-            float dt = (float) (glfwGetTime() - lastFrameTime);
+            float dt = (float) ((SDL_GetTicks()/1000.0f) - lastFrameTime);
             if (0.0f > dt) dt = 0.0f;
             if (dt > 0.1f) dt = 0.1f; // cap delta to avoid huge fades on lag spikes
             runner->audioSystem->vtable->update(runner->audioSystem, dt);
@@ -1327,20 +1104,18 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Query actual framebuffer size (differs from window size on Wayland with fractional scaling)
-        int fbWidth, fbHeight;
-#ifdef USE_GLFW2
-        glfwGetWindowSize(&fbWidth, &fbHeight);
-#else
-        glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
-#endif
-
         // Clear the default framebuffer (window background) to black
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glClear(GL_COLOR_BUFFER_BIT);
 
-        int32_t gameW = (int32_t) gen8->defaultWindowWidth;
-        int32_t gameH = (int32_t) gen8->defaultWindowHeight;
+#if defined(ENABLE_SW_RENDERER) && defined(ENABLE_LEGACY_GL)
+        if(useSWRend)
+            SWRenderer_clearFrameBuffer(renderer, 0);
+        else
+            glClear(GL_COLOR_BUFFER_BIT);
+#elif defined(ENABLE_LEGACY_GL)
+        glClear(GL_COLOR_BUFFER_BIT);
+#else
+        SWRenderer_clearFrameBuffer(renderer, 0);
+#endif
 
         // The application surface (FBO) is sized to defaultWindowWidth x defaultWindowHeight.
         // It is a bit hard to understand, but here's how it works:
@@ -1351,73 +1126,62 @@ int main(int argc, char* argv[]) {
         float displayScaleX;
         float displayScaleY;
 
-        Runner_computeViewDisplayScale(runner, gameW, gameH, &displayScaleX, &displayScaleY);
+        Runner_computeViewDisplayScale(runner, reqW, reqH, &displayScaleX, &displayScaleY);
 
-        renderer->vtable->beginFrame(renderer, gameW, gameH, fbWidth, fbHeight);
+        renderer->vtable->beginFrame(renderer, reqW, reqH, fbWidth, fbHeight);
 
         // Clear FBO with room background color
         if (runner->drawBackgroundColor) {
+#if defined(ENABLE_SW_RENDERER) && defined(ENABLE_LEGACY_GL)
+            if(!useSWRend) {
+                int rInt = BGR_R(runner->backgroundColor);
+                int gInt = BGR_G(runner->backgroundColor);
+                int bInt = BGR_B(runner->backgroundColor);
+                glClearColor(rInt / 255.0f, gInt / 255.0f, bInt / 255.0f, 1.0f);
+            } else
+                SWRenderer_clearFrameBuffer(renderer, runner->backgroundColor);
+        } else {
+            if(!useSWRend)
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            else
+                SWRenderer_clearFrameBuffer(renderer, 0);
+#elif defined(ENABLE_LEGACY_GL)
             int rInt = BGR_R(runner->backgroundColor);
             int gInt = BGR_G(runner->backgroundColor);
             int bInt = BGR_B(runner->backgroundColor);
-            int aInt = BGR_A(runner->backgroundColor);
-            glClearColor(rInt / 255.0f, gInt / 255.0f, bInt / 255.0f, aInt / 255.0f);
+            glClearColor(rInt / 255.0f, gInt / 255.0f, bInt / 255.0f, 1.0f);
         } else {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+#else
+            SWRenderer_clearFrameBuffer(renderer, runner->backgroundColor);
+        } else {
+            SWRenderer_clearFrameBuffer(renderer, 0);
+#endif
         }
-        glClear(GL_COLOR_BUFFER_BIT);
+#ifdef ENABLE_LEGACY_GL
+        if(!useSWRend)
+            glClear(GL_COLOR_BUFFER_BIT);
+#endif
 
-        Runner_drawViews(runner, gameW, gameH, displayScaleX, displayScaleY, debugShowCollisionMasks);
+        Runner_drawViews(runner, reqW, reqH, displayScaleX, displayScaleY, debugShowCollisionMasks);
 
         renderer->vtable->endFrame(renderer);
 
-        // Capture screenshot if this frame matches a requested frame
-        bool shouldScreenshot = hmget(args.screenshotFrames, runner->frameCount);
-
-        if (shouldScreenshot) {
-            GLuint readFbo;
-#ifdef ENABLE_LEGACY_GL
-            if (strcmp(args.renderer, "legacy-gl") == 0) {
-                readFbo = ((GLLegacyRenderer*) renderer)->fbo;
-            } else
-#endif
-            {
-                readFbo = ((GLRenderer*) renderer)->fbo;
-            }
-            captureScreenshot(readFbo, args.screenshotPattern, runner->frameCount, gameW, gameH);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        }
-
-        // Dump all surfaces if this frame matches a requested frame
-        bool shouldDumpSurfaces = hmget(args.screenshotSurfacesFrames, runner->frameCount);
-
-        if (shouldDumpSurfaces) {
-            GLRenderer* gl = (GLRenderer*) renderer;
-            dumpAllSurfaces(gl, args.screenshotSurfacesPattern, runner->frameCount);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        }
-
-        if (args.exitAtFrame >= 0 && runner->frameCount >= args.exitAtFrame) {
-            printf("Exiting at frame %d (--exit-at-frame)\n", runner->frameCount);
-#ifdef USE_GLFW2
-            glfwCloseWindow();
-#else
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
-#endif
-        }
-
         if (shouldStep && args.traceFrames) {
-            double frameElapsedMs = (glfwGetTime() - frameStartTime) * 1000.0;
+            double frameElapsedMs = ((SDL_GetTicks()/1000.0f) - frameStartTime) * 1000.0;
             fprintf(stderr, "Frame %d (End, %.2f ms)\n", runner->frameCount, frameElapsedMs);
         }
 
         // Only swap when there isn't a room change to match the original runner.
         if (runner->pendingRoom == -1) {
-#ifdef USE_GLFW2
-            glfwSwapBuffers();
-#else
-            glfwSwapBuffers(window);
-#endif
+            if(!args.headless) {
+                if(!useSWRend)
+                    SDL_GL_SwapBuffers();
+                else {
+                    SDL_BlitSurface(nextFb, NULL, scr, NULL);
+                    SDL_Flip(scr);
+                }
+            }
         }
         Runner_handlePendingRoomChange(runner);
 
@@ -1425,21 +1189,17 @@ int main(int argc, char* argv[]) {
         if (!args.headless && runner->currentRoom->speed > 0) {
             static bool fastForwardActive = false;
             static bool fastForwardTabPrev = false;
-            bool fastForwardTabNow = glfwGetKey(
-#ifndef USE_GLFW2
-                    window,
-#endif
-                    GLFW_KEY_TAB) == GLFW_PRESS;
+            bool fastForwardTabNow = false;
             if (args.fastForwardSpeed > 0.0 && fastForwardTabNow && !fastForwardTabPrev) {
                 fastForwardActive = !fastForwardActive;
-                lastFrameTime = glfwGetTime();
+                lastFrameTime = (SDL_GetTicks()/1000.0f);
             }
             fastForwardTabPrev = fastForwardTabNow;
             double effectiveSpeed = (args.fastForwardSpeed > 0.0 && fastForwardActive) ? args.fastForwardSpeed : args.speedMultiplier;
             double targetFrameTime = 1.0 / (runner->currentRoom->speed * effectiveSpeed);
             double nextFrameTime = lastFrameTime + targetFrameTime;
             // Sleep for most of the remaining time, then spin-wait for precision
-            double remaining = nextFrameTime - glfwGetTime();
+            double remaining = nextFrameTime - (SDL_GetTicks()/1000.0f);
             if (remaining > 0.002) {
                 #ifdef _WIN32
                 Sleep((DWORD) ((remaining - 0.001) * 1000));
@@ -1451,12 +1211,12 @@ int main(int argc, char* argv[]) {
                 nanosleep(&ts, nullptr);
                 #endif
             }
-            while (glfwGetTime() < nextFrameTime) {
+            while ((SDL_GetTicks()/1000.0f) < nextFrameTime) {
                 // Spin-wait for the remaining sub-millisecond
             }
             lastFrameTime = nextFrameTime;
         } else {
-            lastFrameTime = glfwGetTime();
+            lastFrameTime = (SDL_GetTicks()/1000.0f);
         }
     }
 
@@ -1467,18 +1227,9 @@ int main(int argc, char* argv[]) {
     runner->audioSystem = nullptr;
     renderer->vtable->destroy(renderer);
 
-#ifdef USE_GLFW2
-    glfwCloseWindow();
-#else
-    glfwDestroyWindow(window);
-#endif
-    glfwTerminate();
 
     Runner_free(runner);
     OverlayFileSystem_destroy(overlayFs);
-#ifdef ENABLE_VM_OPCODE_PROFILER
-    VM_printOpcodeProfilerReport(vm);
-#endif
     VM_free(vm);
     DataWin_free(dataWin);
 
