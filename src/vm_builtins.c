@@ -5118,6 +5118,7 @@ static RValue builtinInstanceChange(VMContext* ctx, RValue* args, int32_t argCou
 
     // Move the instance between per-object lists before mutating objectIndex so the remove walks the old parent chain and the add walks the new one.
     Runner_removeInstanceFromObjectLists(runner, inst);
+    SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
 
     // Change object index and copy properties from new object definition
     GameObject* newObjDef = &runner->dataWin->objt.objects[objectIndex];

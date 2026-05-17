@@ -106,7 +106,6 @@ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
     if (inst->objectIndex >= 0 && dataWin->objt.count > (uint32_t) inst->objectIndex) {
         removeInstanceFromList(&runner->instancesByExactObject[inst->objectIndex], inst);
     }
-    SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
 }
 
 void Runner_clearAllObjectLists(Runner* runner) {
@@ -1885,6 +1884,7 @@ void Runner_cleanupDestroyedInstances(Runner* runner) {
             runner->instances[writeIdx++] = inst;
         } else {
             Runner_removeInstanceFromObjectLists(runner, inst);
+            SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
             hmdel(runner->instancesById, inst->instanceId);
             Instance_free(inst);
             // Cached drawables hold raw Instance* that we just freed; force a rebuild before the next draw.
