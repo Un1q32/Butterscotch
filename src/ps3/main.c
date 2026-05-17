@@ -401,6 +401,7 @@ int main(int argc, char* argv[]) {
         float displayScaleX;
         float displayScaleY;
 
+        Runner_drawPre(runner, fbWidth, fbHeight);
         Runner_computeViewDisplayScale(runner, gameW, gameH, &displayScaleX, &displayScaleY);
 
         renderer->vtable->beginFrame(renderer, gameW, gameH, fbWidth, fbHeight);
@@ -419,8 +420,10 @@ int main(int argc, char* argv[]) {
 
         double drawStart = PS3_GET_TIME;
         Runner_drawViews(runner, gameW, gameH, displayScaleX, displayScaleY, debugShowCollisionMasks);
-
-        renderer->vtable->endFrame(renderer);
+        renderer->vtable->endFrameInit(renderer);
+        Runner_drawPost(runner, fbWidth, fbHeight);
+        renderer->vtable->endFrameEnd(renderer);
+        Runner_drawGUI(runner, fbWidth, fbHeight, gameW, gameH);
         double drawTime = PS3_GET_TIME - drawStart;
 
         // ===[ Debug Overlay ]===

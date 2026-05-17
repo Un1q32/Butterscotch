@@ -738,6 +738,34 @@ static void setGlfwWindowTitle(void* window, const char* title) {
 #endif
 }
 
+static bool getGlfwWindowSize(void* window, int32_t* outW, int32_t* outH) {
+    if (outW == nullptr || outH == nullptr) return false;
+    int w = 0;
+    int h = 0;
+#ifdef USE_GLFW2
+    (void)window;
+    glfwGetWindowSize(&w, &h);
+#else
+    if (window == nullptr) return false;
+    glfwGetWindowSize((GLFWwindow*) window, &w, &h);
+#endif
+    if (w <= 0 || h <= 0) return false;
+    *outW = w;
+    *outH = h;
+    return true;
+}
+
+static void setGlfwWindowSize(void* window, int32_t width, int32_t height) {
+    if (width <= 0 || height <= 0) return;
+#ifdef USE_GLFW2
+    (void) window;
+    glfwSetWindowSize(width, height);
+#else
+    if (window == nullptr) return;
+    glfwSetWindowSize((GLFWwindow*) window, width, height);
+#endif
+}
+
 static bool getGlfwWindowFocus(void *window) {
 #ifdef USE_GLFW2
     (void)window;
@@ -1108,6 +1136,8 @@ int main(int argc, char* argv[]) {
     runner->debugMode = args.debug;
     runner->osType = args.osType;
     runner->setWindowTitle = setGlfwWindowTitle;
+    runner->getWindowSize = getGlfwWindowSize;
+    runner->setWindowSize = setGlfwWindowSize;
     runner->windowHasFocus = getGlfwWindowFocus;
 #ifdef USE_GLFW2
     runner->nativeWindow = (void*)0xDEADBEEF;
@@ -1339,8 +1369,22 @@ int main(int argc, char* argv[]) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        int32_t gameW = (int32_t) gen8->defaultWindowWidth;
-        int32_t gameH = (int32_t) gen8->defaultWindowHeight;
+        if (!runner->appSurfaceEnabled) {
+            runner->applicationWidth = fbWidth;
+            runner->applicationHeight = fbHeight;
+            runner->usingAppSurface = false;
+        } else {
+            if (runner->applicationWidth <= 0 || runner->applicationHeight <= 0) {
+                runner->applicationWidth = (int32_t) gen8->defaultWindowWidth;
+                runner->applicationHeight = (int32_t) gen8->defaultWindowHeight;
+            }
+            runner->usingAppSurface = true;
+        }
+
+        int32_t gameW = runner->applicationWidth;
+        int32_t gameH = runner->applicationHeight;
+        renderer->appSurfaceAutoDraw = runner->appSurfaceAutoDraw;
+        renderer->usingAppSurface = runner->usingAppSurface;
 
         // The application surface (FBO) is sized to defaultWindowWidth x defaultWindowHeight.
         // It is a bit hard to understand, but here's how it works:
@@ -1351,6 +1395,7 @@ int main(int argc, char* argv[]) {
         float displayScaleX;
         float displayScaleY;
 
+        Runner_drawPre(runner, fbWidth, fbHeight);
         Runner_computeViewDisplayScale(runner, gameW, gameH, &displayScaleX, &displayScaleY);
 
         renderer->vtable->beginFrame(renderer, gameW, gameH, fbWidth, fbHeight);
@@ -1368,8 +1413,10 @@ int main(int argc, char* argv[]) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         Runner_drawViews(runner, gameW, gameH, displayScaleX, displayScaleY, debugShowCollisionMasks);
-
-        renderer->vtable->endFrame(renderer);
+        renderer->vtable->endFrameInit(renderer);
+        Runner_drawPost(runner, fbWidth, fbHeight);
+        renderer->vtable->endFrameEnd(renderer);
+        Runner_drawGUI(runner, fbWidth, fbHeight, gameW, gameH);
 
         // Capture screenshot if this frame matches a requested frame
         bool shouldScreenshot = hmget(args.screenshotFrames, runner->frameCount);

@@ -345,10 +345,21 @@ static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t p
     gl->quadCount = 0;
     gl->currentTextureId = 0;
 
-    int32_t glPortY = gl->gameH - portY - portH;
-    glViewport(portX, glPortY, portW, portH);
+    GLint boundFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
+
+    int32_t glPortY;
+    if (boundFbo == 0) {
+        glPortY = 0;
+        glViewport(0, 0, portW, portH);
+        glScissor(0, 0, portW, portH);
+    } else {
+        glPortY = gl->gameH - portY - portH;
+        glViewport(portX, glPortY, portW, portH);
+        glScissor(portX, glPortY, portW, portH);
+    }
+
     glEnable(GL_SCISSOR_TEST);
-    glScissor(portX, glPortY, portW, portH);
 
     Matrix4f projection;
     Matrix4f_identity(&projection);
@@ -368,10 +379,24 @@ static void glEndGUI(Renderer* renderer) {
     glDisable(GL_SCISSOR_TEST);
 }
 
-static void glEndFrame(Renderer* renderer) {
+static void glEndFrameInit(Renderer* renderer) {
     GLRenderer* gl = (GLRenderer*) renderer;
     glBindVertexArray(0);
-    GLCommon_letterboxBlit(gl->fbo, gl->fboWidth, gl->fboHeight, gl->gameW, gl->gameH, gl->windowW, gl->windowH);
+
+    if (renderer->usingAppSurface && !renderer->appSurfaceAutoDraw) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
+    GLCommon_beginLetterboxBlit(gl->fbo);
+}
+
+static void glEndFrameEnd(Renderer* renderer) {
+    GLRenderer* gl = (GLRenderer*) renderer;
+
+    if (renderer->usingAppSurface && !renderer->appSurfaceAutoDraw) {
+        return;
+    }
+    GLCommon_endLetterboxBlit(gl->fboWidth, gl->fboHeight, gl->gameW, gl->gameH, gl->windowW, gl->windowH);
 }
 
 static void glRendererFlush(Renderer* renderer) {
@@ -1697,7 +1722,8 @@ static RendererVtable glVtable = {
     .init = glInit,
     .destroy = glDestroy,
     .beginFrame = glBeginFrame,
-    .endFrame = glEndFrame,
+    .endFrameInit = glEndFrameInit,
+    .endFrameEnd = glEndFrameEnd,
     .beginView = glBeginView,
     .endView = glEndView,
     .beginGUI = glBeginGUI,
@@ -1750,5 +1776,7 @@ Renderer* GLRenderer_create(void) {
     gl->base.drawHalign = 0;
     gl->base.drawValign = 0;
     gl->base.circlePrecision = 24;
+    gl->base.appSurfaceAutoDraw = true;
+    gl->base.usingAppSurface = true;
     return (Renderer*) gl;
 }

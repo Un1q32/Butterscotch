@@ -647,8 +647,6 @@ void Runner_draw(Runner* runner) {
     if (!DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0))
         Runner_drawBackgrounds(runner, false);
 
-    // Fire draw subtypes in correct GameMaker order. fireDrawSubtype walks the cache and filters inline.
-    fireDrawSubtype(runner, drawables, drawableCount, DRAW_PRE);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_BEGIN);
 
     // Draw interleaved tiles and instances
@@ -867,18 +865,40 @@ void Runner_draw(Runner* runner) {
 
     // Draw foreground backgrounds (in front of instances, behind GUI)
     Runner_drawBackgrounds(runner, true);
-
-    fireDrawSubtype(runner, drawables, drawableCount, DRAW_POST);
 }
 
-void Runner_drawGUI(Runner* runner) {
+void Runner_drawGUI(Runner* runner, int32_t windowW, int32_t windowH, int32_t targetW, int32_t targetH) {
     rebuildDrawableCacheIfDirty(runner);
     Drawable* drawables = runner->cachedDrawables;
     int32_t drawableCount = (int32_t) arrlen(drawables);
 
+    int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : targetW;
+    int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : targetH;
+    runner->renderer->vtable->beginGUI(runner->renderer, guiW, guiH, 0, 0, windowW, windowH);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI_BEGIN);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI);
     fireDrawSubtype(runner, drawables, drawableCount, DRAW_GUI_END);
+    runner->renderer->vtable->endGUI(runner->renderer);
+}
+
+void Runner_drawPre(Runner* runner, int32_t windowW, int32_t windowH) {
+    rebuildDrawableCacheIfDirty(runner);
+    Drawable* drawables = runner->cachedDrawables;
+    int32_t drawableCount = (int32_t) arrlen(drawables);
+
+    runner->renderer->vtable->beginGUI(runner->renderer, windowW, windowH, 0, 0, windowW, windowH);
+    fireDrawSubtype(runner, drawables, drawableCount, DRAW_PRE);
+    runner->renderer->vtable->endGUI(runner->renderer);
+}
+
+void Runner_drawPost(Runner* runner, int32_t windowW, int32_t windowH) {
+    rebuildDrawableCacheIfDirty(runner);
+    Drawable* drawables = runner->cachedDrawables;
+    int32_t drawableCount = (int32_t) arrlen(drawables);
+
+    runner->renderer->vtable->beginGUI(runner->renderer, windowW, windowH, 0, 0, windowW, windowH);
+    fireDrawSubtype(runner, drawables, drawableCount, DRAW_POST);
+    runner->renderer->vtable->endGUI(runner->renderer);
 }
 
 void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY) {
@@ -938,12 +958,6 @@ void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displa
 
             renderer->vtable->endView(renderer);
 
-            int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : portW;
-            int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : portH;
-            renderer->vtable->beginGUI(renderer, guiW, guiH, portX, portY, portW, portH);
-            Runner_drawGUI(runner);
-            renderer->vtable->endGUI(renderer);
-
             anyViewRendered = true;
         }
     }
@@ -958,11 +972,6 @@ void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displa
 
         renderer->vtable->endView(renderer);
 
-        int32_t guiW = runner->guiWidth > 0 ? runner->guiWidth : gameW;
-        int32_t guiH = runner->guiHeight > 0 ? runner->guiHeight : gameH;
-        renderer->vtable->beginGUI(renderer, guiW, guiH, 0, 0, gameW, gameH);
-        Runner_drawGUI(runner);
-        renderer->vtable->endGUI(renderer);
     }
 
     // Reset view_current to 0 so non-Draw events (Step, Alarm, Create) see view_current = 0
@@ -1586,7 +1595,8 @@ static void validateRendererVtable(Renderer* renderer) {
     requireNotNullFunction(init);
     requireNotNullFunction(destroy);
     requireNotNullFunction(beginFrame);
-    requireNotNullFunction(endFrame);
+    requireNotNullFunction(endFrameInit);
+    requireNotNullFunction(endFrameEnd);
     requireNotNullFunction(beginView);
     requireNotNullFunction(endView);
     requireNotNullFunction(beginGUI);
@@ -1644,6 +1654,13 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     runner->osType = OS_WINDOWS;
     runner->keyboard = RunnerKeyboard_create();
     runner->gamepads = RunnerGamepad_create();
+    runner->appSurfaceEnabled = true;
+    runner->appSurfaceAutoDraw = true;
+    runner->usingAppSurface = true;
+    runner->applicationWidth = (int32_t) dataWin->gen8.defaultWindowWidth;
+    runner->applicationHeight = (int32_t) dataWin->gen8.defaultWindowHeight;
+    runner->oldApplicationWidth = runner->applicationWidth;
+    runner->oldApplicationHeight = runner->applicationHeight;
 
     repeat(MAX_SURFACES, i) {
         runner->surfaceStack[i] = -1;

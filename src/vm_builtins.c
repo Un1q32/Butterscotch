@@ -4087,9 +4087,46 @@ static RValue builtin_audioDestroyStream(VMContext* ctx, RValue* args, MAYBE_UNU
     return RValue_makeReal(success ? 1.0 : -1.0);
 }
 
-// Application surface stubs
-STUB_RETURN_UNDEFINED(application_surface_enable)
-STUB_RETURN_UNDEFINED(application_surface_draw_enable)
+// Application surface
+static RValue builtin_application_surface_enable(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner == nullptr || argCount < 1) return RValue_makeUndefined();
+
+    bool enable = RValue_toReal(args[0]) > 0.5;
+    if (runner->appSurfaceEnabled) {
+        runner->oldApplicationWidth = runner->applicationWidth;
+        runner->oldApplicationHeight = runner->applicationHeight;
+    }
+
+    runner->appSurfaceEnabled = enable;
+    runner->usingAppSurface = enable;
+
+    if (!enable) {
+        int32_t w = runner->applicationWidth;
+        int32_t h = runner->applicationHeight;
+        if (runner->getWindowSize != nullptr && runner->getWindowSize(runner->nativeWindow, &w, &h) && w > 0 && h > 0) {
+            runner->applicationWidth = w;
+            runner->applicationHeight = h;
+        }
+    } else {
+        if (runner->oldApplicationWidth > 0 && runner->oldApplicationHeight > 0) {
+            runner->applicationWidth = runner->oldApplicationWidth;
+            runner->applicationHeight = runner->oldApplicationHeight;
+        } else {
+            runner->applicationWidth = (int32_t) ctx->dataWin->gen8.defaultWindowWidth;
+            runner->applicationHeight = (int32_t) ctx->dataWin->gen8.defaultWindowHeight;
+        }
+    }
+
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_application_surface_draw_enable(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner == nullptr || argCount < 1) return RValue_makeUndefined();
+    runner->appSurfaceAutoDraw = RValue_toReal(args[0]) > 0.5;
+    return RValue_makeUndefined();
+}
 
 // ===[ Gamepad Functions ]===
 static RValue builtinGamepadGetDeviceCount(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -4803,15 +4840,48 @@ static RValue builtinJoystickAxes(VMContext* ctx, RValue* args, MAYBE_UNUSED int
 // Window stubs
 STUB_RETURN_ZERO(window_get_fullscreen)
 STUB_RETURN_UNDEFINED(window_set_fullscreen)
-STUB_RETURN_UNDEFINED(window_set_size)
-STUB_RETURN_UNDEFINED(window_center)
 static RValue builtinWindowGetWidth(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner != nullptr && runner->getWindowSize != nullptr) {
+        int32_t w = 0;
+        int32_t h = 0;
+        if (runner->getWindowSize(runner->nativeWindow, &w, &h)) {
+            return RValue_makeReal((GMLReal) w);
+        }
+    }
     return RValue_makeReal((GMLReal) ctx->dataWin->gen8.defaultWindowWidth);
 }
 
 static RValue builtinWindowGetHeight(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner != nullptr && runner->getWindowSize != nullptr) {
+        int32_t w = 0;
+        int32_t h = 0;
+        if (runner->getWindowSize(runner->nativeWindow, &w, &h)) {
+            return RValue_makeReal((GMLReal) h);
+        }
+    }
     return RValue_makeReal((GMLReal) ctx->dataWin->gen8.defaultWindowHeight);
 }
+
+static RValue builtinWindowSetSize(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (argCount < 2) return RValue_makeUndefined();
+
+    Runner* runner = (Runner*) ctx->runner;
+    if (runner == nullptr) return RValue_makeUndefined();
+
+    int32_t width = RValue_toInt32(args[0]);
+    int32_t height = RValue_toInt32(args[1]);
+    if (width < 1) width = 1;
+    if (height < 1) height = 1;
+
+    if (runner->setWindowSize != nullptr) {
+        runner->setWindowSize(runner->nativeWindow, width, height);
+    }
+
+    return RValue_makeUndefined();
+}
+STUB_RETURN_UNDEFINED(window_center)
 
 static RValue builtinWindowSetCaption(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     char* val = RValue_toString(args[0]);
@@ -6726,6 +6796,9 @@ static RValue builtinSurfaceGetWidth(VMContext* ctx, RValue* args, MAYBE_UNUSED 
     int32_t surfaceId = (int32_t) RValue_toReal(args[0]);
     Runner* runner = (Runner*) ctx->runner;
     if (surfaceId == -1) {
+        if (runner != nullptr && runner->applicationWidth > 0) {
+            return RValue_makeReal((GMLReal) runner->applicationWidth);
+        }
         return RValue_makeReal((GMLReal) ctx->dataWin->gen8.defaultWindowWidth);
     } else {
         return RValue_makeReal(Renderer_getSurfaceWidth(runner->renderer, surfaceId));
@@ -6738,6 +6811,9 @@ static RValue builtinSurfaceGetHeight(VMContext* ctx, RValue* args, MAYBE_UNUSED
     int32_t surfaceId = (int32_t) RValue_toReal(args[0]);
     Runner* runner = (Runner*) ctx->runner;
     if (surfaceId == -1) {
+        if (runner != nullptr && runner->applicationHeight > 0) {
+            return RValue_makeReal((GMLReal) runner->applicationHeight);
+        }
         return RValue_makeReal((GMLReal) ctx->dataWin->gen8.defaultWindowHeight);
     } else {
         return RValue_makeReal(Renderer_getSurfaceHeight(runner->renderer, surfaceId));
@@ -9696,10 +9772,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "window_get_fullscreen", builtin_window_get_fullscreen);
     VM_registerBuiltin(ctx, "window_set_fullscreen", builtin_window_set_fullscreen);
     VM_registerBuiltin(ctx, "window_set_caption", builtinWindowSetCaption);
-    VM_registerBuiltin(ctx, "window_set_size", builtin_window_set_size);
-    VM_registerBuiltin(ctx, "window_center", builtin_window_center);
     VM_registerBuiltin(ctx, "window_get_width", builtinWindowGetWidth);
     VM_registerBuiltin(ctx, "window_get_height", builtinWindowGetHeight);
+    VM_registerBuiltin(ctx, "window_set_size", builtinWindowSetSize);
+    VM_registerBuiltin(ctx, "window_center", builtin_window_center);
     VM_registerBuiltin(ctx, "window_has_focus", builtinWindowHasFocus);
 
     // Game

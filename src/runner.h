@@ -362,8 +362,18 @@ struct Runner {
     bool drawBackgroundColor;
     bool shouldExit;
     bool debugMode;
+    // application_surface runtime state (mirrors GML toggles)
+    bool appSurfaceEnabled;
+    bool appSurfaceAutoDraw;
+    bool usingAppSurface;
+    int32_t applicationWidth;
+    int32_t applicationHeight;
+    int32_t oldApplicationWidth;
+    int32_t oldApplicationHeight;
     void* nativeWindow;
     void (*setWindowTitle)(void* window, const char* title);
+    bool (*getWindowSize)(void* window, int32_t* outW, int32_t* outH);
+    void (*setWindowSize)(void* window, int32_t width, int32_t height);
     bool (*windowHasFocus)(void* window);
     TileLayerMapEntry* tileLayerMap; // stb_ds hashmap: depth -> tile layer state
     RuntimeLayer* runtimeLayers; // stb_ds array, index-parallel to currentRoom->layers for parsed entries; dynamic entries appended
@@ -447,7 +457,9 @@ void Runner_executeEvent(Runner* runner, Instance* instance, int32_t eventType, 
 void Runner_executeEventFromObject(Runner* runner, Instance* instance, int32_t startObjectIndex, int32_t eventType, int32_t eventSubtype);
 void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventSubtype);
 void Runner_draw(Runner* runner);
-void Runner_drawGUI(Runner* runner);
+void Runner_drawGUI(Runner* runner, int32_t windowW, int32_t windowH, int32_t targetW, int32_t targetH);
+void Runner_drawPre(Runner* runner, int32_t windowW, int32_t windowH);
+void Runner_drawPost(Runner* runner, int32_t windowW, int32_t windowH);
 void Runner_drawBackgrounds(Runner* runner, bool foreground);
 void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY);
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks);

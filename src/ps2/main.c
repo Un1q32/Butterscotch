@@ -636,6 +636,7 @@ int main(int argc, char* argv[]) {
 
         gsKit_clear(gsGlobal, GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));
 
+        Runner_drawPre(runner, 640, 448);
         renderer->vtable->beginFrame(renderer, gameW, gameH, 640, 448);
 
         // Clear with room background color
@@ -651,11 +652,12 @@ int main(int argc, char* argv[]) {
         // Render views
         u64 drawStartTime = GetTimerSystemTime();
         Runner_drawViews(runner, gameW, gameH, 1.0f, 1.0f, false);
-        u64 drawEndTime = GetTimerSystemTime();
-
         runner->viewCurrent = 0;
-
-        renderer->vtable->endFrame(renderer);
+        renderer->vtable->endFrameInit(renderer);
+        Runner_drawPost(runner, 640, 448);
+        renderer->vtable->endFrameEnd(renderer);
+        Runner_drawGUI(runner, 640, 448, gameW, gameH);
+        u64 drawEndTime = GetTimerSystemTime();
 
         // Clear pressed/released edges after both Step and Draw have consumed input
         // This MUST be after Runner_draw because games CAN handle input in Draw events (e.g. Undertale's naming screen)
