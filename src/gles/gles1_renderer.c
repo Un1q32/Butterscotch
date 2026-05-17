@@ -40,20 +40,34 @@ static inline void unpackBGR(uint32_t bgr, float a, GLfloat out[4]) {
 // but we always allocate the larger struct so a downcast is safe.
 // ============================================================================
 
-// Cache slot for one TXTR entry. We map TXTR index -> one GL texture
-// object; sprite/background TPAG rectangles index into the cached
-// texture via texcoords.
+// Cache slot for one TXTR entry. We map TXTR index -> up to BS_MAX_BANDS
+// GL texture objects, splitting the atlas vertically into 1024-row
+// bands so PowerVR MBX Lite's 1024x1024 GL_MAX_TEXTURE_SIZE doesn't
+// force us to downsample the source pixels. UNDERTALE ships atlases
+// at 1024x2048 (2 bands); other GMS:Studio games may ship 1024x1024
+// (1 band) or up to 1024x4096 (4 bands).
 //
-// width/height store the ORIGINAL decoded atlas dimensions (in source
-// pixels) so the UV normalization (sourceX / atlas.width) remains
-// correct even when the GL texture itself was downsampled to fit
-// GL_MAX_TEXTURE_SIZE. UV space is normalized [0, 1] so the actual
-// uploaded pixel resolution does not affect sampling location.
+// width  = original atlas width in source pixels.
+// height = original atlas height in source pixels.
+// bandHeight = uniform per-band height (= maxTextureSize); the last
+//              band may be partially-populated if height isn't a multiple.
+// numBands = ceil(height / bandHeight).
 //
+// Sprite / glyph rectangles index into this slot using the original
+// (sourceX, sourceY) pixel coords. The renderer code does:
+//   band     = sourceY / bandHeight
+//   localY   = sourceY - band*bandHeight
+//   v        = localY / bandHeight
+// to pick the right band texture and remap V into [0,1].
+#define BS_MAX_BANDS 4
+
 typedef struct {
-    GLuint glHandle;     // 0 if not yet uploaded
-    int32_t width;       // populated after first upload
-    int32_t height;
+    GLuint glHandles[BS_MAX_BANDS];  // 0 entries = not uploaded
+    int32_t width;                   // original atlas width  (source pixels)
+    int32_t height;                  // original atlas height (source pixels)
+    int32_t bandHeight;              // per-band texture height
+    int32_t numBands;
+    uint32_t bytesUploaded;          // sum of band texture sizes in bytes
     uint32_t lastUsedTick;
 } BSTexCacheSlot;
 
@@ -75,8 +89,18 @@ static inline GLES1Renderer* asGLES1(Renderer* r) {
     return (GLES1Renderer*) r;
 }
 
-// Forward decl.
-static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* outW, int32_t* outH);
+// Forward decls.
+static BSTexCacheSlot* gles1_ensureSlot(GLES1Renderer* g, int32_t txtrIndex);
+
+// Pick which band a given source-Y row belongs to. Clamps to the
+// valid range so out-of-bounds lookups don't index past the array.
+static inline int32_t gles1_bandOfRow(const BSTexCacheSlot* slot, int32_t srcY) {
+    if (slot->bandHeight <= 0) return 0;
+    int32_t b = srcY / slot->bandHeight;
+    if (b < 0) return 0;
+    if (b >= slot->numBands) return slot->numBands - 1;
+    return b;
+}
 
 // ============================================================================
 // Renderer vtable: lifecycle
@@ -196,13 +220,22 @@ static bool gles1_downsampleRGBA(stbi_uc** pPixels, int* pW, int* pH, int factor
     return true;
 }
 
+static void gles1_freeSlotGL(BSTexCacheSlot* s) {
+    for (int b = 0; b < BS_MAX_BANDS; b++) {
+        if (s->glHandles[b] != 0) {
+            glDeleteTextures(1, &s->glHandles[b]);
+            s->glHandles[b] = 0;
+        }
+    }
+    s->bytesUploaded = 0;
+    s->lastUsedTick = 0;
+}
+
 static void gles1_destroy(Renderer* r) {
     GLES1Renderer* g = asGLES1(r);
     if (g->slots != NULL) {
         for (uint32_t i = 0; i < g->slotCount; i++) {
-            if (g->slots[i].glHandle != 0) {
-                glDeleteTextures(1, &g->slots[i].glHandle);
-            }
+            gles1_freeSlotGL(&g->slots[i]);
         }
         free(g->slots);
         g->slots = NULL;
@@ -223,184 +256,237 @@ static void gles1_destroy(Renderer* r) {
 // LRU eviction kicks in when residentBytes > residentBudget.
 // ============================================================================
 
+// Is this slot resident in VRAM right now?
+static inline bool gles1_slotIsResident(const BSTexCacheSlot* s) {
+    for (int b = 0; b < BS_MAX_BANDS; b++) {
+        if (s->glHandles[b] != 0) return true;
+    }
+    return false;
+}
+
 static void gles1_evictLRU(GLES1Renderer* g, uint32_t bytesToFree) {
     while (g->residentBytes + bytesToFree > g->residentBudget) {
-        // Find slot with smallest non-zero lastUsedTick that isn't the
-        // current frame's tick (we never evict something we just used).
         uint32_t victimIdx = UINT32_MAX;
         uint32_t victimTick = UINT32_MAX;
         for (uint32_t i = 0; i < g->slotCount; i++) {
             BSTexCacheSlot* s = &g->slots[i];
-            if (s->glHandle == 0) continue;
+            if (!gles1_slotIsResident(s)) continue;
             if (s->lastUsedTick == g->frameTick) continue;
             if (s->lastUsedTick < victimTick) {
                 victimTick = s->lastUsedTick;
                 victimIdx = i;
             }
         }
-        if (victimIdx == UINT32_MAX) break; // nothing to evict
+        if (victimIdx == UINT32_MAX) break;
 
         BSTexCacheSlot* v = &g->slots[victimIdx];
-        uint32_t bytes = (uint32_t)(v->width * v->height * 4);
-        glDeleteTextures(1, &v->glHandle);
-        v->glHandle = 0;
-        v->width = 0;
-        v->height = 0;
-        v->lastUsedTick = 0;
+        uint32_t bytes = v->bytesUploaded;
+        gles1_freeSlotGL(v);
         if (g->residentBytes >= bytes) g->residentBytes -= bytes;
         else g->residentBytes = 0;
     }
 }
 
-static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* outW, int32_t* outH) {
-    if (txtrIndex < 0 || (uint32_t) txtrIndex >= g->slotCount) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture: index %d out of range [0, %u)\n",
-                    txtrIndex, g->slotCount);
-            g->logBudget--;
-        }
-        return 0;
-    }
-    BSTexCacheSlot* slot = &g->slots[txtrIndex];
-    slot->lastUsedTick = g->frameTick;
-
-    if (slot->glHandle != 0) {
-        if (outW != NULL) *outW = slot->width;
-        if (outH != NULL) *outH = slot->height;
-        return slot->glHandle;
-    }
-
+// Internal: decode the TXTR blob and upload all bands. Mutates *slot.
+// On failure leaves slot in non-resident state and returns false.
+static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTexCacheSlot* slot) {
     if (g->dataWinFile == NULL) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: dataWinFile is NULL\n", txtrIndex);
+            fprintf(stderr, "[gles1] ensureSlot[%d]: dataWinFile is NULL\n", txtrIndex);
             g->logBudget--;
         }
-        return 0;
+        return false;
     }
 
     Texture* tex = &g->base.dataWin->txtr.textures[txtrIndex];
     if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureTexture[%d]: blobOffset=%u blobSize=%u\n",
+        fprintf(stderr, "[gles1] ensureSlot[%d]: blobOffset=%u blobSize=%u\n",
                 txtrIndex, (unsigned) tex->blobOffset, (unsigned) tex->blobSize);
     }
     if (tex->blobOffset == 0 || tex->blobSize == 0) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: blob coordinates are zero — external texture?\n", txtrIndex);
+            fprintf(stderr, "[gles1] ensureSlot[%d]: blob coordinates are zero — external texture?\n", txtrIndex);
             g->logBudget--;
         }
-        return 0;
+        return false;
     }
 
-    // Read PNG blob from disk. This is a one-shot per atlas: blob is
-    // typically 100-500 KB compressed.
     uint8_t* compressed = (uint8_t*) malloc(tex->blobSize);
     if (compressed == NULL) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: malloc(%u) failed\n",
+            fprintf(stderr, "[gles1] ensureSlot[%d]: malloc(%u) failed\n",
                     txtrIndex, (unsigned) tex->blobSize);
             g->logBudget--;
         }
-        return 0;
+        return false;
     }
     if (fseek(g->dataWinFile, (long) tex->blobOffset, SEEK_SET) != 0) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: fseek(%u) failed\n",
+            fprintf(stderr, "[gles1] ensureSlot[%d]: fseek(%u) failed\n",
                     txtrIndex, (unsigned) tex->blobOffset);
             g->logBudget--;
         }
         free(compressed);
-        return 0;
+        return false;
     }
     size_t got = fread(compressed, 1, tex->blobSize, g->dataWinFile);
     if (got != tex->blobSize) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: fread short: got %zu, wanted %u\n",
+            fprintf(stderr, "[gles1] ensureSlot[%d]: fread short: got %zu, wanted %u\n",
                     txtrIndex, got, (unsigned) tex->blobSize);
             g->logBudget--;
         }
         free(compressed);
-        return 0;
+        return false;
     }
-    if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureTexture[%d]: read %zu bytes, magic=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                txtrIndex, got,
-                compressed[0], compressed[1], compressed[2], compressed[3],
-                compressed[4], compressed[5], compressed[6], compressed[7]);
-    }
-
     int w = 0, h = 0, ch = 0;
     stbi_uc* pixels = stbi_load_from_memory(compressed, (int) tex->blobSize, &w, &h, &ch, 4);
     free(compressed);
     if (pixels == NULL || w <= 0 || h <= 0) {
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: stbi decode failed: %s (w=%d h=%d)\n",
+            fprintf(stderr, "[gles1] ensureSlot[%d]: stbi decode failed: %s (w=%d h=%d)\n",
                     txtrIndex, stbi_failure_reason() ? stbi_failure_reason() : "(no reason)", w, h);
             g->logBudget--;
         }
-        return 0;
+        return false;
     }
     int origW = w, origH = h;
     if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureTexture[%d]: decoded %dx%d (ch=%d)\n", txtrIndex, w, h, ch);
+        fprintf(stderr, "[gles1] ensureSlot[%d]: decoded %dx%d (ch=%d)\n", txtrIndex, w, h, ch);
     }
 
-    // Downsample to fit GL_MAX_TEXTURE_SIZE on MBX Lite. UVs are in
-    // normalized [0,1] space so the atlas layout is preserved — just at
-    // lower resolution. Compute a power-of-two factor per axis so the
-    // sprite sub-rects keep clean texel alignment after the resize.
-    int factorX = 1, factorY = 1;
+    // Width handling: if the atlas is wider than GL_MAX_TEXTURE_SIZE
+    // (rare — Undertale is 1024 wide and MBX Lite caps at 1024) we
+    // fall back to box-filter downsampling on the X axis only, so
+    // banding can still handle the Y axis at full resolution.
+    int factorX = 1;
     while (w / factorX > g->maxTextureSize) factorX *= 2;
-    while (h / factorY > g->maxTextureSize) factorY *= 2;
-    if (factorX != 1 || factorY != 1) {
-        if (!gles1_downsampleRGBA(&pixels, &w, &h, factorX, factorY)) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: downsample %dx -> %dx failed; dropping atlas\n",
-                    txtrIndex, origW, origH);
+    if (factorX != 1) {
+        if (!gles1_downsampleRGBA(&pixels, &w, &h, factorX, 1)) {
+            fprintf(stderr, "[gles1] ensureSlot[%d]: X-downsample %dx failed; dropping atlas\n",
+                    txtrIndex, factorX);
             stbi_image_free(pixels);
-            return 0;
+            return false;
         }
         if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureTexture[%d]: downsampled %dx%d -> %dx%d (factor %dx%d) to fit GL_MAX_TEXTURE_SIZE=%d\n",
-                    txtrIndex, origW, origH, w, h, factorX, factorY, g->maxTextureSize);
+            fprintf(stderr, "[gles1] ensureSlot[%d]: X-downsampled %d -> %d (factor %d)\n",
+                    txtrIndex, origW, w, factorX);
         }
     }
-    if (g->logBudget > 0) g->logBudget--;
 
-    // Make room.
-    uint32_t newBytes = (uint32_t)(w * h * 4);
-    if (g->residentBytes + newBytes > g->residentBudget) {
-        gles1_evictLRU(g, newBytes);
+    // Choose band height. Standard case: bands of maxTextureSize rows.
+    int32_t bandH = g->maxTextureSize;
+    int32_t numBands = (h + bandH - 1) / bandH;
+    if (numBands > BS_MAX_BANDS) {
+        // Atlas way too tall — fall back to Y-downsampling.
+        int factorY = 1;
+        while ((h + factorY - 1) / factorY > BS_MAX_BANDS * g->maxTextureSize) factorY *= 2;
+        if (factorY > 1) {
+            if (!gles1_downsampleRGBA(&pixels, &w, &h, 1, factorY)) {
+                fprintf(stderr, "[gles1] ensureSlot[%d]: Y-downsample %dx failed; dropping atlas\n",
+                        txtrIndex, factorY);
+                stbi_image_free(pixels);
+                return false;
+            }
+            if (g->logBudget > 0) {
+                fprintf(stderr, "[gles1] ensureSlot[%d]: Y-downsampled %d -> %d (factor %d) — atlas exceeded %d-band cap\n",
+                        txtrIndex, origH, h, factorY, BS_MAX_BANDS);
+            }
+        }
+        numBands = (h + bandH - 1) / bandH;
     }
 
-    GLuint handle = 0;
-    glGenTextures(1, &handle);
-    glBindTexture(GL_TEXTURE_2D, handle);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    GLenum glErr = glGetError();
-    if (glErr != GL_NO_ERROR) {
-        fprintf(stderr, "[gles1] ensureTexture[%d]: glTexImage2D failed with error 0x%04x (size %dx%d)\n",
-                txtrIndex, (unsigned) glErr, w, h);
-        glDeleteTextures(1, &handle);
-        stbi_image_free(pixels);
-        return 0;
+    // Upload one texture per band. The slot's UV math will pick the
+    // right band based on the source-Y coord of each drawn rect.
+    uint32_t totalBytes = 0;
+    int32_t lastBandH = bandH;
+    for (int32_t b = 0; b < numBands; b++) {
+        int32_t rowStart = b * bandH;
+        int32_t rowEnd   = rowStart + bandH;
+        if (rowEnd > h) rowEnd = h;
+        int32_t thisBandH = rowEnd - rowStart;
+        if (thisBandH <= 0) { numBands = b; break; }
+        // We always allocate a power-of-two-friendly bandH; the last
+        // band's unused tail rows stay uninitialized (and aren't
+        // sampled because TPAG rects don't go past the atlas height).
+        // We still upload at full bandH to keep UV math uniform.
+        uint32_t bandBytes = (uint32_t)(w * bandH * 4);
+        if (g->residentBytes + totalBytes + bandBytes > g->residentBudget) {
+            gles1_evictLRU(g, totalBytes + bandBytes);
+        }
+        GLuint handle = 0;
+        glGenTextures(1, &handle);
+        glBindTexture(GL_TEXTURE_2D, handle);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (thisBandH == bandH) {
+            // Whole band — upload directly.
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                         pixels + (size_t) rowStart * w * 4);
+        } else {
+            // Short band (atlas height not multiple of bandH). Upload
+            // a full bandH texture with the source rows + black tail.
+            uint8_t* padded = (uint8_t*) calloc((size_t) w * bandH * 4, 1);
+            if (padded != NULL) {
+                memcpy(padded, pixels + (size_t) rowStart * w * 4, (size_t) w * thisBandH * 4);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE, padded);
+                free(padded);
+            } else {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            }
+        }
+        GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            fprintf(stderr, "[gles1] ensureSlot[%d] band %d: glTexImage2D failed 0x%04x (size %dx%d)\n",
+                    txtrIndex, (int) b, (unsigned) glErr, w, bandH);
+            glDeleteTextures(1, &handle);
+            // Free already-uploaded bands.
+            for (int32_t bb = 0; bb < b; bb++) {
+                glDeleteTextures(1, &slot->glHandles[bb]);
+                slot->glHandles[bb] = 0;
+            }
+            stbi_image_free(pixels);
+            return false;
+        }
+        slot->glHandles[b] = handle;
+        totalBytes += bandBytes;
+        lastBandH = thisBandH;
     }
     stbi_image_free(pixels);
 
-    // Store ORIGINAL atlas dimensions (pre-downsample), because TPAG
-    // sub-rects are expressed in original source pixels and UV =
-    // sourceX / atlasW must match the layout the runtime expects.
-    slot->glHandle = handle;
     slot->width = origW;
     slot->height = origH;
+    slot->bandHeight = bandH;
+    slot->numBands = numBands;
+    slot->bytesUploaded = totalBytes;
     slot->lastUsedTick = g->frameTick;
-    g->residentBytes += newBytes;
+    g->residentBytes += totalBytes;
 
-    if (outW != NULL) *outW = origW;
-    if (outH != NULL) *outH = origH;
-    return handle;
+    if (g->logBudget > 0) {
+        fprintf(stderr, "[gles1] ensureSlot[%d]: uploaded %dx%d in %d band(s) of %d rows (last=%d), %u KB\n",
+                txtrIndex, w, h, (int) numBands, (int) bandH, (int) lastBandH,
+                (unsigned)(totalBytes / 1024));
+        g->logBudget--;
+    }
+    return true;
+}
+
+static BSTexCacheSlot* gles1_ensureSlot(GLES1Renderer* g, int32_t txtrIndex) {
+    if (txtrIndex < 0 || (uint32_t) txtrIndex >= g->slotCount) {
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureSlot: index %d out of range [0, %u)\n",
+                    txtrIndex, g->slotCount);
+            g->logBudget--;
+        }
+        return NULL;
+    }
+    BSTexCacheSlot* slot = &g->slots[txtrIndex];
+    slot->lastUsedTick = g->frameTick;
+    if (gles1_slotIsResident(slot)) return slot;
+    if (!gles1_decodeAndUploadSlot(g, txtrIndex, slot)) return NULL;
+    return slot;
 }
 
 // Bake the quad geometry for a sprite/tpag draw into local vertex
@@ -427,50 +513,23 @@ static void gles1_buildSpriteQuad(
     out_uvs[6] = u1; out_uvs[7] = v1;
 }
 
-static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
-                               float dstX, float dstY,
-                               float originX, float originY,
-                               float xscale, float yscale, float angleDeg,
-                               // optional sub-rect clipping inside the tpag (or -1 to use full):
-                               int32_t subX, int32_t subY, int32_t subW, int32_t subH,
-                               uint32_t color, float alpha) {
-    DataWin* dw = g->base.dataWin;
-    if (tpagIndex < 0 || (uint32_t) tpagIndex >= dw->tpag.count) return;
-    TexturePageItem* it = &dw->tpag.items[tpagIndex];
-
-    int32_t texW = 0, texH = 0;
-    GLuint handle = gles1_ensureTexture(g, it->texturePageId, &texW, &texH);
-    if (handle == 0 || texW == 0 || texH == 0) return;
-
-    // Determine source rectangle within the atlas.
-    int32_t srcX = it->sourceX + (subX >= 0 ? subX : 0);
-    int32_t srcY = it->sourceY + (subY >= 0 ? subY : 0);
-    int32_t srcW = (subW > 0) ? subW : it->sourceWidth;
-    int32_t srcH = (subH > 0) ? subH : it->sourceHeight;
-
-    // targetX/Y/W/H: where this sub-image sits inside the sprite's
-    // bounding box, after the atlas has trimmed away transparent edges.
-    float ofsX = (float) it->targetX;
-    float ofsY = (float) it->targetY;
-    float dstW = (float) srcW;
-    float dstH = (float) srcH;
-
-    float u0 = (float) srcX / (float) texW;
-    float v0 = (float) srcY / (float) texH;
-    float u1 = (float)(srcX + srcW) / (float) texW;
-    float v1 = (float)(srcY + srcH) / (float) texH;
-
+// Submit one textured quad. Used by both the band-spanning and
+// single-band paths below. Local helper — caller fills in dstRect
+// + UVs.
+static void gles1_emitQuad(GLuint handle,
+                           float dstX, float dstY, float dstW, float dstH,
+                           float originX, float originY,
+                           float xscale, float yscale, float angleDeg,
+                           float u0, float v0, float u1, float v1,
+                           const GLfloat rgba[4]) {
     GLfloat verts[8];
     GLfloat uvs[8];
     gles1_buildSpriteQuad(
         dstX, dstY, dstW, dstH,
-        originX - ofsX, originY - ofsY,
+        originX, originY,
         xscale, yscale, angleDeg,
         u0, v0, u1, v1,
         verts, uvs);
-
-    GLfloat rgba[4];
-    unpackBGR(color, alpha, rgba);
 
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, handle);
@@ -483,6 +542,94 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisable(GL_TEXTURE_2D);
+}
+
+static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
+                               float dstX, float dstY,
+                               float originX, float originY,
+                               float xscale, float yscale, float angleDeg,
+                               // optional sub-rect clipping inside the tpag (or -1 to use full):
+                               int32_t subX, int32_t subY, int32_t subW, int32_t subH,
+                               uint32_t color, float alpha) {
+    DataWin* dw = g->base.dataWin;
+    if (tpagIndex < 0 || (uint32_t) tpagIndex >= dw->tpag.count) return;
+    TexturePageItem* it = &dw->tpag.items[tpagIndex];
+
+    BSTexCacheSlot* slot = gles1_ensureSlot(g, it->texturePageId);
+    if (slot == NULL || slot->bandHeight <= 0) return;
+
+    // Determine source rectangle within the atlas (in original pixels).
+    int32_t srcX = it->sourceX + (subX >= 0 ? subX : 0);
+    int32_t srcY = it->sourceY + (subY >= 0 ? subY : 0);
+    int32_t srcW = (subW > 0) ? subW : it->sourceWidth;
+    int32_t srcH = (subH > 0) ? subH : it->sourceHeight;
+
+    if (srcW <= 0 || srcH <= 0) return;
+
+    // targetX/Y/W/H: where this sub-image sits inside the sprite's
+    // bounding box, after the atlas has trimmed away transparent edges.
+    float ofsX = (float) it->targetX;
+    float ofsY = (float) it->targetY;
+
+    GLfloat rgba[4];
+    unpackBGR(color, alpha, rgba);
+
+    int32_t bandH = slot->bandHeight;
+    int32_t firstBand = gles1_bandOfRow(slot, srcY);
+    int32_t lastBand  = gles1_bandOfRow(slot, srcY + srcH - 1);
+    float uScale = (float) slot->width;
+    float u0 = (float) srcX / uScale;
+    float u1 = (float)(srcX + srcW) / uScale;
+    float fullDstW = (float) srcW;
+
+    // Fast path: sub-rect lives entirely in one band (true for almost
+    // every sprite + every glyph).
+    if (firstBand == lastBand) {
+        int32_t bandTop = firstBand * bandH;
+        float v0 = (float)(srcY - bandTop) / (float) bandH;
+        float v1 = (float)(srcY + srcH - bandTop) / (float) bandH;
+        gles1_emitQuad(slot->glHandles[firstBand],
+                       dstX, dstY, fullDstW, (float) srcH,
+                       originX - ofsX, originY - ofsY,
+                       xscale, yscale, angleDeg,
+                       u0, v0, u1, v1,
+                       rgba);
+        return;
+    }
+
+    // Slow path: rect spans 2 or more bands. Emit one quad per band
+    // with the dest height proportionally split. Rotation around this
+    // path is unusual (rotated sprites are typically small), so we
+    // just scale Y-segments by the modelview — the rotation is applied
+    // in buildSpriteQuad to the whole "dst" rect of each segment, not
+    // to the originally-intended single rect; for axis-aligned draws
+    // (angleDeg=0) this produces a pixel-identical result.
+    int32_t totalSrcH = srcH;
+    float dstStartY = dstY;
+    int32_t srcCursor = srcY;
+    int32_t srcRemaining = srcH;
+    float originY_adj = originY - ofsY;
+    for (int32_t b = firstBand; b <= lastBand && srcRemaining > 0; b++) {
+        int32_t bandTop = b * bandH;
+        int32_t bandBottom = bandTop + bandH;
+        int32_t segStart = srcCursor;
+        int32_t segEnd   = (srcCursor + srcRemaining < bandBottom) ? srcCursor + srcRemaining : bandBottom;
+        int32_t segH = segEnd - segStart;
+        if (segH <= 0) continue;
+        float v0 = (float)(segStart - bandTop) / (float) bandH;
+        float v1 = (float)(segEnd   - bandTop) / (float) bandH;
+        float segOriginY = originY_adj - (float)(segStart - srcY);
+        gles1_emitQuad(slot->glHandles[b],
+                       dstX, dstStartY, fullDstW, (float) segH,
+                       originX - ofsX, segOriginY,
+                       xscale, yscale, angleDeg,
+                       u0, v0, u1, v1,
+                       rgba);
+        dstStartY += segH * yscale;
+        srcCursor += segH;
+        srcRemaining -= segH;
+    }
+    (void) totalSrcH;
 }
 
 
@@ -569,21 +716,22 @@ static void gles1_drawSpritePos(Renderer* r, int32_t tpagIndex, float x1, float 
     if (tpagIndex < 0 || (uint32_t) tpagIndex >= dw->tpag.count) return;
     TexturePageItem* it = &dw->tpag.items[tpagIndex];
 
-    int32_t texW = 0, texH = 0;
-    GLuint handle = gles1_ensureTexture(g, it->texturePageId, &texW, &texH);
-    if (handle == 0 || texW == 0 || texH == 0) return;
+    BSTexCacheSlot* slot = gles1_ensureSlot(g, it->texturePageId);
+    if (slot == NULL || slot->bandHeight <= 0) return;
+    int32_t band = gles1_bandOfRow(slot, it->sourceY);
+    int32_t bandTop = band * slot->bandHeight;
 
-    float u0 = (float) it->sourceX / (float) texW;
-    float v0 = (float) it->sourceY / (float) texH;
-    float u1 = (float)(it->sourceX + it->sourceWidth) / (float) texW;
-    float v1 = (float)(it->sourceY + it->sourceHeight) / (float) texH;
+    float u0 = (float) it->sourceX / (float) slot->width;
+    float v0 = (float) (it->sourceY - bandTop) / (float) slot->bandHeight;
+    float u1 = (float)(it->sourceX + it->sourceWidth) / (float) slot->width;
+    float v1 = (float)(it->sourceY + it->sourceHeight - bandTop) / (float) slot->bandHeight;
 
     GLfloat verts[8] = { x1, y1, x2, y2, x4, y4, x3, y3 };
     GLfloat uvs[8]   = { u0, v0, u1, v0, u0, v1, u1, v1 };
     GLfloat rgba[4]  = { 1.0f, 1.0f, 1.0f, alpha };
 
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, handle);
+    glBindTexture(GL_TEXTURE_2D, slot->glHandles[band]);
     glColor4f(rgba[0], rgba[1], rgba[2], rgba[3]);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -668,8 +816,7 @@ typedef struct {
     Font* font;
     TexturePageItem* atlasTpag; // single TPAG for regular fonts (NULL for sprite fonts)
     int32_t atlasTpagIndex;
-    GLuint glTexture;
-    int32_t atlasW, atlasH;     // original (pre-downsample) decoded atlas dimensions
+    BSTexCacheSlot* slot;       // band-aware slot for regular fonts (NULL for sprite fonts)
     Sprite* spriteFontSprite;   // source sprite for sprite fonts (NULL otherwise)
 } FontState;
 
@@ -678,8 +825,7 @@ static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) 
     st->font = font;
     st->atlasTpag = NULL;
     st->atlasTpagIndex = -1;
-    st->glTexture = 0;
-    st->atlasW = st->atlasH = 0;
+    st->slot = NULL;
     st->spriteFontSprite = NULL;
 
     if (!font->isSpriteFont) {
@@ -689,12 +835,9 @@ static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) 
         st->atlasTpag = &dw->tpag.items[tpi];
         int16_t pageId = st->atlasTpag->texturePageId;
         if (pageId < 0) return false;
-        int32_t tw = 0, th = 0;
-        GLuint h = gles1_ensureTexture(g, pageId, &tw, &th);
-        if (h == 0 || tw == 0 || th == 0) return false;
-        st->glTexture = h;
-        st->atlasW = tw;
-        st->atlasH = th;
+        BSTexCacheSlot* slot = gles1_ensureSlot(g, pageId);
+        if (slot == NULL || slot->bandHeight <= 0) return false;
+        st->slot = slot;
         return true;
     }
 
@@ -708,6 +851,11 @@ static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) 
 // Look up the atlas + UV coords + on-line glyph origin for a single
 // glyph. Returns false if the glyph's atlas isn't resolvable (so the
 // caller advances the cursor without drawing).
+//
+// Glyphs almost always fit inside a single band (they're ≤30px tall and
+// the band granularity is 1024). For the rare case a glyph straddles a
+// band boundary we just clamp to the lower band; the visible cropping
+// is one frame of one glyph and almost imperceptible for tiny text.
 static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph,
                                float cursorX, float cursorY,
                                GLuint* outTex, float* outU0, float* outV0, float* outU1, float* outV1,
@@ -723,14 +871,15 @@ static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph
         TexturePageItem* tp = &dw->tpag.items[tpi];
         int16_t pid = tp->texturePageId;
         if (pid < 0) return false;
-        int32_t tw = 0, th = 0;
-        GLuint h = gles1_ensureTexture(g, pid, &tw, &th);
-        if (h == 0 || tw == 0 || th == 0) return false;
-        *outTex = h;
-        *outU0 = (float) tp->sourceX / (float) tw;
-        *outV0 = (float) tp->sourceY / (float) th;
-        *outU1 = (float) (tp->sourceX + tp->sourceWidth) / (float) tw;
-        *outV1 = (float) (tp->sourceY + tp->sourceHeight) / (float) th;
+        BSTexCacheSlot* slot = gles1_ensureSlot(g, pid);
+        if (slot == NULL || slot->bandHeight <= 0) return false;
+        int32_t band = gles1_bandOfRow(slot, tp->sourceY);
+        int32_t bandTop = band * slot->bandHeight;
+        *outTex = slot->glHandles[band];
+        *outU0 = (float) tp->sourceX / (float) slot->width;
+        *outV0 = (float) (tp->sourceY - bandTop) / (float) slot->bandHeight;
+        *outU1 = (float) (tp->sourceX + tp->sourceWidth) / (float) slot->width;
+        *outV1 = (float) (tp->sourceY + tp->sourceHeight - bandTop) / (float) slot->bandHeight;
         *outLocalX0 = cursorX + (float) glyph->offset;
         *outLocalY0 = cursorY + (float) ((int32_t) tp->targetY - sprite->originY);
         *outDstW = (float) tp->sourceWidth;
@@ -740,11 +889,17 @@ static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph
 
     // Regular font: glyph sourceX/Y are coords inside the atlas TPAG,
     // so add atlas TPAG origin to land on the actual atlas texel.
-    *outTex = st->glTexture;
-    *outU0 = (float) (st->atlasTpag->sourceX + glyph->sourceX) / (float) st->atlasW;
-    *outV0 = (float) (st->atlasTpag->sourceY + glyph->sourceY) / (float) st->atlasH;
-    *outU1 = (float) (st->atlasTpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float) st->atlasW;
-    *outV1 = (float) (st->atlasTpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float) st->atlasH;
+    BSTexCacheSlot* slot = st->slot;
+    if (slot == NULL || slot->bandHeight <= 0) return false;
+    int32_t absX = st->atlasTpag->sourceX + glyph->sourceX;
+    int32_t absY = st->atlasTpag->sourceY + glyph->sourceY;
+    int32_t band = gles1_bandOfRow(slot, absY);
+    int32_t bandTop = band * slot->bandHeight;
+    *outTex = slot->glHandles[band];
+    *outU0 = (float) absX / (float) slot->width;
+    *outV0 = (float) (absY - bandTop) / (float) slot->bandHeight;
+    *outU1 = (float) (absX + glyph->sourceWidth)  / (float) slot->width;
+    *outV1 = (float) (absY + glyph->sourceHeight - bandTop) / (float) slot->bandHeight;
     *outLocalX0 = cursorX + (float) glyph->offset;
     *outLocalY0 = cursorY;
     *outDstW = (float) glyph->sourceWidth;

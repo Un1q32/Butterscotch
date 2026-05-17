@@ -413,25 +413,34 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     CGFloat h = size.height;
     if (w <= 0 || h <= 0) return;
 
-    CGFloat dpadCx = 60;
-    CGFloat dpadCy = h - 80;
-    CGFloat ds = 44; // button size
-    CGFloat dgap = 4;
+    // ---- D-pad ----
+    // The arrows are sized + spaced so neighboring buttons have visible
+    // air between them (looks symmetric instead of clumped). The cross
+    // is anchored ~60 px from the bottom-left corner of the screen.
+    CGFloat ds = 40;       // arrow button edge
+    CGFloat dgap = 14;     // gap from the center to each arrow's inner edge
+    CGFloat dpadCx = 16 + ds + dgap;        // outer-left of LEFT arrow sits 16 px from screen edge
+    CGFloat dpadCy = h - 16 - ds - dgap;    // outer-bottom of DOWN arrow sits 16 px from screen edge
 
     // _buttons[0..3] = up, down, left, right
-    ((UIView*) [_buttons objectAtIndex:0]).frame = CGRectMake(dpadCx - ds/2,           dpadCy - ds - dgap,  ds, ds); // up
-    ((UIView*) [_buttons objectAtIndex:1]).frame = CGRectMake(dpadCx - ds/2,           dpadCy + dgap,        ds, ds); // down
-    ((UIView*) [_buttons objectAtIndex:2]).frame = CGRectMake(dpadCx - ds - dgap,      dpadCy - ds/2,        ds, ds); // left
-    ((UIView*) [_buttons objectAtIndex:3]).frame = CGRectMake(dpadCx + dgap,           dpadCy - ds/2,        ds, ds); // right
+    ((UIView*) [_buttons objectAtIndex:0]).frame = CGRectMake(dpadCx - ds/2,         dpadCy - ds - dgap,    ds, ds); // up
+    ((UIView*) [_buttons objectAtIndex:1]).frame = CGRectMake(dpadCx - ds/2,         dpadCy + dgap,         ds, ds); // down
+    ((UIView*) [_buttons objectAtIndex:2]).frame = CGRectMake(dpadCx - ds - dgap,    dpadCy - ds/2,         ds, ds); // left
+    ((UIView*) [_buttons objectAtIndex:3]).frame = CGRectMake(dpadCx + dgap,         dpadCy - ds/2,         ds, ds); // right
 
-    // _buttons[4..7] = Z, X, C, Shift
-    CGFloat as = 48;
-    CGFloat agap = 6;
-    CGFloat ax = w - as - 20;
-    CGFloat ay = h - 70;
-    ((UIView*) [_buttons objectAtIndex:4]).frame = CGRectMake(ax,                       ay,           as, as); // Z (primary)
-    ((UIView*) [_buttons objectAtIndex:5]).frame = CGRectMake(ax - as - agap,           ay,           as, as); // X
-    ((UIView*) [_buttons objectAtIndex:6]).frame = CGRectMake(ax - as/2 - agap/2,       ay - as - agap, as, as); // C (above between Z and X)
+    // ---- Action row (Sega-style Z X C, left-to-right) ----
+    // Z = confirm/attack (primary GMS keycode 90), X = cancel/menu (88),
+    // C = item-menu (67). Many Undertale ports lay them out in a flat
+    // row along the bottom-right edge of the screen; we anchor the
+    // RIGHT-most button (Z) to the screen edge then walk left.
+    CGFloat as = 46;
+    CGFloat agap = 10;
+    CGFloat ay = h - 16 - as;        // baseline shared with D-pad's bottom edge
+    CGFloat axRight = w - 16 - as;   // outer-right of Z sits 16 px from screen edge
+    ((UIView*) [_buttons objectAtIndex:4]).frame = CGRectMake(axRight,                       ay, as, as); // Z (right-most)
+    ((UIView*) [_buttons objectAtIndex:5]).frame = CGRectMake(axRight - (as + agap),         ay, as, as); // X (middle)
+    ((UIView*) [_buttons objectAtIndex:6]).frame = CGRectMake(axRight - 2 * (as + agap),     ay, as, as); // C (left-most)
+
     // Shift sits in the top-left of the screen (out of the way of the
     // game's HUD which usually anchors top-center / top-right). It's
     // also smaller because it's a hold-to-run modifier, not a primary
@@ -559,22 +568,36 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    // Force landscape — controllable iPod Touch games are way easier
-    // to play sideways with both thumbs. setStatusBarOrientation: is
-    // the only iOS 3-compatible knob; it also tells UIKit to rotate
-    // any modally-presented VCs to match.
+    // Force landscape and fullscreen. iOS 3.1's modal-VC autorotation
+    // is unreliable for VCs presented from a portrait-only parent, so
+    // we manually rotate the root view and resize it to the screen's
+    // landscape bounds. This is the same trick original third-party
+    // landscape iPhone apps used pre-iOS 5.
     UIApplication* app = [UIApplication sharedApplication];
     _savedOrientation = app.statusBarOrientation;
+    [app setStatusBarHidden:YES animated:NO];
     if (UIInterfaceOrientationIsPortrait(_savedOrientation)) {
         [app setStatusBarOrientation:UIInterfaceOrientationLandscapeRight animated:NO];
     }
+    // Full physical screen size in portrait orientation (e.g. 320x480
+    // on iPod Touch 2G). We swap width/height for the landscape bounds
+    // and rotate the view -90° (LandscapeRight) so the visible region
+    // covers the whole 480x320 surface with no black bars.
+    CGRect screen = [[UIScreen mainScreen] bounds];
+    CGFloat screenW = screen.size.width;
+    CGFloat screenH = screen.size.height;
+    self.view.transform = CGAffineTransformIdentity;
+    self.view.bounds = CGRectMake(0, 0, screenH, screenW);
+    self.view.center = CGPointMake(screenW / 2.0f, screenH / 2.0f);
+    self.view.transform = CGAffineTransformMakeRotation((CGFloat) (M_PI / 2.0));
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [_glView stopRunLoop];
-    // Restore picker's portrait orientation when we go back.
+    // Restore picker's portrait orientation + status bar when we go back.
     UIApplication* app = [UIApplication sharedApplication];
+    [app setStatusBarHidden:NO animated:NO];
     if (_savedOrientation != 0 && _savedOrientation != app.statusBarOrientation) {
         [app setStatusBarOrientation:_savedOrientation animated:NO];
     }
