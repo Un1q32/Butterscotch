@@ -417,8 +417,13 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         GLuint handle = 0;
         glGenTextures(1, &handle);
         glBindTexture(GL_TEXTURE_2D, handle);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        // GL_LINEAR avoids the every-other-row banding that GL_NEAREST
+        // produces when the game's 640x480 canvas is rasterised into a
+        // 480x320 framebuffer (non-integer scale ratios drop rows under
+        // nearest sampling). Pixel art ends up slightly softer but the
+        // image is uniformly clean rather than zebra-striped.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         if (thisBandH == bandH) {

@@ -428,18 +428,17 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     ((UIView*) [_buttons objectAtIndex:2]).frame = CGRectMake(dpadCx - ds - dgap,    dpadCy - ds/2,         ds, ds); // left
     ((UIView*) [_buttons objectAtIndex:3]).frame = CGRectMake(dpadCx + dgap,         dpadCy - ds/2,         ds, ds); // right
 
-    // ---- Action row (Sega-style Z X C, left-to-right) ----
-    // Z = confirm/attack (primary GMS keycode 90), X = cancel/menu (88),
-    // C = item-menu (67). Many Undertale ports lay them out in a flat
-    // row along the bottom-right edge of the screen; we anchor the
-    // RIGHT-most button (Z) to the screen edge then walk left.
+    // ---- Action row: Z X C left-to-right (per user request) ----
+    // Z = confirm/attack (GMS keycode 90), X = cancel/menu (88),
+    // C = item-menu (67). The row is anchored to the bottom-right
+    // corner of the screen with C touching the right edge.
     CGFloat as = 46;
     CGFloat agap = 10;
     CGFloat ay = h - 16 - as;        // baseline shared with D-pad's bottom edge
-    CGFloat axRight = w - 16 - as;   // outer-right of Z sits 16 px from screen edge
-    ((UIView*) [_buttons objectAtIndex:4]).frame = CGRectMake(axRight,                       ay, as, as); // Z (right-most)
-    ((UIView*) [_buttons objectAtIndex:5]).frame = CGRectMake(axRight - (as + agap),         ay, as, as); // X (middle)
-    ((UIView*) [_buttons objectAtIndex:6]).frame = CGRectMake(axRight - 2 * (as + agap),     ay, as, as); // C (left-most)
+    CGFloat axRight = w - 16 - as;   // outer-right of C sits 16 px from screen edge
+    ((UIView*) [_buttons objectAtIndex:4]).frame = CGRectMake(axRight - 2 * (as + agap), ay, as, as); // Z (left)
+    ((UIView*) [_buttons objectAtIndex:5]).frame = CGRectMake(axRight - (as + agap),     ay, as, as); // X (middle)
+    ((UIView*) [_buttons objectAtIndex:6]).frame = CGRectMake(axRight,                   ay, as, as); // C (right)
 
     // Shift sits in the top-left of the screen (out of the way of the
     // game's HUD which usually anchors top-center / top-right). It's
