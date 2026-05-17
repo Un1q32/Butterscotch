@@ -93,6 +93,10 @@ void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid) {
 }
 
 void SpatialGrid_markInstanceAsDirty(SpatialGrid* grid, Instance* dirtyInstance) {
+    // Structs should NOT be included in the spatial grid!
+    if (dirtyInstance->objectIndex == STRUCT_OBJECT_INDEX)
+        return;
+
     if (!dirtyInstance->active || dirtyInstance->destroyed) {
         // Destroyed instances are updated instantly because, if we didn't, we would need to track the ID + all grids that the instance is in
         removeInstanceFromGridCells(grid, dirtyInstance);
