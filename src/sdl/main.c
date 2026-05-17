@@ -1164,8 +1164,10 @@ int main(int argc, char* argv[]) {
 #endif
 
         Runner_drawViews(runner, reqW, reqH, displayScaleX, displayScaleY, debugShowCollisionMasks);
-
-        renderer->vtable->endFrame(renderer);
+        renderer->vtable->endFrameInit(renderer);
+        Runner_drawPost(runner, fbWidth, fbHeight);
+        renderer->vtable->endFrameEnd(renderer);
+        Runner_drawGUI(runner, fbWidth, fbHeight, reqW, reqH);
 
         if (shouldStep && args.traceFrames) {
             double frameElapsedMs = ((SDL_GetTicks()/1000.0f) - frameStartTime) * 1000.0;
