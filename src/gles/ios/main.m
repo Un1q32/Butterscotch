@@ -2,21 +2,27 @@
 // designed to run on a jailbroken iPod Touch 2G (PowerVR MBX Lite,
 // 128 MB RAM, OpenGL ES 1.1 only).
 //
-// This file is intentionally one compilation unit: AppDelegate +
-// GamePickerVC + GLView. iOS 3 SDK predates ARC, so we use manual
-// retain/release; Theos' default for our Makefile is -fno-objc-arc.
+// One compilation unit: AppDelegate + GamePickerVC + GLView +
+// touch overlay (D-pad + Z/X/C action buttons). iOS 3 SDK predates
+// ARC, so we use manual retain/release; Theos' default for our
+// Makefile is -fno-objc-arc.
 //
 // Game discovery:
 //   - Scans /var/mobile/Documents/Butterscotch/ for sub-directories
-//     containing a data.win file (intended for jailbroken
-//     installs via Cydia/.deb).
+//     containing a data.win file (intended for jailbroken installs
+//     via Cydia/.deb).
 //   - Falls back to the app's own Documents/ directory inside the
 //     sandbox if /var/mobile/Documents/Butterscotch/ is unreadable,
 //     so the picker still works without escalated access.
 //
 // Each sub-directory containing data.win is shown as one row.
-// Tapping a row opens an EAGL view that creates a GLES 1.1 context
-// and pumps frames via CADisplayLink (iOS 3.1+) at 60 Hz.
+// Tapping a row presents a full-screen game view controller; the
+// nav bar is hidden so the game uses the entire screen. A small
+// translucent "✕" button in the corner dismisses back to the picker.
+//
+// The picker stays portrait; the game view runs in landscape — the
+// natural orientation for a 640x480 4:3 GMS:Studio game on a
+// 480x320 iPod Touch 2G screen, and the layout the user requested.
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -141,6 +147,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 - (void)bindDrawable;
 - (void)presentDrawable;
 - (void)makeContextCurrent;
+- (void)resizeRenderbuffer;
 - (void)startRunLoop;
 - (void)stopRunLoop;
 @end
@@ -209,6 +216,27 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     [_ctx presentRenderbuffer:GL_RENDERBUFFER_OES];
 }
 
+- (void)resizeRenderbuffer {
+    [EAGLContext setCurrentContext:_ctx];
+    glBindRenderbufferOES(GL_RENDERBUFFER_OES, _renderbuffer);
+    [_ctx renderbufferStorage:GL_RENDERBUFFER_OES fromDrawable:(CAEAGLLayer*) self.layer];
+    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &_backingWidth);
+    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &_backingHeight);
+    NSLog(@"[Butterscotch] renderbuffer resized to %dx%d", (int) _backingWidth, (int) _backingHeight);
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    // The layer's bounds may have changed (e.g. after a rotation); we
+    // need to reallocate the renderbuffer storage to match. Skip if we
+    // haven't created the renderbuffer yet (initWithFrame: -> -bindDrawable
+    // path), and skip on iOS layout passes where the layer is empty.
+    if (_renderbuffer == 0) return;
+    CGSize sz = self.layer.bounds.size;
+    if (sz.width <= 0 || sz.height <= 0) return;
+    [self resizeRenderbuffer];
+}
+
 - (void)dealloc {
     [self stopRunLoop];
     [EAGLContext setCurrentContext:_ctx];
@@ -225,8 +253,6 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     if (_delegate != nil) {
         [_delegate glViewTick:_frameCounter backingWidth:_backingWidth backingHeight:_backingHeight];
     } else {
-        // No delegate yet — just present a black frame so the layer is
-        // showing something other than the previous frame's stale buffer.
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
     }
@@ -265,12 +291,180 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 @end
 
 // ============================================================================
+// Touch overlay — D-pad + Z/X/C action buttons + back button
+// ============================================================================
+//
+// One BSPadButton == one on-screen key. We bind UIControlEventTouchDown
+// to a "key down" GML code, and TouchUpInside / TouchUpOutside /
+// TouchCancel to "key up". Sliding off the button counts as key up;
+// sliding back onto a different button does NOT count as a new press
+// (UIControl doesn't support drag-in). For a D-pad this is OK in
+// practice — players reposition fingers in the dead-time between
+// movements anyway.
+
+@interface BSPadButton : UIButton {
+    int32_t _gmlKey;
+}
+@property (nonatomic, assign) int32_t gmlKey;
+@end
+
+@implementation BSPadButton
+@synthesize gmlKey = _gmlKey;
+@end
+
+@protocol BSTouchOverlayDelegate <NSObject>
+- (void)touchOverlayKeyDown:(int32_t)gmlKey;
+- (void)touchOverlayKeyUp:(int32_t)gmlKey;
+- (void)touchOverlayBackTapped;
+@end
+
+@interface BSTouchOverlay : UIView {
+    id<BSTouchOverlayDelegate> _delegate;
+    NSMutableArray* _buttons;
+    BSPadButton* _backButton;
+}
+@property (nonatomic, assign) id<BSTouchOverlayDelegate> delegate;
+- (id)initWithFrame:(CGRect)f delegate:(id<BSTouchOverlayDelegate>)delegate;
+- (void)layoutForSize:(CGSize)size;
+@end
+
+@implementation BSTouchOverlay
+@synthesize delegate = _delegate;
+
+// Build one translucent rounded square with white text. Wired up to
+// the same -keyDown:/-keyUp: handlers regardless of which key it
+// represents.
+- (BSPadButton*)makePadButtonWithGmlKey:(int32_t)gmlKey label:(NSString*)label fontSize:(CGFloat)fontSize {
+    BSPadButton* b = [BSPadButton buttonWithType:UIButtonTypeCustom];
+    b.gmlKey = gmlKey;
+    [b setTitle:label forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor colorWithRed:0.6f green:0.85f blue:1.0f alpha:1.0f] forState:UIControlStateHighlighted];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:fontSize];
+    b.backgroundColor = [UIColor colorWithWhite:0.15f alpha:0.55f];
+    b.layer.cornerRadius = 8.0f;
+    b.layer.borderColor = [[UIColor colorWithWhite:1.0f alpha:0.35f] CGColor];
+    b.layer.borderWidth = 1.0f;
+    [b addTarget:self action:@selector(keyDown:) forControlEvents:UIControlEventTouchDown];
+    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchUpOutside];
+    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchCancel];
+    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchDragOutside];
+    [self addSubview:b];
+    [_buttons addObject:b];
+    return b;
+}
+
+- (id)initWithFrame:(CGRect)f delegate:(id<BSTouchOverlayDelegate>)delegate {
+    self = [super initWithFrame:f];
+    if (self == nil) return nil;
+    _delegate = delegate;
+    _buttons = [[NSMutableArray alloc] init];
+    self.opaque = NO;
+    self.backgroundColor = [UIColor clearColor];
+    self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    // D-pad: 4 arrow buttons in a + cross. GML vk_left/right/up/down.
+    [self makePadButtonWithGmlKey:VK_UP    label:@"\u25B2" fontSize:22]; // ▲
+    [self makePadButtonWithGmlKey:VK_DOWN  label:@"\u25BC" fontSize:22]; // ▼
+    [self makePadButtonWithGmlKey:VK_LEFT  label:@"\u25C0" fontSize:22]; // ◀
+    [self makePadButtonWithGmlKey:VK_RIGHT label:@"\u25B6" fontSize:22]; // ▶
+
+    // Action buttons: Z = confirm, X = cancel, C = menu, plus Shift = hold-to-run.
+    [self makePadButtonWithGmlKey:'Z' label:@"Z" fontSize:24];
+    [self makePadButtonWithGmlKey:'X' label:@"X" fontSize:24];
+    [self makePadButtonWithGmlKey:'C' label:@"C" fontSize:24];
+    [self makePadButtonWithGmlKey:VK_SHIFT label:@"\u21E7" fontSize:22]; // ⇧
+
+    // Back button: top-left, mostly transparent so it doesn't disrupt
+    // the game graphics; tap returns to picker.
+    _backButton = [BSPadButton buttonWithType:UIButtonTypeCustom];
+    _backButton.gmlKey = -1;
+    [_backButton setTitle:@"\u2715" forState:UIControlStateNormal]; // ✕
+    [_backButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    _backButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    _backButton.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.35f];
+    _backButton.layer.cornerRadius = 13.0f;
+    _backButton.layer.borderColor = [[UIColor colorWithWhite:1.0f alpha:0.3f] CGColor];
+    _backButton.layer.borderWidth = 1.0f;
+    [_backButton addTarget:self action:@selector(backTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [_backButton retain];
+    [self addSubview:_backButton];
+
+    [self layoutForSize:f.size];
+    return self;
+}
+
+- (void)dealloc {
+    [_buttons release];
+    [_backButton release];
+    [super dealloc];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self layoutForSize:self.bounds.size];
+}
+
+// Position buttons relative to current bounds — works the same for
+// portrait and landscape; coordinate system always grows down-right.
+- (void)layoutForSize:(CGSize)size {
+    CGFloat w = size.width;
+    CGFloat h = size.height;
+    if (w <= 0 || h <= 0) return;
+
+    CGFloat dpadCx = 60;
+    CGFloat dpadCy = h - 80;
+    CGFloat ds = 44; // button size
+    CGFloat dgap = 4;
+
+    // _buttons[0..3] = up, down, left, right
+    ((UIView*) [_buttons objectAtIndex:0]).frame = CGRectMake(dpadCx - ds/2,           dpadCy - ds - dgap,  ds, ds); // up
+    ((UIView*) [_buttons objectAtIndex:1]).frame = CGRectMake(dpadCx - ds/2,           dpadCy + dgap,        ds, ds); // down
+    ((UIView*) [_buttons objectAtIndex:2]).frame = CGRectMake(dpadCx - ds - dgap,      dpadCy - ds/2,        ds, ds); // left
+    ((UIView*) [_buttons objectAtIndex:3]).frame = CGRectMake(dpadCx + dgap,           dpadCy - ds/2,        ds, ds); // right
+
+    // _buttons[4..7] = Z, X, C, Shift
+    CGFloat as = 48;
+    CGFloat agap = 6;
+    CGFloat ax = w - as - 20;
+    CGFloat ay = h - 70;
+    ((UIView*) [_buttons objectAtIndex:4]).frame = CGRectMake(ax,                       ay,           as, as); // Z (primary)
+    ((UIView*) [_buttons objectAtIndex:5]).frame = CGRectMake(ax - as - agap,           ay,           as, as); // X
+    ((UIView*) [_buttons objectAtIndex:6]).frame = CGRectMake(ax - as/2 - agap/2,       ay - as - agap, as, as); // C (above between Z and X)
+    // Shift sits in the top-left of the screen (out of the way of the
+    // game's HUD which usually anchors top-center / top-right). It's
+    // also smaller because it's a hold-to-run modifier, not a primary
+    // action.
+    ((UIView*) [_buttons objectAtIndex:7]).frame = CGRectMake(8, 8, 40, 26);
+
+    // Back button: top-right corner, far from the action buttons.
+    _backButton.frame = CGRectMake(w - 32, 6, 26, 26);
+}
+
+- (void)keyDown:(BSPadButton*)sender {
+    if (_delegate != nil) [_delegate touchOverlayKeyDown:sender.gmlKey];
+}
+
+- (void)keyUp:(BSPadButton*)sender {
+    if (_delegate != nil) [_delegate touchOverlayKeyUp:sender.gmlKey];
+}
+
+- (void)backTapped:(BSPadButton*)sender {
+    (void) sender;
+    if (_delegate != nil) [_delegate touchOverlayBackTapped];
+}
+
+@end
+
+// ============================================================================
 // GameViewController — wraps the GLView, owns the Butterscotch runtime
 // ============================================================================
 
-@interface BSGameViewController : UIViewController <BSGLViewDelegate> {
+@interface BSGameViewController : UIViewController <BSGLViewDelegate, BSTouchOverlayDelegate> {
     BSGameEntry* _game;
     BSGLView* _glView;
+    BSTouchOverlay* _overlay;
     UILabel* _hudLabel;
 
     // Butterscotch runtime state. All nil/NULL until -loadRuntime
@@ -286,6 +480,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     NSString* _lastError;
     NSTimeInterval _lastTickTime;
     int _logicFrameCount;
+    UIInterfaceOrientation _savedOrientation;
 }
 - (id)initWithGame:(BSGameEntry*)game;
 @end
@@ -297,12 +492,16 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     if (self == nil) return nil;
     _game = [game retain];
     self.title = game->name;
+    // wantsFullScreenLayout exists on iOS 3+ — lets our view extend
+    // under the status bar (which is hidden anyway via UIStatusBarHidden).
+    self.wantsFullScreenLayout = YES;
     return self;
 }
 
 - (void)dealloc {
     [_game release];
     [_glView release];
+    [_overlay release];
     [_hudLabel release];
     [_lastError release];
 
@@ -316,7 +515,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 }
 
 - (void)loadView {
-    CGRect bounds = [[UIScreen mainScreen] applicationFrame];
+    CGRect bounds = [[UIScreen mainScreen] bounds];
     UIView* root = [[UIView alloc] initWithFrame:bounds];
     root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     root.backgroundColor = [UIColor blackColor];
@@ -326,47 +525,85 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     _glView.delegate = self;
     [root addSubview:_glView];
 
-    _hudLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 8, root.bounds.size.width - 16, 96)];
+    _hudLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 8, root.bounds.size.width - 16, 50)];
     _hudLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
     _hudLabel.textColor = [UIColor whiteColor];
-    _hudLabel.font = [UIFont systemFontOfSize:11];
-    _hudLabel.numberOfLines = 6;
+    _hudLabel.font = [UIFont systemFontOfSize:10];
+    _hudLabel.numberOfLines = 3;
     _hudLabel.lineBreakMode = UILineBreakModeWordWrap;
-    _hudLabel.text = [NSString stringWithFormat:@"Butterscotch / GLES1\nLoading %@…", _game->name];
+    _hudLabel.text = [NSString stringWithFormat:@"Loading %@…", _game->name];
     _hudLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [root addSubview:_hudLabel];
+
+    _overlay = [[BSTouchOverlay alloc] initWithFrame:root.bounds delegate:self];
+    [root addSubview:_overlay];
 
     self.view = root;
     [root release];
 }
 
+- (void)hideHud {
+    _hudLabel.hidden = YES;
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    // Defer loading until after the view is fully on-screen so the
-    // navigation push animation and "Loading…" HUD are visible. The
-    // run loop is started immediately so the GL view keeps painting
-    // (black) while the parser is busy.
     [_glView startRunLoop];
     if (!_runtimeReady && !_runtimeFailed) {
         [self performSelector:@selector(loadRuntime) withObject:nil afterDelay:0.05];
+    }
+    // Once the user can see anything, fade the HUD out after a few
+    // seconds — it's startup noise, the GL surface should own the screen.
+    [self performSelector:@selector(hideHud) withObject:nil afterDelay:5.0];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // Force landscape — controllable iPod Touch games are way easier
+    // to play sideways with both thumbs. setStatusBarOrientation: is
+    // the only iOS 3-compatible knob; it also tells UIKit to rotate
+    // any modally-presented VCs to match.
+    UIApplication* app = [UIApplication sharedApplication];
+    _savedOrientation = app.statusBarOrientation;
+    if (UIInterfaceOrientationIsPortrait(_savedOrientation)) {
+        [app setStatusBarOrientation:UIInterfaceOrientationLandscapeRight animated:NO];
     }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [_glView stopRunLoop];
+    // Restore picker's portrait orientation when we go back.
+    UIApplication* app = [UIApplication sharedApplication];
+    if (_savedOrientation != 0 && _savedOrientation != app.statusBarOrientation) {
+        [app setStatusBarOrientation:_savedOrientation animated:NO];
+    }
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
-    return YES;  // accept all orientations on iOS 3.x
+    return UIInterfaceOrientationIsLandscape(o);
+}
+
+// ------------------------------------------------------------------ overlay
+- (void)touchOverlayKeyDown:(int32_t)gmlKey {
+    if (_runner != NULL && _runner->keyboard != NULL && gmlKey > 0) {
+        RunnerKeyboard_onKeyDown(_runner->keyboard, gmlKey);
+    }
+}
+
+- (void)touchOverlayKeyUp:(int32_t)gmlKey {
+    if (_runner != NULL && _runner->keyboard != NULL && gmlKey > 0) {
+        RunnerKeyboard_onKeyUp(_runner->keyboard, gmlKey);
+    }
+}
+
+- (void)touchOverlayBackTapped {
+    [self.parentViewController dismissModalViewControllerAnimated:YES];
 }
 
 // ------------------------------------------------------------------ runtime
 
 // Progress callback — invoked from inside DataWin_parse on each chunk.
-// We can't call back into UIKit from arbitrary call sites on iOS 3
-// (no GCD), so we just NSLog so the chunk name shows in syslog and
-// the user can see how far parsing got if it crashes mid-way.
 static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalChunks, DataWin* dw, void* userData) {
     (void) dw;
     (void) userData;
@@ -375,15 +612,13 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
 - (void)setStatus:(NSString*)line {
     NSLog(@"[Butterscotch] %@", line);
-    _hudLabel.text = [NSString stringWithFormat:@"Butterscotch / GLES1\n%@\n%@",
-                       _game->name, line];
+    _hudLabel.text = [NSString stringWithFormat:@"%@ — %@", _game->name, line];
 }
 
 - (void)loadRuntime {
     NSLog(@"[Butterscotch] loadRuntime: %@", _game->dataWinPath);
     [self setStatus:@"Parsing data.win… (this can take a minute)"];
 
-    // Stage 1: parse data.win.
     DataWinParserOptions opts;
     memset(&opts, 0, sizeof(opts));
     opts.parseGen8 = true;
@@ -410,12 +645,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     opts.parseTxtr = true;
     opts.parseAudo = true;
     opts.skipLoadingPreciseMasksForNonPreciseSprites = true;
-    opts.lazyLoadRooms = true;       // critical for 128 MB MBX Lite RAM budget
-    // We parse the TXTR / AUDO metadata so we know each blob's
-    // offset+size inside data.win, but we deliberately do NOT load the
-    // PNG / audio bytes into RAM. The renderer (when it grows real
-    // texture support) and audio system can stream them on demand
-    // from data.win via dw->lazyLoadFile + texture.blobOffset.
+    opts.lazyLoadRooms = true;
     opts.skipLoadingTxtrBlobs = true;
     opts.skipLoadingAudoBlobs = true;
     opts.eagerlyLoadedRooms = NULL;
@@ -437,7 +667,6 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
           (unsigned) _dataWin->gen8.defaultWindowWidth,
           (unsigned) _dataWin->gen8.defaultWindowHeight);
 
-    // Stage 2: build VM, file system, audio, renderer, runner.
     [self setStatus:@"Initialising VM + Runner…"];
 
     _vm = VM_create(_dataWin);
@@ -453,23 +682,14 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
     _audio = (AudioSystem*) NoopAudioSystem_create();
 
-    // Make sure the EAGL context is current before the renderer init
-    // call — it issues GL state setup.
     [_glView makeContextCurrent];
     [_glView bindDrawable];
     _renderer = GLES1Renderer_create();
-    // Renderer needs to fopen its own FILE handle into data.win so it
-    // can stream TXTR PNG blobs without racing the parser's room
-    // lazy-loader on a shared file position.
     GLES1Renderer_setDataWinPath(_renderer, [_game->dataWinPath UTF8String]);
 
     _runner = Runner_create(_dataWin, _vm, _renderer, _fileSystem, _audio);
     _runner->osType = OS_IOS;
 
-    // CRITICAL: Runner_create does NOT load the first room. Without this,
-    // Runner_step crashes in dispatchOutsideRoomEvents because
-    // runner->currentRoom is NULL. Mirrors what the PS2 port does at
-    // src/ps2/main.c:521.
     [self setStatus:@"Initializing first room…"];
     NSLog(@"[Butterscotch] Runner_initFirstRoom");
     Runner_initFirstRoom(_runner);
@@ -488,8 +708,6 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
 - (void)glViewTick:(int)frameIndex backingWidth:(GLint)w backingHeight:(GLint)h {
     if (!_runtimeReady) {
-        // While loading: just clear black so the framebuffer is in a
-        // defined state and the layer keeps presenting fresh content.
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         return;
@@ -501,12 +719,10 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     if (dt > 0.1f) dt = 0.1f;
     _lastTickTime = now;
 
-    // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step).
     Runner_step(_runner);
     if (_audio != NULL) _audio->vtable->update(_audio, dt);
     _logicFrameCount += 1;
 
-    // Draw.
     int32_t gameW = (int32_t) _dataWin->gen8.defaultWindowWidth;
     int32_t gameH = (int32_t) _dataWin->gen8.defaultWindowHeight;
     if (gameW <= 0) gameW = w;
@@ -568,6 +784,10 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     [_activeRoot release];
     [_searchedRoots release];
     [super dealloc];
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
+    return o == UIInterfaceOrientationPortrait;
 }
 
 - (void)refresh {
@@ -660,7 +880,10 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     if ([_games count] == 0 || ip.section != 0) return;
     BSGameEntry* g = [_games objectAtIndex:ip.row];
     BSGameViewController* gvc = [[BSGameViewController alloc] initWithGame:g];
-    [self.navigationController pushViewController:gvc animated:YES];
+    // Present modally so the navigation bar disappears and the game
+    // owns the whole screen. modalTransitionStyle is iOS 3.0+.
+    gvc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    [self presentModalViewController:gvc animated:YES];
     [gvc release];
 }
 

@@ -19,6 +19,10 @@
 
 #include "stb_image.h"
 
+// Renderer.h already pulls in data_win.h. text_utils.h is header-only
+// inlines for glyph lookup / UTF-8 decode / line metrics used by drawText.
+#include "../text_utils.h"
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -643,13 +647,234 @@ static void gles1_drawLineColor(Renderer* r, float x1, float y1, float x2, float
     gles1_drawLine(r, x1, y1, x2, y2, width, c1, alpha);
 }
 
-static void gles1_drawText(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang) {
-    (void) r; (void) text; (void) x; (void) y; (void) xs; (void) ys; (void) ang;
+// ============================================================================
+// Text drawing — bitmap-font path
+// ============================================================================
+//
+// GMS:Studio fonts are baked into a single TPAG (or for sprite fonts,
+// one TPAG per glyph) at build time. To render text we:
+//   1. Resolve the Font from dataWin->font.fonts[drawFont].
+//   2. Resolve its atlas TPAG (or per-glyph TPAGs for sprite fonts).
+//   3. Walk each line of UTF-8 text, looking up each glyph in the font,
+//      computing UV from glyph sourceX/Y/W/H + atlas TPAG offset, and
+//      emitting a 2-triangle strip per glyph.
+//
+// We bind the atlas texture once per glyph (the same atlas is usually
+// reused across all glyphs in a line) — GLES 1.1 doesn't have batched
+// glDrawArrays with multiple textures and a per-glyph rebind is cheap
+// when the bind is to the already-bound id.
+
+typedef struct {
+    Font* font;
+    TexturePageItem* atlasTpag; // single TPAG for regular fonts (NULL for sprite fonts)
+    int32_t atlasTpagIndex;
+    GLuint glTexture;
+    int32_t atlasW, atlasH;     // original (pre-downsample) decoded atlas dimensions
+    Sprite* spriteFontSprite;   // source sprite for sprite fonts (NULL otherwise)
+} FontState;
+
+static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) {
+    DataWin* dw = g->base.dataWin;
+    st->font = font;
+    st->atlasTpag = NULL;
+    st->atlasTpagIndex = -1;
+    st->glTexture = 0;
+    st->atlasW = st->atlasH = 0;
+    st->spriteFontSprite = NULL;
+
+    if (!font->isSpriteFont) {
+        int32_t tpi = font->tpagIndex;
+        if (tpi < 0 || (uint32_t) tpi >= dw->tpag.count) return false;
+        st->atlasTpagIndex = tpi;
+        st->atlasTpag = &dw->tpag.items[tpi];
+        int16_t pageId = st->atlasTpag->texturePageId;
+        if (pageId < 0) return false;
+        int32_t tw = 0, th = 0;
+        GLuint h = gles1_ensureTexture(g, pageId, &tw, &th);
+        if (h == 0 || tw == 0 || th == 0) return false;
+        st->glTexture = h;
+        st->atlasW = tw;
+        st->atlasH = th;
+        return true;
+    }
+
+    if (font->spriteIndex >= 0 && (uint32_t) font->spriteIndex < dw->sprt.count) {
+        st->spriteFontSprite = &dw->sprt.sprites[font->spriteIndex];
+        return true;
+    }
+    return false;
 }
 
-static void gles1_drawTextColor(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang, int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha) {
-    (void) r; (void) text; (void) x; (void) y; (void) xs; (void) ys; (void) ang;
-    (void) c1; (void) c2; (void) c3; (void) c4; (void) alpha;
+// Look up the atlas + UV coords + on-line glyph origin for a single
+// glyph. Returns false if the glyph's atlas isn't resolvable (so the
+// caller advances the cursor without drawing).
+static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph,
+                               float cursorX, float cursorY,
+                               GLuint* outTex, float* outU0, float* outV0, float* outU1, float* outV1,
+                               float* outLocalX0, float* outLocalY0, float* outDstW, float* outDstH) {
+    DataWin* dw = g->base.dataWin;
+    Font* font = st->font;
+    if (font->isSpriteFont && st->spriteFontSprite != NULL) {
+        Sprite* sprite = st->spriteFontSprite;
+        int32_t glyphIdx = (int32_t) (glyph - font->glyphs);
+        if (glyphIdx < 0 || (uint32_t) glyphIdx >= sprite->textureCount) return false;
+        int32_t tpi = sprite->tpagIndices[glyphIdx];
+        if (tpi < 0 || (uint32_t) tpi >= dw->tpag.count) return false;
+        TexturePageItem* tp = &dw->tpag.items[tpi];
+        int16_t pid = tp->texturePageId;
+        if (pid < 0) return false;
+        int32_t tw = 0, th = 0;
+        GLuint h = gles1_ensureTexture(g, pid, &tw, &th);
+        if (h == 0 || tw == 0 || th == 0) return false;
+        *outTex = h;
+        *outU0 = (float) tp->sourceX / (float) tw;
+        *outV0 = (float) tp->sourceY / (float) th;
+        *outU1 = (float) (tp->sourceX + tp->sourceWidth) / (float) tw;
+        *outV1 = (float) (tp->sourceY + tp->sourceHeight) / (float) th;
+        *outLocalX0 = cursorX + (float) glyph->offset;
+        *outLocalY0 = cursorY + (float) ((int32_t) tp->targetY - sprite->originY);
+        *outDstW = (float) tp->sourceWidth;
+        *outDstH = (float) tp->sourceHeight;
+        return true;
+    }
+
+    // Regular font: glyph sourceX/Y are coords inside the atlas TPAG,
+    // so add atlas TPAG origin to land on the actual atlas texel.
+    *outTex = st->glTexture;
+    *outU0 = (float) (st->atlasTpag->sourceX + glyph->sourceX) / (float) st->atlasW;
+    *outV0 = (float) (st->atlasTpag->sourceY + glyph->sourceY) / (float) st->atlasH;
+    *outU1 = (float) (st->atlasTpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float) st->atlasW;
+    *outV1 = (float) (st->atlasTpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float) st->atlasH;
+    *outLocalX0 = cursorX + (float) glyph->offset;
+    *outLocalY0 = cursorY;
+    *outDstW = (float) glyph->sourceWidth;
+    *outDstH = (float) glyph->sourceHeight;
+    return true;
+}
+
+// Common body of drawText / drawTextColor. The two only differ in how
+// they sample color: drawText uses renderer->drawColor as a flat color,
+// drawTextColor takes 4 corner colors but for now we just use c1 as
+// a flat color (the runtime hardly uses the gradient variant for
+// Undertale).
+static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
+                                   float x, float y, float xscale, float yscale, float angleDeg,
+                                   uint32_t color, float alpha) {
+    DataWin* dw = g->base.dataWin;
+    int32_t fontIndex = g->base.drawFont;
+    if (fontIndex < 0 || (uint32_t) fontIndex >= dw->font.count) return;
+    Font* font = &dw->font.fonts[fontIndex];
+
+    FontState st;
+    if (!gles1_resolveFontState(g, font, &st)) return;
+
+    GLfloat rgba[4];
+    unpackBGR(color, alpha, rgba);
+
+    int32_t textLen = (int32_t) strlen(text);
+    int32_t lineCount = TextUtils_countLines(text, textLen);
+    if (lineCount <= 0) return;
+    float lineStride = TextUtils_lineStride(font);
+
+    float totalHeight = (float) lineCount * lineStride;
+    float valignOffset = 0.0f;
+    if (g->base.drawValign == 1) valignOffset = -totalHeight / 2.0f;
+    else if (g->base.drawValign == 2) valignOffset = -totalHeight;
+
+    float c = cosf(-angleDeg * 0.01745329252f);
+    float s = sinf(-angleDeg * 0.01745329252f);
+    float sx = xscale * font->scaleX;
+    float sy = yscale * font->scaleY;
+
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(rgba[0], rgba[1], rgba[2], rgba[3]);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    GLuint lastBoundTex = 0;
+
+    float cursorY = valignOffset - (float) font->ascenderOffset;
+    int32_t lineStart = 0;
+
+    for (int32_t li = 0; li < lineCount; li++) {
+        int32_t lineEnd = lineStart;
+        while (lineEnd < textLen && !TextUtils_isNewlineChar(text[lineEnd])) lineEnd++;
+        int32_t lineLen = lineEnd - lineStart;
+
+        float lineWidth = TextUtils_measureLineWidth(font, text + lineStart, lineLen);
+        float halignOffset = 0.0f;
+        if (g->base.drawHalign == 1) halignOffset = -lineWidth / 2.0f;
+        else if (g->base.drawHalign == 2) halignOffset = -lineWidth;
+        float cursorX = halignOffset;
+
+        int32_t pos = 0;
+        uint16_t ch = 0;
+        bool hasCh = false;
+        if (lineLen > pos) {
+            ch = TextUtils_decodeUtf8(text + lineStart, lineLen, &pos);
+            hasCh = true;
+        }
+        while (hasCh) {
+            FontGlyph* glyph = TextUtils_findGlyph(font, ch);
+            uint16_t nextCh = 0;
+            bool hasNext = lineLen > pos;
+            if (hasNext) nextCh = TextUtils_decodeUtf8(text + lineStart, lineLen, &pos);
+
+            if (glyph != NULL) {
+                bool drewSuccessfully = false;
+                if (glyph->sourceWidth != 0 && glyph->sourceHeight != 0) {
+                    GLuint glyphTex;
+                    float u0, v0, u1, v1;
+                    float lx0, ly0, dstW, dstH;
+                    if (gles1_resolveGlyph(g, &st, glyph, cursorX, cursorY,
+                                           &glyphTex, &u0, &v0, &u1, &v1, &lx0, &ly0, &dstW, &dstH)) {
+                        if (glyphTex != lastBoundTex) {
+                            glBindTexture(GL_TEXTURE_2D, glyphTex);
+                            lastBoundTex = glyphTex;
+                        }
+                        // Build the four corners with local-then-transform geometry
+                        // matching the matrix `[xscale*c, -yscale*s; xscale*s, yscale*c]` then translate by (x,y).
+                        float lxs[4] = { lx0,       lx0 + dstW, lx0,        lx0 + dstW };
+                        float lys[4] = { ly0,       ly0,        ly0 + dstH, ly0 + dstH };
+                        GLfloat verts[8];
+                        for (int k = 0; k < 4; k++) {
+                            float lxScaled = lxs[k] * sx;
+                            float lyScaled = lys[k] * sy;
+                            verts[k*2+0] = x + (lxScaled * c - lyScaled * s);
+                            verts[k*2+1] = y + (lxScaled * s + lyScaled * c);
+                        }
+                        GLfloat uvs[8] = { u0, v0,  u1, v0,  u0, v1,  u1, v1 };
+                        glVertexPointer(2, GL_FLOAT, 0, verts);
+                        glTexCoordPointer(2, GL_FLOAT, 0, uvs);
+                        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                        drewSuccessfully = true;
+                    }
+                }
+                cursorX += (float) glyph->shift;
+                if (drewSuccessfully && hasNext) {
+                    cursorX += TextUtils_getKerningOffset(glyph, nextCh);
+                }
+            }
+            ch = nextCh;
+            hasCh = hasNext;
+        }
+        cursorY += lineStride;
+        lineStart = (lineEnd < textLen) ? TextUtils_skipNewline(text, lineEnd, textLen) : lineEnd;
+    }
+
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisable(GL_TEXTURE_2D);
+}
+
+static void gles1_drawText(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang) {
+    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, r->drawColor, r->drawAlpha);
+}
+
+static void gles1_drawTextColor(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang,
+                                int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha) {
+    (void) c2; (void) c3; (void) c4; // GLES 1.1 fixed pipeline path: flatten to top-left color
+    uint32_t bgr = (c1 >= 0) ? (uint32_t) c1 : r->drawColor;
+    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, bgr, alpha);
 }
 
 static int32_t gles1_createSpriteFromSurface(Renderer* r, int32_t sid, int32_t x, int32_t y, int32_t w, int32_t h, bool removeback, bool smooth, int32_t xo, int32_t yo) {
