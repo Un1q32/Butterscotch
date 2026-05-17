@@ -39,6 +39,15 @@ ifndef DISABLE_BC17
 DEFINES += -DENABLE_BC17
 endif
 
+ifndef DISABLE_SW_RENDERER
+ifeq ($(PLATFORM),sdl)
+DEFINES += -DENABLE_SW_RENDERER
+SRCS += $(wildcard src/swr/*.c)
+INCLUDES += -Isrc/swr
+HEADERS += $(wildcard src/swr/*.h)
+endif
+endif
+
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
 ifndef DISABLE_LEGACY_GL
 ENABLE_GL := 1
