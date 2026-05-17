@@ -9322,6 +9322,33 @@ static RValue builtinPathGetLength(VMContext* ctx, RValue* args, int32_t argCoun
     return RValue_makeReal((GMLReal) runner->dataWin->path.paths[pathIdx].length);
 }
 
+// Resolves the n'th defining point of a path, or nullptr if the path or index is invalid.
+static PathPoint* getPathPoint(Runner* runner, int32_t pathIdx, int32_t n) {
+    if (0 > pathIdx) return nullptr;
+    if ((uint32_t) pathIdx >= runner->dataWin->path.count) return nullptr;
+    if (0 > n) return nullptr;
+    GamePath* path = &runner->dataWin->path.paths[pathIdx];
+    if (path->points == nullptr) return nullptr;
+    if ((uint32_t) n >= path->pointCount) return nullptr;
+    return &path->points[n];
+}
+
+// path_get_point_x(path, n) - returns x of the n'th defining point (0-indexed)
+static RValue builtinPathGetPointX(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeReal(0.0);
+    PathPoint* point = getPathPoint(ctx->runner, RValue_toInt32(args[0]), RValue_toInt32(args[1]));
+    if (point == nullptr) return RValue_makeReal(0.0);
+    return RValue_makeReal(point->x);
+}
+
+// path_get_point_y(path, n) - returns y of the n'th defining point (0-indexed)
+static RValue builtinPathGetPointY(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeReal(0.0);
+    PathPoint* point = getPathPoint(ctx->runner, RValue_toInt32(args[0]), RValue_toInt32(args[1]));
+    if (point == nullptr) return RValue_makeReal(0.0);
+    return RValue_makeReal(point->y);
+}
+
 // path_end() - HTML5: Assign_Path(-1,...)
 static RValue builtinPathEnd(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Instance* inst = (Instance*) ctx->currentInstance;
@@ -10234,6 +10261,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "path_start", builtinPathStart);
     VM_registerBuiltin(ctx, "path_end", builtinPathEnd);
     VM_registerBuiltin(ctx, "path_get_length", builtinPathGetLength);
+    VM_registerBuiltin(ctx, "path_get_point_x", builtinPathGetPointX);
+    VM_registerBuiltin(ctx, "path_get_point_y", builtinPathGetPointY);
     VM_registerBuiltin(ctx, "path_add", builtinPathAdd);
     VM_registerBuiltin(ctx, "path_clear_points", builtinPathClearPoints);
     VM_registerBuiltin(ctx, "path_add_point", builtinPathAddPoint);
