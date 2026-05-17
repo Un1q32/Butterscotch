@@ -5101,6 +5101,7 @@ static RValue builtinInstanceChange(VMContext* ctx, RValue* args, int32_t argCou
     Runner* runner = (Runner*) ctx->runner;
     Instance* inst = (Instance*) ctx->currentInstance;
     if (inst == nullptr) return RValue_makeUndefined();
+    if (inst->objectIndex == STRUCT_OBJECT_INDEX) return RValue_makeUndefined();
 
     int32_t objectIndex = RValue_toInt32(args[0]);
     bool performEvents = RValue_toBool(args[1]);
