@@ -42,9 +42,9 @@ endif
 ifndef DISABLE_SW_RENDERER
 ifeq ($(PLATFORM),sdl)
 DEFINES += -DENABLE_SW_RENDERER
-SRCS += $(wildcard src/swr/*.c)
+SRCS += $(wildcard src/sw/*.c)
 INCLUDES += -Isrc/swr
-HEADERS += $(wildcard src/swr/*.h)
+HEADERS += $(wildcard src/sw/*.h)
 endif
 endif
 
