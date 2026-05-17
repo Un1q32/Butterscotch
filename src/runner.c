@@ -475,6 +475,11 @@ static int compareDrawableDepth(const void* a, const void* b) {
         if (db->instance->instanceId > da->instance->instanceId) return 1;
         if (da->instance->instanceId > db->instance->instanceId) return -1;
     }
+    // At same depth, layers with higher ID draw FIRST (behind).
+    if (da->type == DRAWABLE_LAYER && db->type == DRAWABLE_LAYER) {
+        if (db->runtimeLayerId > da->runtimeLayerId) return 1;
+        if (da->runtimeLayerId > db->runtimeLayerId) return -1;
+    }
     return 0;
 }
 
