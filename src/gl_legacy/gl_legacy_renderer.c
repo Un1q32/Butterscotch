@@ -215,10 +215,7 @@ static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t p
 
     glBindTexture(GL_TEXTURE_2D, 0);
 
-#ifdef PLATFORM_PS3
-    glApplyViewport(gl, portX, portY, portW, portH);
-#else
-    GLint boundFbo = 0;
+GLint boundFbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
     if (boundFbo == 0) {
         glViewport(0, 0, portW, portH);
@@ -227,7 +224,6 @@ static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t p
     } else {
         glApplyViewport(gl, portX, portY, portW, portH);
     }
-#endif
 
     Matrix4f projection;
     Matrix4f_identity(&projection);
