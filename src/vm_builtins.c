@@ -3334,6 +3334,15 @@ static RValue builtinArrayLength1d(MAYBE_UNUSED VMContext* ctx, RValue* args, MA
     return RValue_makeReal((GMLReal) GMLArray_length1D(args[0].array));
 }
 
+static RValue builtinArrayLength2d(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeReal(0.0);
+    int32_t index = (int32_t) RValue_toReal(args[1]);
+    if (index < 0 || index >= GMLArray_length1D(args[0].array)) return RValue_makeReal(0.0);
+    RValue* slot = GMLArray_slot(args[0].array, index);
+    if (slot == nullptr || slot->type != RVALUE_ARRAY || slot->array == nullptr) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) GMLArray_length1D(slot->array));
+}
+
 static RValue builtinArrayHeight2d(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     if (args[0].type != RVALUE_ARRAY || args[0].array == nullptr) return RValue_makeReal(0.0);
     return RValue_makeReal((GMLReal) GMLArray_height2D(args[0].array));
@@ -9550,6 +9559,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     // Array
     
     VM_registerBuiltin(ctx, "array_length_1d", builtinArrayLength1d);
+    VM_registerBuiltin(ctx, "array_length_2d", builtinArrayLength2d);
     VM_registerBuiltin(ctx, "array_length", builtinArrayLength1d); // GM:S 2 alias for array_length_1d
     VM_registerBuiltin(ctx, "array_height_2d", builtinArrayHeight2d);
     VM_registerBuiltin(ctx, "array_get", builtinArrayGet);
