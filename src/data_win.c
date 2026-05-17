@@ -431,10 +431,12 @@ static void parseSOND(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); s->sounds = nullptr; return; }
 
-    s->sounds = safeMalloc(count * sizeof(Sound));
+    s->sounds = safeCalloc(count, sizeof(Sound));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         Sound* snd = &s->sounds[i];
+        snd->present = true;
         snd->name = readStringPtr(reader, dw);
         snd->flags = BinaryReader_readUint32(reader);
         snd->type = readStringPtr(reader, dw);
@@ -467,9 +469,11 @@ static void parseAGRP(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); a->audioGroups = nullptr; return; }
 
-    a->audioGroups = safeMalloc(count * sizeof(AudioGroup));
+    a->audioGroups = safeCalloc(count, sizeof(AudioGroup));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
+        a->audioGroups[i].present = true;
         a->audioGroups[i].name = readStringPtr(reader, dw);
     }
     free(ptrs);
@@ -486,8 +490,10 @@ static void parseSPRT(BinaryReader* reader, DataWin* dw, bool skipLoadingPrecise
 
     s->sprites = safeCalloc(count, sizeof(Sprite));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         Sprite* spr = &s->sprites[i];
+        spr->present = true;
         spr->name = readStringPtr(reader, dw);
         spr->width = BinaryReader_readUint32(reader);
         spr->height = BinaryReader_readUint32(reader);
@@ -599,8 +605,10 @@ static void parseBGND(BinaryReader* reader, DataWin* dw) {
 
     b->backgrounds = safeCalloc(count, sizeof(Background));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         Background* bg = &b->backgrounds[i];
+        bg->present = true;
         bg->name = readStringPtr(reader, dw);
         bg->transparent = BinaryReader_readBool32(reader);
         bg->smooth = BinaryReader_readBool32(reader);
@@ -641,10 +649,12 @@ static void parsePATH(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); p->paths = nullptr; return; }
 
-    p->paths = safeMalloc(count * sizeof(GamePath));
+    p->paths = safeCalloc(count, sizeof(GamePath));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         GamePath* path = &p->paths[i];
+        path->present = true;
         path->internalPoints = nullptr;
         path->internalPointCount = 0;
         path->length = 0.0;
@@ -681,9 +691,11 @@ static void parseSCPT(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); s->scripts = nullptr; return; }
 
-    s->scripts = safeMalloc(count * sizeof(Script));
+    s->scripts = safeCalloc(count, sizeof(Script));
     repeat(count, i) {
+        if (ptrs[i] == 0) { s->scripts[i].codeId = -1; continue; }
         BinaryReader_seek(reader, ptrs[i]);
+        s->scripts[i].present = true;
         s->scripts[i].name = readStringPtr(reader, dw);
         s->scripts[i].codeId = BinaryReader_readInt32(reader);
     }
@@ -807,10 +819,12 @@ static void parseFONT(BinaryReader* reader, DataWin* dw) {
         }
     }
 
-    f->fonts = safeMalloc(count * sizeof(Font));
+    f->fonts = safeCalloc(count, sizeof(Font));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         Font* font = &f->fonts[i];
+        font->present = true;
         font->name = readStringPtr(reader, dw);
         font->displayName = readStringPtr(reader, dw);
         font->emSize = BinaryReader_readUint32(reader);
@@ -910,10 +924,12 @@ static void parseTMLN(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); t->timelines = nullptr; return; }
 
-    t->timelines = safeMalloc(count * sizeof(Timeline));
+    t->timelines = safeCalloc(count, sizeof(Timeline));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
         Timeline* tl = &t->timelines[i];
+        tl->present = true;
         tl->name = readStringPtr(reader, dw);
         tl->momentCount = BinaryReader_readUint32(reader);
 
@@ -951,8 +967,11 @@ static void parseOBJT(BinaryReader* reader, DataWin* dw) {
 
     // Detect GMS 2022.5+ by probing the first game object's event list structure.
     if (DataWin_isVersionAtLeast(dw, 2, 3, 0, 0) && !DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0)) {
+        uint32_t probePtr = 0;
+        repeat(count, i) { if (ptrs[i] != 0) { probePtr = ptrs[i]; break; } }
+        if (probePtr != 0) {
         // Skip the 16 fixed uint32 header fields (name..angularDamping) to reach physicsVertexCount.
-        BinaryReader_seek(reader, ptrs[0] + 16 * 4);
+        BinaryReader_seek(reader, probePtr + 16 * 4);
         int32_t vertexCount = BinaryReader_readInt32(reader);
         if (vertexCount >= 0) {
             // Skip friction + awake + kinematic (12 bytes) and physics vertices (8 bytes each).
@@ -975,12 +994,15 @@ static void parseOBJT(BinaryReader* reader, DataWin* dw) {
                 DataWin_bumpVersionTo(dw, 2022, 5, 0, 0);
             }
         }
+        }
     }
 
-    o->objects = safeMalloc(count * sizeof(GameObject));
+    o->objects = safeCalloc(count, sizeof(GameObject));
     repeat(count, i) {
+        if (ptrs[i] == 0) { o->objects[i].parentId = -1; o->objects[i].spriteId = -1; o->objects[i].textureMaskId = -1; continue; }
         BinaryReader_seek(reader, ptrs[i]);
         GameObject* obj = &o->objects[i];
+        obj->present = true;
         obj->name = readStringPtr(reader, dw);
         obj->spriteId = BinaryReader_readInt32(reader);
         obj->visible = BinaryReader_readBool32(reader);
@@ -1335,8 +1357,46 @@ static void readRoomLayers(BinaryReader* reader, DataWin* dw, Room* room) {
                 uint32_t totalTiles = tiles->tilesX * tiles->tilesY;
                 if (totalTiles > 0) {
                     tiles->tileData = safeMalloc(totalTiles * sizeof(uint32_t));
-                    repeat(totalTiles, k) {
-                        tiles->tileData[k] = BinaryReader_readUint32(reader);
+                    if (DataWin_isVersionAtLeast(dw, 2024, 2, 0, 0)) {
+                        // GM 2024.2+ games have RLE-compressed tile data
+                        // GM 2024.4+ aligns to 4 bytes after the stream
+                        uint32_t produced = 0;
+                        while (totalTiles > produced) {
+                            uint8_t length = BinaryReader_readUint8(reader);
+                            if (length >= 128) {
+                                uint32_t runLength = (uint32_t) ((length & 0x7F) + 1);
+                                uint32_t tile = BinaryReader_readUint32(reader);
+                                if (runLength > totalTiles - produced) runLength = totalTiles - produced;
+                                for (uint32_t k = 0; runLength > k; k++) tiles->tileData[produced + k] = tile;
+                                produced += runLength;
+                            } else {
+                                uint32_t runLength = (uint32_t) length;
+                                if (runLength > totalTiles - produced) runLength = totalTiles - produced;
+                                for (uint32_t k = 0; runLength > k; k++) tiles->tileData[produced + k] = BinaryReader_readUint32(reader);
+                                produced += runLength;
+                            }
+                        }
+                        // Trailing padding: if the last two real tiles differ, the writer inserts a (0x81, -1) pad pair.
+                        bool hasPadding = false;
+                        if (totalTiles == 1) {
+                            hasPadding = true;
+                        } else if (totalTiles >= 2) {
+                            hasPadding = tiles->tileData[totalTiles - 1] != tiles->tileData[totalTiles - 2];
+                        }
+                        if (hasPadding) {
+                            uint8_t length = BinaryReader_readUint8(reader);
+                            uint32_t tile = BinaryReader_readUint32(reader);
+                            (void) length; (void) tile;
+                        }
+                        if (DataWin_isVersionAtLeast(dw, 2024, 4, 0, 0)) {
+                            size_t pos = BinaryReader_getPosition(reader);
+                            size_t aligned = (pos + 3u) & ~(size_t) 3u;
+                            if (aligned > pos) BinaryReader_skip(reader, aligned - pos);
+                        }
+                    } else {
+                        repeat(totalTiles, k) {
+                            tiles->tileData[k] = BinaryReader_readUint32(reader);
+                        }
                     }
                 } else {
                     tiles->tileData = nullptr;
@@ -1400,6 +1460,7 @@ static void parseROOM(BinaryReader* reader, DataWin* dw, bool lazyLoadRooms, Str
     // We skip if we already know that we are at or above 2.2.2.302.
     if (DataWin_isVersionAtLeast(dw, 2, 0, 0, 0) && !DataWin_isVersionAtLeast(dw, 2, 2, 2, 302)) {
         repeat(count, i) {
+            if (ptrs[i] == 0) continue;
             BinaryReader_seek(reader, ptrs[i]);
             // Room header layout (before gameObjectsPtr): name, caption, width, height, speed, persistent,
             // bgColor, drawBgColor, creationCodeId, flags, backgroundsPtr, viewsPtr = 12 uint32s.
@@ -1421,6 +1482,7 @@ static void parseROOM(BinaryReader* reader, DataWin* dw, bool lazyLoadRooms, Str
     // Detect whether Layer headers include EffectEnabled/EffectType/EffectProperties fields (added in GMS 2022.1).
     if (DataWin_isVersionAtLeast(dw, 2, 3, 0, 0) && !DataWin_isVersionAtLeast(dw, 2022, 1, 0, 0)) {
         repeat(count, i) {
+            if (ptrs[i] == 0) continue;
             BinaryReader_seek(reader, ptrs[i]);
             // Room header before layersPtr: 22 uint32s (name..metersPerPixel).
             BinaryReader_skip(reader, 22 * 4);
@@ -1482,8 +1544,10 @@ static void parseROOM(BinaryReader* reader, DataWin* dw, bool lazyLoadRooms, Str
 
     rc->rooms = safeCalloc(count, sizeof(Room));
     repeat(count, i) {
+        if (ptrs[i] == 0) { rc->rooms[i].creationCodeId = -1; continue; }
         BinaryReader_seek(reader, ptrs[i]);
         Room* room = &rc->rooms[i];
+        room->present = true;
 
         // ===[ Header pass ]===
         room->name = readStringPtr(reader, dw);
@@ -1584,10 +1648,12 @@ static void parseTPAG(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); t->items = nullptr; return; }
 
-    t->items = safeMalloc(count * sizeof(TexturePageItem));
+    t->items = safeCalloc(count, sizeof(TexturePageItem));
     repeat(count, i) {
+        if (ptrs[i] == 0) { t->items[i].texturePageId = -1; continue; }
         BinaryReader_seek(reader, ptrs[i]);
         TexturePageItem* item = &t->items[i];
+        item->present = true;
         item->sourceX = BinaryReader_readUint16(reader);
         item->sourceY = BinaryReader_readUint16(reader);
         item->sourceWidth = BinaryReader_readUint16(reader);
@@ -1625,10 +1691,12 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
 
     if (codeCount == 0) { free(codePtrs); c->entries = nullptr; return; }
 
-    c->entries = safeMalloc(codeCount * sizeof(CodeEntry));
+    c->entries = safeCalloc(codeCount, sizeof(CodeEntry));
     repeat(codeCount, i) {
+        if (codePtrs[i] == 0) continue;
         BinaryReader_seek(reader, codePtrs[i]);
         CodeEntry* entry = &c->entries[i];
+        entry->present = true;
         entry->name = readStringPtr(reader, dw);
         entry->length = BinaryReader_readUint32(reader);
         entry->localsCount = BinaryReader_readUint16(reader);
@@ -1646,12 +1714,14 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
     // Compute bytecode blob range and load into owned buffer.
     // The bytecode blob starts at the minimum bytecodeAbsoluteOffset and
     // extends to the end of the CODE chunk.
-    uint32_t blobStart = c->entries[0].bytecodeAbsoluteOffset;
+    uint32_t blobStart = UINT32_MAX;
     repeat(codeCount, i) {
-        if (c->entries[i].bytecodeAbsoluteOffset < blobStart) {
+        if (!c->entries[i].present) continue;
+        if (blobStart > c->entries[i].bytecodeAbsoluteOffset) {
             blobStart = c->entries[i].bytecodeAbsoluteOffset;
         }
     }
+    if (blobStart == UINT32_MAX) blobStart = (uint32_t) chunkDataStart;
     size_t chunkEnd = chunkDataStart + chunkLength;
     size_t blobSize = chunkEnd - blobStart;
 
@@ -1739,8 +1809,9 @@ static void parseSTRG(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); s->strings = nullptr; return; }
 
-    s->strings = safeMalloc(count * sizeof(const char*));
+    s->strings = safeCalloc(count, sizeof(const char*));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         // Pointer table points to the string's length prefix.
         // The actual string content starts 4 bytes after.
         s->strings[i] = (const char*)(dw->strgBuffer + (ptrs[i] + 4 - dw->strgBufferBase));
@@ -1768,7 +1839,7 @@ static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
     //   2022.9+: ... + width + height + indexInGroup = 28 bytes
     bool has2022_3 = DataWin_isVersionAtLeast(dw, 2022, 3, 0, 0);
     bool has2022_9 = DataWin_isVersionAtLeast(dw, 2022, 9, 0, 0);
-    if (count >= 2 && hasGeneratedMips && !has2022_9) {
+    if (count >= 2 && hasGeneratedMips && !has2022_9 && ptrs[0] != 0 && ptrs[1] != 0) {
         uint32_t diff = ptrs[1] - ptrs[0];
         if (diff == 28) {
             DataWin_bumpVersionTo(dw, 2022, 9, 0, 0);
@@ -1780,9 +1851,11 @@ static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd) {
         }
     }
 
-    t->textures = safeMalloc(count * sizeof(Texture));
+    t->textures = safeCalloc(count, sizeof(Texture));
     repeat(count, i) {
+        if (ptrs[i] == 0) { t->textures[i].blobOffset = 0; t->textures[i].blobData = nullptr; continue; }
         BinaryReader_seek(reader, ptrs[i]);
+        t->textures[i].present = true;
         t->textures[i].scaled = BinaryReader_readUint32(reader);
         if (hasGeneratedMips) {
             t->textures[i].generatedMips = BinaryReader_readUint32(reader);
@@ -1837,9 +1910,11 @@ static void parseAUDO(BinaryReader* reader, DataWin* dw) {
 
     if (count == 0) { free(ptrs); a->entries = nullptr; return; }
 
-    a->entries = safeMalloc(count * sizeof(AudioEntry));
+    a->entries = safeCalloc(count, sizeof(AudioEntry));
     repeat(count, i) {
+        if (ptrs[i] == 0) continue;
         BinaryReader_seek(reader, ptrs[i]);
+        a->entries[i].present = true;
         a->entries[i].dataSize = BinaryReader_readUint32(reader);
         a->entries[i].dataOffset = (uint32_t)BinaryReader_getPosition(reader);
         // Load audio data into owned buffer

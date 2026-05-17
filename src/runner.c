@@ -1678,30 +1678,39 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     // Create assets map
     shdefault(runner->assetsByName, -1);
     repeat(dataWin->objt.count, i) {
+        if (!dataWin->objt.objects[i].present) continue;
         shput(runner->assetsByName, dataWin->objt.objects[i].name, i);
     }
     repeat(dataWin->sprt.count, i) {
+        if (!dataWin->sprt.sprites[i].present) continue;
         shput(runner->assetsByName, dataWin->sprt.sprites[i].name, i);
     }
     repeat(dataWin->sond.count, i) {
+        if (!dataWin->sond.sounds[i].present) continue;
         shput(runner->assetsByName, dataWin->sond.sounds[i].name, i);
     }
     repeat(dataWin->bgnd.count, i) {
+        if (!dataWin->bgnd.backgrounds[i].present) continue;
         shput(runner->assetsByName, dataWin->bgnd.backgrounds[i].name, i);
     }
     repeat(dataWin->path.count, i) {
+        if (!dataWin->path.paths[i].present) continue;
         shput(runner->assetsByName, dataWin->path.paths[i].name, i);
     }
     repeat(dataWin->scpt.count, i) {
+        if (!dataWin->scpt.scripts[i].present) continue;
         shput(runner->assetsByName, dataWin->scpt.scripts[i].name, i);
     }
     repeat(dataWin->font.count, i) {
+        if (!dataWin->font.fonts[i].present) continue;
         shput(runner->assetsByName, dataWin->font.fonts[i].name, i);
     }
     repeat(dataWin->tmln.count, i) {
+        if (!dataWin->tmln.timelines[i].present) continue;
         shput(runner->assetsByName, dataWin->tmln.timelines[i].name, i);
     }
     repeat(dataWin->room.count, i) {
+        if (!dataWin->room.rooms[i].present) continue;
         shput(runner->assetsByName, dataWin->room.rooms[i].name, i);
     }
 

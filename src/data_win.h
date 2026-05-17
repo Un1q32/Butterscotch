@@ -158,8 +158,12 @@ typedef struct {
     Extension* extensions;
 } Extn;
 
+// The "present" field can be false for deleted/null pointer-table slots
+// This will MOST LIKELY ALWAYS be true on pre-2024.11+ games, but CAN be false in 2022.11+ games if the asset was deleted
+
 // ===[ SOND - Sounds ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t flags;
     const char* type;
@@ -178,6 +182,7 @@ typedef struct {
 
 // ===[ AGRP - Audio Groups ]===
 typedef struct {
+    bool present;
     const char* name;
 } AudioGroup;
 
@@ -188,6 +193,7 @@ typedef struct {
 
 // ===[ SPRT - Sprites ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t width;
     uint32_t height;
@@ -228,6 +234,7 @@ typedef struct {
 
 // ===[ BGND - Backgrounds ]===
 typedef struct {
+    bool present;
     const char* name;
     bool transparent;
     bool smooth;
@@ -274,6 +281,7 @@ typedef struct {
 } PathPositionResult;
 
 typedef struct {
+    bool present;
     const char* name;
     bool isSmooth;
     bool isClosed;
@@ -292,6 +300,7 @@ typedef struct {
 
 // ===[ SCPT - Scripts ]===
 typedef struct {
+    bool present;
     const char* name;
     int32_t codeId;
 } Script;
@@ -360,6 +369,7 @@ typedef struct {
 } FontGlyph;
 
 typedef struct {
+    bool present;
     const char* name;
     const char* displayName;
     uint32_t emSize;
@@ -432,6 +442,7 @@ typedef struct {
 } TimelineMoment;
 
 typedef struct {
+    bool present;
     const char* name;
     uint32_t momentCount;
     TimelineMoment* moments;
@@ -462,6 +473,7 @@ typedef struct {
 } PhysicsVertex;
 
 typedef struct {
+    bool present;
     const char* name;
     int32_t spriteId;
     bool visible;
@@ -629,6 +641,7 @@ typedef struct {
 } RoomLayer;
 
 typedef struct {
+    bool present;
     // Scalar header: always valid regardless of payloadLoaded.
     const char* name;
     const char* caption;
@@ -677,6 +690,7 @@ typedef struct {
 
 // ===[ TPAG - Texture Page Items ]===
 typedef struct {
+    bool present;
     uint16_t sourceX;
     uint16_t sourceY;
     uint16_t sourceWidth;
@@ -697,6 +711,7 @@ typedef struct {
 
 // ===[ CODE - Code Entries ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t length;
     uint16_t localsCount;
@@ -763,6 +778,7 @@ typedef struct {
 
 // ===[ TXTR - Embedded Textures ]===
 typedef struct {
+    bool present;
     uint32_t scaled;
     uint32_t generatedMips; // GMS 2.0.6+: number of generated mipmaps (0 for GMS 1.x)
     uint32_t textureBlockSize; // GMS 2022.3+: size of the texture block (0 for older versions)
@@ -781,6 +797,7 @@ typedef struct {
 
 // ===[ AUDO - Embedded Audio ]===
 typedef struct {
+    bool present;
     uint32_t dataOffset; // absolute file offset to audio data
     uint32_t dataSize;   // length of audio data
     uint8_t* data;       // owned copy of audio data
