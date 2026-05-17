@@ -39,6 +39,13 @@ static inline void unpackBGR(uint32_t bgr, float a, GLfloat out[4]) {
 // Cache slot for one TXTR entry. We map TXTR index -> one GL texture
 // object; sprite/background TPAG rectangles index into the cached
 // texture via texcoords.
+//
+// width/height store the ORIGINAL decoded atlas dimensions (in source
+// pixels) so the UV normalization (sourceX / atlas.width) remains
+// correct even when the GL texture itself was downsampled to fit
+// GL_MAX_TEXTURE_SIZE. UV space is normalized [0, 1] so the actual
+// uploaded pixel resolution does not affect sampling location.
+//
 typedef struct {
     GLuint glHandle;     // 0 if not yet uploaded
     int32_t width;       // populated after first upload
@@ -57,6 +64,7 @@ typedef struct {
     uint32_t residentBytes;
     uint32_t residentBudget;
     uint32_t logBudget;         // diagnostic prints we still owe; decremented as we log
+    int32_t maxTextureSize;     // GL_MAX_TEXTURE_SIZE (1024 on MBX Lite, 2048/4096 on later iOS)
 } GLES1Renderer;
 
 static inline GLES1Renderer* asGLES1(Renderer* r) {
@@ -122,6 +130,66 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
+
+    // Find out what the GPU actually accepts. PowerVR MBX Lite caps at
+    // 1024x1024 even though GMS:Studio ships atlases up to 2048x2048
+    // (and 4096 on later devices). Anything larger silently rejects
+    // from glTexImage2D with GL_INVALID_VALUE — we have to downsample.
+    GLint maxTex = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+    if (maxTex <= 0) maxTex = 1024; // sensible MBX Lite default if the query fails
+    g->maxTextureSize = maxTex;
+    fprintf(stderr, "[gles1] GL_MAX_TEXTURE_SIZE = %d\n", (int) maxTex);
+    const GLubyte* vendor = glGetString(GL_VENDOR);
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+    const GLubyte* version = glGetString(GL_VERSION);
+    fprintf(stderr, "[gles1] GL_VENDOR=%s RENDERER=%s VERSION=%s\n",
+            vendor ? (const char*) vendor : "(null)",
+            renderer ? (const char*) renderer : "(null)",
+            version ? (const char*) version : "(null)");
+}
+
+// Downsample an RGBA8 buffer in place by a power-of-two factor in each
+// axis. Used to fit Undertale's 1024x2048 atlases onto MBX Lite's
+// 1024x1024 cap. Box-filter average of factorX*factorY source pixels
+// into one destination pixel. Mutates *pPixels (frees old, allocates new)
+// and updates *pW / *pH.
+static bool gles1_downsampleRGBA(stbi_uc** pPixels, int* pW, int* pH, int factorX, int factorY) {
+    if (factorX < 1 || factorY < 1) return false;
+    if (factorX == 1 && factorY == 1) return true;
+    int srcW = *pW;
+    int srcH = *pH;
+    int dstW = srcW / factorX;
+    int dstH = srcH / factorY;
+    if (dstW <= 0 || dstH <= 0) return false;
+    stbi_uc* dst = (stbi_uc*) malloc((size_t) dstW * dstH * 4);
+    if (dst == NULL) return false;
+    stbi_uc* src = *pPixels;
+    int blockArea = factorX * factorY;
+    for (int y = 0; y < dstH; y++) {
+        for (int x = 0; x < dstW; x++) {
+            int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+            int srcY0 = y * factorY;
+            int srcX0 = x * factorX;
+            for (int dy = 0; dy < factorY; dy++) {
+                const stbi_uc* row = src + ((srcY0 + dy) * srcW + srcX0) * 4;
+                for (int dx = 0; dx < factorX; dx++) {
+                    sumR += row[0]; sumG += row[1]; sumB += row[2]; sumA += row[3];
+                    row += 4;
+                }
+            }
+            stbi_uc* outPx = dst + (y * dstW + x) * 4;
+            outPx[0] = (stbi_uc)(sumR / blockArea);
+            outPx[1] = (stbi_uc)(sumG / blockArea);
+            outPx[2] = (stbi_uc)(sumB / blockArea);
+            outPx[3] = (stbi_uc)(sumA / blockArea);
+        }
+    }
+    stbi_image_free(src);
+    *pPixels = dst;
+    *pW = dstW;
+    *pH = dstH;
+    return true;
 }
 
 static void gles1_destroy(Renderer* r) {
@@ -267,10 +335,31 @@ static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* 
         }
         return 0;
     }
+    int origW = w, origH = h;
     if (g->logBudget > 0) {
         fprintf(stderr, "[gles1] ensureTexture[%d]: decoded %dx%d (ch=%d)\n", txtrIndex, w, h, ch);
-        g->logBudget--;
     }
+
+    // Downsample to fit GL_MAX_TEXTURE_SIZE on MBX Lite. UVs are in
+    // normalized [0,1] space so the atlas layout is preserved — just at
+    // lower resolution. Compute a power-of-two factor per axis so the
+    // sprite sub-rects keep clean texel alignment after the resize.
+    int factorX = 1, factorY = 1;
+    while (w / factorX > g->maxTextureSize) factorX *= 2;
+    while (h / factorY > g->maxTextureSize) factorY *= 2;
+    if (factorX != 1 || factorY != 1) {
+        if (!gles1_downsampleRGBA(&pixels, &w, &h, factorX, factorY)) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: downsample %dx -> %dx failed; dropping atlas\n",
+                    txtrIndex, origW, origH);
+            stbi_image_free(pixels);
+            return 0;
+        }
+        if (g->logBudget > 0) {
+            fprintf(stderr, "[gles1] ensureTexture[%d]: downsampled %dx%d -> %dx%d (factor %dx%d) to fit GL_MAX_TEXTURE_SIZE=%d\n",
+                    txtrIndex, origW, origH, w, h, factorX, factorY, g->maxTextureSize);
+        }
+    }
+    if (g->logBudget > 0) g->logBudget--;
 
     // Make room.
     uint32_t newBytes = (uint32_t)(w * h * 4);
@@ -286,16 +375,27 @@ static GLuint gles1_ensureTexture(GLES1Renderer* g, int32_t txtrIndex, int32_t* 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    GLenum glErr = glGetError();
+    if (glErr != GL_NO_ERROR) {
+        fprintf(stderr, "[gles1] ensureTexture[%d]: glTexImage2D failed with error 0x%04x (size %dx%d)\n",
+                txtrIndex, (unsigned) glErr, w, h);
+        glDeleteTextures(1, &handle);
+        stbi_image_free(pixels);
+        return 0;
+    }
     stbi_image_free(pixels);
 
+    // Store ORIGINAL atlas dimensions (pre-downsample), because TPAG
+    // sub-rects are expressed in original source pixels and UV =
+    // sourceX / atlasW must match the layout the runtime expects.
     slot->glHandle = handle;
-    slot->width = w;
-    slot->height = h;
+    slot->width = origW;
+    slot->height = origH;
     slot->lastUsedTick = g->frameTick;
     g->residentBytes += newBytes;
 
-    if (outW != NULL) *outW = w;
-    if (outH != NULL) *outH = h;
+    if (outW != NULL) *outW = origW;
+    if (outH != NULL) *outH = origH;
     return handle;
 }
 
