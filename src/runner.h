@@ -498,6 +498,8 @@ bool Runner_surfaceSetTarget(Runner* runner, int32_t surfaceID);
 // Pops the top of the surface stack and bind whatever is below (or the main framebuffer when the stack is empty).
 // Returns false when there was nothing to pop.
 bool Runner_surfaceResetTarget(Runner* runner);
+// Returns the surfaceID at the top of the surface stack, or -1 when no surface is bound (the application surface is active).
+int32_t Runner_surfaceGetTarget(Runner* runner);
 
 void Runner_dumpState(Runner* runner);
 char* Runner_dumpStateJson(Runner* runner);

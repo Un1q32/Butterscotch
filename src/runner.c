@@ -2765,6 +2765,12 @@ bool Runner_surfaceResetTarget(Runner* runner) {
     return true;
 }
 
+int32_t Runner_surfaceGetTarget(Runner* runner) {
+    int32_t top = findStackTop(runner);
+    if (top == -1) return -1;
+    return runner->surfaceStack[top];
+}
+
 // ===[ State Dump ]===
 
 void Runner_dumpState(Runner* runner) {

@@ -6650,6 +6650,11 @@ static RValue builtin_surface_reset_target(VMContext* ctx, MAYBE_UNUSED RValue* 
     return RValue_makeReal(0.0);
 }
 
+static RValue builtin_surface_get_target(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = (Runner*) ctx->runner;
+    return RValue_makeReal((GMLReal) Runner_surfaceGetTarget(runner));
+}
+
 static RValue builtin_surface_resize(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     int32_t surfaceId = (int32_t) RValue_toReal(args[0]);
     float w = (float) RValue_toReal(args[1]);
@@ -10122,6 +10127,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "surface_free", builtin_surface_free);
     VM_registerBuiltin(ctx, "surface_set_target", builtin_surface_set_target);
     VM_registerBuiltin(ctx, "surface_reset_target", builtin_surface_reset_target);
+    VM_registerBuiltin(ctx, "surface_get_target", builtin_surface_get_target);
     VM_registerBuiltin(ctx, "surface_exists", builtin_surface_exists);
     VM_registerBuiltin(ctx, "surface_get_width", builtinSurfaceGetWidth);
     VM_registerBuiltin(ctx, "surface_get_height", builtinSurfaceGetHeight);
