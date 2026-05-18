@@ -95,7 +95,9 @@ endif
 
 ifdef DISABLE_LEGACY_GL
 ifeq ($(PLATFORM),sdl)
+ifdef DISABLE_SW_RENDERER
 $(error must enable at least 1 renderer)
+endif
 else
 ifdef DISABLE_MODERN_GL
 $(error must enable at least 1 renderer)
