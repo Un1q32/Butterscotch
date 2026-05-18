@@ -608,12 +608,20 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 
 // ------------------------------------------------------------------ overlay
 - (void)touchOverlayKeyDown:(int32_t)gmlKey {
+    // Log every press so we can confirm in syslog that the overlay is
+    // actually firing the right vk_* code into the GML keyboard state.
+    // Especially useful while diagnosing why the D-pad seems inert on
+    // some screens while Z/X/C clearly work.
+    NSLog(@"[Butterscotch] keyDown gmlKey=%d runner=%p kb=%p",
+          (int) gmlKey, _runner,
+          _runner != NULL ? (void*) _runner->keyboard : NULL);
     if (_runner != NULL && _runner->keyboard != NULL && gmlKey > 0) {
         RunnerKeyboard_onKeyDown(_runner->keyboard, gmlKey);
     }
 }
 
 - (void)touchOverlayKeyUp:(int32_t)gmlKey {
+    NSLog(@"[Butterscotch] keyUp gmlKey=%d", (int) gmlKey);
     if (_runner != NULL && _runner->keyboard != NULL && gmlKey > 0) {
         RunnerKeyboard_onKeyUp(_runner->keyboard, gmlKey);
     }
@@ -744,6 +752,17 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     Runner_step(_runner);
     if (_audio != NULL) _audio->vtable->update(_audio, dt);
     _logicFrameCount += 1;
+
+    // Clear the pressed/released edges AFTER the runner consumed them
+    // this frame. Other platforms (ps2, ps3, glfw, web) all do this — the
+    // iOS port was missing it, which meant the GML pressed/released
+    // flags accumulated across frames and games stopped seeing fresh
+    // key transitions after the first press. Pressed edges from touches
+    // that arrived between vsync ticks land before this clear, so they
+    // are visible to the next Runner_step.
+    if (_runner != NULL && _runner->keyboard != NULL) {
+        RunnerKeyboard_beginFrame(_runner->keyboard);
+    }
 
     int32_t gameW = (int32_t) _dataWin->gen8.defaultWindowWidth;
     int32_t gameH = (int32_t) _dataWin->gen8.defaultWindowHeight;

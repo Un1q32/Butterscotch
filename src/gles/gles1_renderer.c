@@ -83,6 +83,24 @@ typedef struct {
     uint32_t residentBudget;
     uint32_t logBudget;         // diagnostic prints we still owe; decremented as we log
     int32_t maxTextureSize;     // GL_MAX_TEXTURE_SIZE (1024 on MBX Lite, 2048/4096 on later iOS)
+
+    // Offscreen render target. We render the game at its native
+    // resolution (e.g. 640x480) into a POT-padded texture-attached
+    // FBO, then at endFrame draw that texture as a single quad onto
+    // the visible renderbuffer. The intermediate buffer eliminates
+    // sub-pixel scaling artifacts from individual sprite draws — every
+    // game draw lands on an integer-aligned grid before a SINGLE
+    // bilinear downscale produces the final framebuffer image.
+    GLuint offscreenFbo;        // 0 = not created yet / disabled
+    GLuint offscreenTex;        // RGBA8 colour attachment
+    int32_t offscreenTexW;      // power-of-two padded width
+    int32_t offscreenTexH;      // power-of-two padded height
+    int32_t offscreenVpW;       // actual game viewport width within the texture
+    int32_t offscreenVpH;       // actual game viewport height within the texture
+    GLint   savedVisibleFbo;    // remembered at beginFrame, restored at endFrame
+    int32_t lastWindowW;        // visible renderbuffer width (set at beginFrame)
+    int32_t lastWindowH;        // visible renderbuffer height
+    bool offscreenDisabled;     // true if FBO setup permanently failed; we render direct
 } GLES1Renderer;
 
 static inline GLES1Renderer* asGLES1(Renderer* r) {
@@ -233,6 +251,14 @@ static void gles1_freeSlotGL(BSTexCacheSlot* s) {
 
 static void gles1_destroy(Renderer* r) {
     GLES1Renderer* g = asGLES1(r);
+    if (g->offscreenFbo != 0) {
+        glDeleteFramebuffersOES(1, &g->offscreenFbo);
+        g->offscreenFbo = 0;
+    }
+    if (g->offscreenTex != 0) {
+        glDeleteTextures(1, &g->offscreenTex);
+        g->offscreenTex = 0;
+    }
     if (g->slots != NULL) {
         for (uint32_t i = 0; i < g->slotCount; i++) {
             gles1_freeSlotGL(&g->slots[i]);
@@ -417,13 +443,15 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         GLuint handle = 0;
         glGenTextures(1, &handle);
         glBindTexture(GL_TEXTURE_2D, handle);
-        // GL_LINEAR avoids the every-other-row banding that GL_NEAREST
-        // produces when the game's 640x480 canvas is rasterised into a
-        // 480x320 framebuffer (non-integer scale ratios drop rows under
-        // nearest sampling). Pixel art ends up slightly softer but the
-        // image is uniformly clean rather than zebra-striped.
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // GL_NEAREST is correct here because the game renders into an
+        // offscreen FBO at its native resolution (640x480) — sprite
+        // quads land on integer-aligned pixel positions, so nearest
+        // filtering preserves crisp pixel-art edges. The single
+        // 640x480 -> 480x320 downscale at endFrame uses GL_LINEAR
+        // on the offscreen colour texture, so the final on-screen
+        // image is smooth without softening every glyph.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         if (thisBandH == bandH) {
@@ -642,27 +670,191 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
 // Renderer vtable: frame + view + GUI passes
 // ============================================================================
 
+// Allocate / re-allocate the offscreen render target to fit the given
+// game dimensions. The colour attachment is a POT-padded texture so it
+// stays compatible with MBX Lite's NPOT restrictions; the actual game
+// viewport occupies the top-left (gameW x gameH) region. Sets the
+// offscreenDisabled flag if creation fails so we cleanly fall back to
+// direct rendering.
+static void gles1_ensureOffscreenFbo(GLES1Renderer* g, int32_t gameW, int32_t gameH) {
+    if (g->offscreenDisabled) return;
+    int32_t needW = 1, needH = 1;
+    while (needW < gameW) needW *= 2;
+    while (needH < gameH) needH *= 2;
+    int32_t cap = g->maxTextureSize > 0 ? g->maxTextureSize : 1024;
+    if (needW > cap) needW = cap;
+    if (needH > cap) needH = cap;
+    if (g->offscreenFbo != 0
+        && g->offscreenTexW == needW
+        && g->offscreenTexH == needH
+        && g->offscreenVpW  == gameW
+        && g->offscreenVpH  == gameH) {
+        return;
+    }
+    if (g->offscreenFbo != 0) {
+        glDeleteFramebuffersOES(1, &g->offscreenFbo);
+        g->offscreenFbo = 0;
+    }
+    if (g->offscreenTex != 0) {
+        glDeleteTextures(1, &g->offscreenTex);
+        g->offscreenTex = 0;
+    }
+    glGenTextures(1, &g->offscreenTex);
+    glBindTexture(GL_TEXTURE_2D, g->offscreenTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, needW, needH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    GLenum texErr = glGetError();
+    if (texErr != GL_NO_ERROR) {
+        fprintf(stderr, "[gles1] offscreen tex alloc %dx%d failed: 0x%04x — disabling\n",
+                (int) needW, (int) needH, (unsigned) texErr);
+        glDeleteTextures(1, &g->offscreenTex);
+        g->offscreenTex = 0;
+        g->offscreenDisabled = true;
+        return;
+    }
+    glGenFramebuffersOES(1, &g->offscreenFbo);
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, g->offscreenFbo);
+    glFramebufferTexture2DOES(GL_FRAMEBUFFER_OES, GL_COLOR_ATTACHMENT0_OES,
+                              GL_TEXTURE_2D, g->offscreenTex, 0);
+    GLenum st = glCheckFramebufferStatusOES(GL_FRAMEBUFFER_OES);
+    if (st != GL_FRAMEBUFFER_COMPLETE_OES) {
+        fprintf(stderr, "[gles1] offscreen FBO incomplete: 0x%04x — disabling\n", (unsigned) st);
+        glDeleteFramebuffersOES(1, &g->offscreenFbo);
+        glDeleteTextures(1, &g->offscreenTex);
+        g->offscreenFbo = 0;
+        g->offscreenTex = 0;
+        g->offscreenDisabled = true;
+        return;
+    }
+    g->offscreenTexW = needW;
+    g->offscreenTexH = needH;
+    g->offscreenVpW  = gameW;
+    g->offscreenVpH  = gameH;
+    fprintf(stderr, "[gles1] offscreen FBO ready: tex=%dx%d, viewport=%dx%d\n",
+            (int) needW, (int) needH, (int) gameW, (int) gameH);
+}
+
 static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
     GLES1Renderer* g = asGLES1(r);
     g->frameTick++;
-    glViewport(0, 0, windowW, windowH);
+    if (gameW <= 0) gameW = windowW;
+    if (gameH <= 0) gameH = windowH;
+    g->lastWindowW = windowW;
+    g->lastWindowH = windowH;
+
+    // Remember which framebuffer the iOS layer set up for us so we
+    // can restore it at endFrame. On iOS 3 there is no system FBO 0;
+    // the host always provides an explicit FBO.
+    g->savedVisibleFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_OES, &g->savedVisibleFbo);
+
+    gles1_ensureOffscreenFbo(g, gameW, gameH);
+
+    if (g->offscreenFbo != 0) {
+        glBindFramebufferOES(GL_FRAMEBUFFER_OES, g->offscreenFbo);
+        glViewport(0, 0, gameW, gameH);
+    } else {
+        glViewport(0, 0, windowW, windowH);
+    }
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     // We draw in game-space coordinates (0,0) at top-left, (gameW,gameH)
-    // at bottom-right. The renderbuffer is sized to the physical screen
-    // (e.g. 320x480 on iPod Touch 2G); ortho stretches the game's
-    // virtual canvas to fill it.
-    if (gameW <= 0) gameW = windowW;
-    if (gameH <= 0) gameH = windowH;
+    // at bottom-right. With the offscreen FBO path this projects into
+    // a buffer of exactly the game's native resolution — every sprite
+    // and glyph lands on an integer-aligned pixel grid, eliminating
+    // the per-quad sub-pixel banding that the direct 480x320 path
+    // produced on PowerVR MBX Lite.
     glOrthof(0.0f, (GLfloat) gameW, (GLfloat) gameH, 0.0f, -1.0f, 1.0f);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
 
 static void gles1_endFrame(Renderer* r) {
-    (void) r;
-    // The EAGLContext owner (UIView on iOS) is responsible for
-    // presenting the renderbuffer. Just flush here.
+    GLES1Renderer* g = asGLES1(r);
+    if (g->offscreenFbo == 0) {
+        // Direct-render fallback: nothing to blit, just flush.
+        glFlush();
+        return;
+    }
+
+    // Switch back to the visible framebuffer the iOS layer provided
+    // and draw a single full-screen quad sampling the offscreen
+    // texture. GL_LINEAR + a single sampling pass gives a clean
+    // downscale even at non-integer ratios (e.g. 640x480 -> 480x320).
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, (GLuint) g->savedVisibleFbo);
+    glViewport(0, 0, g->lastWindowW, g->lastWindowH);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrthof(0.0f, (GLfloat) g->lastWindowW, (GLfloat) g->lastWindowH, 0.0f, -1.0f, 1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Letterbox: preserve aspect ratio of the game viewport inside
+    // the visible window. On a 4:3 game with a 3:2 screen, this
+    // leaves thin black bars on the sides; on a wider screen it
+    // would put them top/bottom.
+    float winW = (float) g->lastWindowW;
+    float winH = (float) g->lastWindowH;
+    float dstW = winW, dstH = winH;
+    if (g->offscreenVpW > 0 && g->offscreenVpH > 0) {
+        float gameAspect = (float) g->offscreenVpW / (float) g->offscreenVpH;
+        float winAspect  = winW / winH;
+        if (winAspect > gameAspect) {
+            dstW = winH * gameAspect;
+        } else if (winAspect < gameAspect) {
+            dstH = winW / gameAspect;
+        }
+    }
+    float dstX = (winW - dstW) * 0.5f;
+    float dstY = (winH - dstH) * 0.5f;
+
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = (float) g->offscreenVpW / (float) g->offscreenTexW;
+    float v1 = (float) g->offscreenVpH / (float) g->offscreenTexH;
+
+    GLfloat verts[8] = {
+        dstX,        dstY,
+        dstX + dstW, dstY,
+        dstX,        dstY + dstH,
+        dstX + dstW, dstY + dstH,
+    };
+    GLfloat uvs[8] = {
+        u0, v0,
+        u1, v0,
+        u0, v1,
+        u1, v1,
+    };
+
+    // Save + override blend state for the blit pass (we want a plain
+    // opaque copy of the offscreen colour buffer, not alpha blending).
+    GLboolean wasBlend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, g->offscreenTex);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, verts);
+    glTexCoordPointer(2, GL_FLOAT, 0, uvs);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisable(GL_TEXTURE_2D);
+    if (wasBlend) glEnable(GL_BLEND);
+
+    if ((g->frameTick % 120) == 1) {
+        GLenum err = glGetError();
+        fprintf(stderr, "[gles1] blit: win=%dx%d dst=%.0fx%.0f@%.0f,%.0f uv=%.3fx%.3f err=0x%04x\n",
+                g->lastWindowW, g->lastWindowH, dstW, dstH, dstX, dstY, u1, v1, (unsigned) err);
+    }
+
     glFlush();
 }
 
