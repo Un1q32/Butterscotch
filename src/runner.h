@@ -43,14 +43,16 @@
 #define DRAW_POST      77
 
 // ===[ Other Sub-event Constants ]===
-#define OTHER_OUTSIDE_ROOM  0
-#define OTHER_GAME_START    2
-#define OTHER_ROOM_START    4
-#define OTHER_ROOM_END      5
-#define OTHER_ANIMATION_END 7
-#define OTHER_END_OF_PATH   8
-#define OTHER_USER0         10
-#define OTHER_ASYNC_SYSTEM  75
+#define OTHER_OUTSIDE_ROOM   0
+#define OTHER_GAME_START     2
+#define OTHER_ROOM_START     4
+#define OTHER_ROOM_END       5
+#define OTHER_NO_MORE_LIVES  6
+#define OTHER_ANIMATION_END  7
+#define OTHER_END_OF_PATH    8
+#define OTHER_NO_MORE_HEALTH 9
+#define OTHER_USER0          10
+#define OTHER_ASYNC_SYSTEM   75
 
 #define MAX_VIEWS 8
 #define MAX_SURFACES 16
@@ -433,6 +435,11 @@ struct Runner {
     // Async map ID
     int32_t asyncLoadMapId;
 
+    // Legacy GMS 1.x globals
+    GMLReal score;
+    GMLReal lives;
+    GMLReal health;
+
     // Used by the "os_type" built-in
     YoYoOperatingSystem osType;
 
@@ -456,6 +463,12 @@ void Runner_handlePendingRoomChange(Runner* runner);
 void Runner_executeEvent(Runner* runner, Instance* instance, int32_t eventType, int32_t eventSubtype);
 void Runner_executeEventFromObject(Runner* runner, Instance* instance, int32_t startObjectIndex, int32_t eventType, int32_t eventSubtype);
 void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventSubtype);
+// Sets the "lives" global variable.
+// Used to fire events when the values are equal to or lesser than 0.
+void Runner_setLives(Runner* runner, GMLReal value);
+// Sets the "health" global variable.
+// Used to fire events when the values are equal to or lesser than 0.
+void Runner_setHealth(Runner* runner, GMLReal value);
 void Runner_draw(Runner* runner);
 void Runner_drawGUI(Runner* runner, int32_t windowW, int32_t windowH, int32_t targetW, int32_t targetH);
 void Runner_drawPre(Runner* runner, int32_t windowW, int32_t windowH);
@@ -498,6 +511,8 @@ bool Runner_surfaceSetTarget(Runner* runner, int32_t surfaceID);
 // Pops the top of the surface stack and bind whatever is below (or the main framebuffer when the stack is empty).
 // Returns false when there was nothing to pop.
 bool Runner_surfaceResetTarget(Runner* runner);
+// Returns the surfaceID at the top of the surface stack, or -1 when no surface is bound (the application surface is active).
+int32_t Runner_surfaceGetTarget(Runner* runner);
 
 void Runner_dumpState(Runner* runner);
 char* Runner_dumpStateJson(Runner* runner);

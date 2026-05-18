@@ -158,8 +158,12 @@ typedef struct {
     Extension* extensions;
 } Extn;
 
+// The "present" field can be false for deleted/null pointer-table slots
+// This will MOST LIKELY ALWAYS be true on pre-2024.11+ games, but CAN be false in 2022.11+ games if the asset was deleted
+
 // ===[ SOND - Sounds ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t flags;
     const char* type;
@@ -178,6 +182,7 @@ typedef struct {
 
 // ===[ AGRP - Audio Groups ]===
 typedef struct {
+    bool present;
     const char* name;
 } AudioGroup;
 
@@ -188,6 +193,7 @@ typedef struct {
 
 // ===[ SPRT - Sprites ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t width;
     uint32_t height;
@@ -228,6 +234,7 @@ typedef struct {
 
 // ===[ BGND - Backgrounds ]===
 typedef struct {
+    bool present;
     const char* name;
     bool transparent;
     bool smooth;
@@ -274,6 +281,7 @@ typedef struct {
 } PathPositionResult;
 
 typedef struct {
+    bool present;
     const char* name;
     bool isSmooth;
     bool isClosed;
@@ -292,6 +300,7 @@ typedef struct {
 
 // ===[ SCPT - Scripts ]===
 typedef struct {
+    bool present;
     const char* name;
     int32_t codeId;
 } Script;
@@ -360,6 +369,7 @@ typedef struct {
 } FontGlyph;
 
 typedef struct {
+    bool present;
     const char* name;
     const char* displayName;
     uint32_t emSize;
@@ -432,6 +442,7 @@ typedef struct {
 } TimelineMoment;
 
 typedef struct {
+    bool present;
     const char* name;
     uint32_t momentCount;
     TimelineMoment* moments;
@@ -462,6 +473,7 @@ typedef struct {
 } PhysicsVertex;
 
 typedef struct {
+    bool present;
     const char* name;
     int32_t spriteId;
     bool visible;
@@ -629,6 +641,7 @@ typedef struct {
 } RoomLayer;
 
 typedef struct {
+    bool present;
     // Scalar header: always valid regardless of payloadLoaded.
     const char* name;
     const char* caption;
@@ -675,8 +688,49 @@ typedef struct {
     Room* rooms;
 } RoomChunk;
 
+// ===[ ACRV - Animation Curves ]===
+typedef enum {
+    ANIMCURVE_TYPE_LINEAR = 0,
+    ANIMCURVE_TYPE_SMOOTH = 1,
+    ANIMCURVE_TYPE_BEZIER = 2,
+} AnimCurveType;
+
+typedef struct {
+    float x;        // position along curve, normally in [0, 1]
+    float value;    // output value at this point
+    // Only meaningful when the channel uses ANIMCURVE_TYPE_BEZIER (GMS 2.3.1+ format).
+    float bezierX0, bezierY0, bezierX1, bezierY1;
+} AnimCurvePoint;
+
+typedef struct {
+    const char* name;
+    AnimCurveType curveType;
+    uint32_t iterations;
+    uint32_t pointCount;
+    AnimCurvePoint* points;
+    int32_t globalId;   // index into Acrv.allChannels
+} AnimCurveChannel;
+
+typedef struct {
+    bool present;
+    const char* name;
+    uint32_t graphType;
+    uint32_t channelCount;
+    AnimCurveChannel* channels;
+} AnimCurve;
+
+typedef struct {
+    uint32_t count;
+    AnimCurve* curves;
+    // Flat global table of channel pointers, used as the handle returned by animcurve_get_channel.
+    // animcurve_channel_evaluate uses this to resolve the int handle back to a channel.
+    uint32_t allChannelsCount;
+    AnimCurveChannel** allChannels;
+} Acrv;
+
 // ===[ TPAG - Texture Page Items ]===
 typedef struct {
+    bool present;
     uint16_t sourceX;
     uint16_t sourceY;
     uint16_t sourceWidth;
@@ -697,6 +751,7 @@ typedef struct {
 
 // ===[ CODE - Code Entries ]===
 typedef struct {
+    bool present;
     const char* name;
     uint32_t length;
     uint16_t localsCount;
@@ -763,6 +818,7 @@ typedef struct {
 
 // ===[ TXTR - Embedded Textures ]===
 typedef struct {
+    bool present;
     uint32_t scaled;
     uint32_t generatedMips; // GMS 2.0.6+: number of generated mipmaps (0 for GMS 1.x)
     uint32_t textureBlockSize; // GMS 2022.3+: size of the texture block (0 for older versions)
@@ -781,6 +837,7 @@ typedef struct {
 
 // ===[ AUDO - Embedded Audio ]===
 typedef struct {
+    bool present;
     uint32_t dataOffset; // absolute file offset to audio data
     uint32_t dataSize;   // length of audio data
     uint8_t* data;       // owned copy of audio data
@@ -828,6 +885,7 @@ struct DataWin {
     Objt objt;
     RoomChunk room;
     // DAFL is empty, no field needed
+    Acrv acrv;
     Tpag tpag;
     Code code;
     Vari vari;

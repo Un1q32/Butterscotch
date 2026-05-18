@@ -12,10 +12,10 @@ DEFINES := -DENABLE_VM_GML_PROFILER \
 		   -DENABLE_VM_OPCODE_PROFILER \
 		   -DENABLE_VM_STUB_LOGS \
 		   -DENABLE_VM_TRACING
-INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/stb/vorbis -Ivendor/md5 -Ivendor/glad/include
+INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/stb/vorbis -Ivendor/md5
 
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
-SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c vendor/glad/src/glad.c
+SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) vendor/md5/md5.c
 
 PLATFORM := glfw
 AUDIO_BACKEND := miniaudio
@@ -29,6 +29,10 @@ ifdef BUTTERSCOTCH_COMMIT_HASH
 DEFINES += -DBUTTERSCOTCH_COMMIT_HASH=\"$(BUTTERSCOTCH_COMMIT_HASH)\"
 else
 DEFINES += -DBUTTERSCOTCH_COMMIT_HASH=\"unknown\"
+endif
+
+ifndef DISABLE_BC14
+DEFINES += -DENABLE_BC14
 endif
 
 ifndef DISABLE_BC16
@@ -53,12 +57,14 @@ ifndef DISABLE_LEGACY_GL
 ENABLE_GL := 1
 endif
 ifndef DISABLE_MODERN_GL
+ifneq ($(PLATFORM),sdl)
 ENABLE_GL := 1
+endif
 endif
 
 ifdef ENABLE_GL
-INCLUDES += -Isrc/gl_common -Isrc/gl
-SRCS += $(wildcard src/gl_common/*.c)
+INCLUDES += -Isrc/gl_common -Isrc/gl -Ivendor/glad/include
+SRCS += $(wildcard src/gl_common/*.c) vendor/glad/src/glad.c
 HEADERS += $(wildcard src/gl_common/*.h)
 endif
 
@@ -79,15 +85,23 @@ HEADERS += $(wildcard src/gl/*.h)
 endif
 endif
 
+ifdef DISABLE_BC14
 ifdef DISABLE_BC16
 ifdef DISABLE_BC17
 $(error must enable at least 1 bytecode version)
 endif
 endif
+endif
 
-ifdef DISABLE_MODERN_GL
 ifdef DISABLE_LEGACY_GL
-$(error must enable at least 1 OpenGL renderer)
+ifeq ($(PLATFORM),sdl)
+ifdef DISABLE_SW_RENDERER
+$(error must enable at least 1 renderer)
+endif
+else
+ifdef DISABLE_MODERN_GL
+$(error must enable at least 1 renderer)
+endif
 endif
 endif
 

@@ -2,6 +2,7 @@
 
 #include "GL/gl.h"
 #include "ps3gl.h"
+#include <GL/glext.h>
 #include <stdint.h>
 // TODO: Move the rsxutil functionality into ps3glInit
 #include "rsxutil.h"
@@ -16,7 +17,7 @@
 
 static struct ps3gl_opengl_state _opengl_state;
 
-static inline struct ps3gl_texture* activeBoundTex(void)
+static inline struct ps3gl_texture* _ps3gl_active_bound_tex(void)
 {
 	return _opengl_state.bound_textures[_opengl_state.active_texture_unit];
 }
@@ -54,8 +55,10 @@ pack_zeta(bool use_stencil, double depth, unsigned stencil)
 }
 
 
+void _setup_draw_env(void);
 void glClear( GLbitfield mask )
 {
+	_setup_draw_env();
 	uint32_t rsx_mask = 0;
 
 	if(mask == (GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT))
@@ -139,8 +142,10 @@ void glPolygonMode( GLenum face, GLenum mode )
 
 void glScissor( GLint x, GLint y, GLsizei width, GLsizei height)
 {
+	GLint targetHeight = (_opengl_state.bound_draw_framebuffer != NULL) ? (GLint) _opengl_state.bound_draw_framebuffer->gcmSurface.height : (GLint) display_height;
+
 	_opengl_state.scissor.x = x;
-	_opengl_state.scissor.y = y;
+	_opengl_state.scissor.y = targetHeight - y - height;
 	_opengl_state.scissor.w = width;
 	_opengl_state.scissor.h = height;
 }
@@ -351,16 +356,18 @@ void glFrustum( GLdouble left, GLdouble right,
 
 void glViewport( GLint x, GLint y, GLsizei width, GLsizei height )
 {
+	// Y is flipped relative to the currently bound draw target. When an FBO is bound, the target's height is the FBO's surface height, not the screen.
+	GLint targetHeight = (_opengl_state.bound_draw_framebuffer != NULL) ? (GLint) _opengl_state.bound_draw_framebuffer->gcmSurface.height : (GLint) display_height;
 
 	_opengl_state.viewport.x = x;
-	_opengl_state.viewport.y = display_height - y - height;
+	_opengl_state.viewport.y = targetHeight - y - height;
 	_opengl_state.viewport.w = width;
 	_opengl_state.viewport.h = height;
 
 	if(_opengl_state.scissor.h == 0)
 	{
 		_opengl_state.scissor.x = x;
-		_opengl_state.scissor.y = y; // TODO: Check if this has to be display_height - y - height;
+		_opengl_state.scissor.y = targetHeight - y - height; // TODO: Check if this has to be targetHeight - y - height;
 		_opengl_state.scissor.w = width;
 		_opengl_state.scissor.h = height;
 	}
@@ -370,7 +377,7 @@ void glViewport( GLint x, GLint y, GLsizei width, GLsizei height )
 	_opengl_state.viewport.scale[2] = (_opengl_state.depth_far - _opengl_state.depth_near)*0.5f;
 	_opengl_state.viewport.scale[3] = 0.0f;
 	_opengl_state.viewport.offset[0] = x + width*0.5f;
-	_opengl_state.viewport.offset[1] = y + height*0.5f;
+	_opengl_state.viewport.offset[1] = (targetHeight - y - height) + height*0.5f;
 	_opengl_state.viewport.offset[2] = (_opengl_state.depth_far + _opengl_state.depth_near)*0.5f;
 	_opengl_state.viewport.offset[3] = 0.0f;
 }
@@ -514,7 +521,6 @@ void glTranslated( GLdouble x, GLdouble y, GLdouble z )
  * Drawing Functions
  */
  
-void _setup_draw_env(void);
 void glBegin(GLenum mode)
 {
 	_setup_draw_env();
@@ -669,49 +675,49 @@ void glTexParameteri( GLenum target, GLenum pname, GLint param )
 				switch(param)
 				{
 					case GL_NEAREST:
-						activeBoundTex()->minFilter = GCM_TEXTURE_NEAREST;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_NEAREST;
 						break;
 					case GL_LINEAR:
-						activeBoundTex()->minFilter = GCM_TEXTURE_LINEAR;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_LINEAR;
 						break;
 					case GL_NEAREST_MIPMAP_NEAREST:
-						activeBoundTex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_NEAREST;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_NEAREST;
 						break;
 					case GL_LINEAR_MIPMAP_NEAREST:
-						activeBoundTex()->minFilter = GCM_TEXTURE_LINEAR_MIPMAP_NEAREST;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_LINEAR_MIPMAP_NEAREST;
 						break;
 					case GL_NEAREST_MIPMAP_LINEAR:
-						activeBoundTex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_LINEAR;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_LINEAR;
 						break;
 					case GL_LINEAR_MIPMAP_LINEAR:
-						activeBoundTex()->minFilter = GCM_TEXTURE_LINEAR_MIPMAP_LINEAR;
+						_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_LINEAR_MIPMAP_LINEAR;
 						break;
 					
 				}
 				break;
 		case GL_TEXTURE_MAG_FILTER:
 			if(param == GL_NEAREST) 
-				activeBoundTex()->magFilter = GCM_TEXTURE_NEAREST;
+				_ps3gl_active_bound_tex()->magFilter = GCM_TEXTURE_NEAREST;
 			if(param == GL_LINEAR) 
-				activeBoundTex()->magFilter = GCM_TEXTURE_LINEAR;
+				_ps3gl_active_bound_tex()->magFilter = GCM_TEXTURE_LINEAR;
 			break;
 		case GL_TEXTURE_WRAP_S:
 			switch(param)
 			{
 				case GL_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapS = GCM_TEXTURE_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_CLAMP_TO_EDGE;
 					break;
 				case GL_CLAMP_TO_BORDER:
-					activeBoundTex()->wrapS = GCM_TEXTURE_CLAMP_TO_BORDER;
+					_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_CLAMP_TO_BORDER;
 					break;
 				case GL_MIRRORED_REPEAT:
-					activeBoundTex()->wrapS = GCM_TEXTURE_MIRRORED_REPEAT;
+					_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_MIRRORED_REPEAT;
 					break;
 				case GL_REPEAT:
-					activeBoundTex()->wrapS = GCM_TEXTURE_REPEAT;
+					_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_REPEAT;
 					break;
 				case GL_MIRROR_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapS = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
 					break;
 				}
 			break;
@@ -719,19 +725,19 @@ void glTexParameteri( GLenum target, GLenum pname, GLint param )
 			switch(param)
 			{
 				case GL_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapT = GCM_TEXTURE_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_CLAMP_TO_EDGE;
 					break;
 				case GL_CLAMP_TO_BORDER:
-					activeBoundTex()->wrapT = GCM_TEXTURE_CLAMP_TO_BORDER;
+					_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_CLAMP_TO_BORDER;
 					break;
 				case GL_MIRRORED_REPEAT:
-					activeBoundTex()->wrapT = GCM_TEXTURE_MIRRORED_REPEAT;
+					_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_MIRRORED_REPEAT;
 					break;
 				case GL_REPEAT:
-					activeBoundTex()->wrapT = GCM_TEXTURE_REPEAT;
+					_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_REPEAT;
 					break;
 				case GL_MIRROR_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapT = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
 					break;
 			}
 			break;
@@ -739,19 +745,19 @@ void glTexParameteri( GLenum target, GLenum pname, GLint param )
 			switch(param)
 			{
 				case GL_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapR = GCM_TEXTURE_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_CLAMP_TO_EDGE;
 					break;
 				case GL_CLAMP_TO_BORDER:
-					activeBoundTex()->wrapR = GCM_TEXTURE_CLAMP_TO_BORDER;
+					_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_CLAMP_TO_BORDER;
 					break;
 				case GL_MIRRORED_REPEAT:
-					activeBoundTex()->wrapR = GCM_TEXTURE_MIRRORED_REPEAT;
+					_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_MIRRORED_REPEAT;
 					break;
 				case GL_REPEAT:
-					activeBoundTex()->wrapR = GCM_TEXTURE_REPEAT;
+					_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_REPEAT;
 					break;
 				case GL_MIRROR_CLAMP_TO_EDGE:
-					activeBoundTex()->wrapR = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
+					_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_MIRROR_CLAMP_TO_EDGE;
 					break;
 			}
 			break;
@@ -772,12 +778,12 @@ void glTexImage2D( GLenum target, GLint level,
                    GLint border, GLenum format, GLenum type,
                    const GLvoid *pixels )
 {
-	if (activeBoundTex() == NULL)
+	if (_ps3gl_active_bound_tex() == NULL)
 		return;
 
-	if(pixels == NULL) return;
+	//if(pixels == NULL) return;
 
-	struct ps3gl_texture *currentTexture = activeBoundTex();
+	struct ps3gl_texture *currentTexture = _ps3gl_active_bound_tex();
 	currentTexture->gcmTexture.width = width;
 	currentTexture->gcmTexture.height = height;
 	currentTexture->gcmTexture.depth = 1;
@@ -787,14 +793,14 @@ void glTexImage2D( GLenum target, GLint level,
 	switch(target)
 		{
 			case GL_TEXTURE_1D:
-				activeBoundTex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_1D;
+				_ps3gl_active_bound_tex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_1D;
 				break;
 			default:
 			case GL_TEXTURE_2D:
-				activeBoundTex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_2D;
+				_ps3gl_active_bound_tex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_2D;
 				break;
 			case GL_TEXTURE_3D:
-				activeBoundTex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_3D;
+				_ps3gl_active_bound_tex()->gcmTexture.dimension = GCM_TEXTURE_DIMS_3D;
 				break;
 		}
 
@@ -815,17 +821,9 @@ void glTexImage2D( GLenum target, GLint level,
 	{
 		case GL_RGB:
 		{
-			if (currentTexture->data != NULL)
-				rsxFree(currentTexture->data);
+			if (currentTexture->data != NULL) rsxFree(currentTexture->data);
 			const uint8_t *src = (const uint8_t*)pixels;
 			const int textureSize = width*height*4;
-			currentTexture->data = (uint8_t*)rsxMemalign(128, textureSize);
-			for(size_t i=0; i<width*height*4; i+=4) {
-				((uint8_t*)currentTexture->data)[i + 0] = 0xFF;   // A
-				((uint8_t*)currentTexture->data)[i + 1] = *src++; // R
-				((uint8_t*)currentTexture->data)[i + 2] = *src++; // G
-				((uint8_t*)currentTexture->data)[i + 3] = *src++; // B
-			}
 			rsxAddressToOffset(currentTexture->data, &currentTexture->gcmTexture.offset);
 			currentTexture->gcmTexture.format = GCM_TEXTURE_FORMAT_A8R8G8B8|GCM_TEXTURE_FORMAT_LIN;
 			currentTexture->gcmTexture.remap  = (
@@ -838,15 +836,22 @@ void glTexImage2D( GLenum target, GLint level,
 						   (GCM_TEXTURE_REMAP_COLOR_G << GCM_TEXTURE_REMAP_COLOR_G_SHIFT) |
 						   (GCM_TEXTURE_REMAP_COLOR_B << GCM_TEXTURE_REMAP_COLOR_B_SHIFT)
 			);
+
+			if(pixels) {
+				currentTexture->data = (uint8_t*)rsxMemalign(128, textureSize);
+				for(size_t i=0; i<width*height*4; i+=4) {
+					((uint8_t*)currentTexture->data)[i + 0] = 0xFF;   // A
+					((uint8_t*)currentTexture->data)[i + 1] = *src++; // R
+					((uint8_t*)currentTexture->data)[i + 2] = *src++; // G
+					((uint8_t*)currentTexture->data)[i + 3] = *src++; // B
+				}
+			}
 			break;
 		}
 		case GL_RGBA:
 		{
-			if (currentTexture->data != NULL)
-				rsxFree(currentTexture->data);
+			if (currentTexture->data != NULL) rsxFree(currentTexture->data);
 			currentTexture->data = (uint8_t*)rsxMemalign(128, width*height*4);
-			if(pixels)
-				memcpy((void*)currentTexture->data, pixels, width*height*4);
 			rsxAddressToOffset(currentTexture->data, &currentTexture->gcmTexture.offset);
 			currentTexture->gcmTexture.format = GCM_TEXTURE_FORMAT_A8R8G8B8|GCM_TEXTURE_FORMAT_LIN;
 			currentTexture->gcmTexture.remap  = (
@@ -859,6 +864,9 @@ void glTexImage2D( GLenum target, GLint level,
 						   (GCM_TEXTURE_REMAP_COLOR_G << GCM_TEXTURE_REMAP_COLOR_B_SHIFT) |
 						   (GCM_TEXTURE_REMAP_COLOR_B << GCM_TEXTURE_REMAP_COLOR_A_SHIFT)
 			);
+			if(pixels) {
+				memcpy((void*)currentTexture->data, pixels, width*height*4);
+			}
 			break;
 		}
 		case GL_RED:
@@ -903,10 +911,10 @@ void glTexSubImage2D(
 )
 {
 	
-	if (activeBoundTex() == NULL)
+	if (_ps3gl_active_bound_tex() == NULL)
 		return;
 
-	struct ps3gl_texture *currentTexture = activeBoundTex();
+	struct ps3gl_texture *currentTexture = _ps3gl_active_bound_tex();
 	if(currentTexture->target != target) return;
 
 	uint8_t *transferBuffer = NULL;
@@ -966,6 +974,7 @@ void glGenTextures( GLsizei n, GLuint *textures )
             _opengl_state.textures[id].wrapS = GCM_TEXTURE_REPEAT;
             _opengl_state.textures[id].wrapT = GCM_TEXTURE_REPEAT;
             _opengl_state.textures[id].wrapR = GCM_TEXTURE_REPEAT;
+			_opengl_state.textures[id].fboTex = false;
 		}
 	}
 }
@@ -978,6 +987,236 @@ void glDeleteTextures( GLsizei n, const GLuint *textures)
 			rsxFree(_opengl_state.textures[textures[i]].data);
 		_opengl_state.textures[textures[i]].data = NULL;
 		_opengl_state.textures[textures[i]].allocated = false;
+	}
+}
+
+
+void glGenFramebuffers( GLsizei n, GLuint *framebuffers )
+{
+	if(framebuffers == NULL || n == 0)
+		return;
+
+	for(size_t i = 0; i < n; i++)
+	{
+		GLuint id = _opengl_state.nextFramebufferID++;
+		framebuffers[i] = id;
+		if(id < MAX_FRAMEBUFFERS)
+		{
+			_opengl_state.framebuffers[id].id = id;
+			_opengl_state.framebuffers[id].allocated = true;
+			_opengl_state.framebuffers[id].gcmSurface.colorFormat		= GCM_SURFACE_A8R8G8B8;
+			_opengl_state.framebuffers[id].gcmSurface.colorTarget		= GCM_SURFACE_TARGET_0;
+			_opengl_state.framebuffers[id].gcmSurface.colorLocation[0]	= GCM_LOCATION_RSX;
+			_opengl_state.framebuffers[id].gcmSurface.colorOffset[0]	= 0;
+			_opengl_state.framebuffers[id].gcmSurface.colorPitch[0]	= 64;
+
+			_opengl_state.framebuffers[id].gcmSurface.colorLocation[1]	= GCM_LOCATION_RSX;
+			_opengl_state.framebuffers[id].gcmSurface.colorLocation[2]	= GCM_LOCATION_RSX;
+			_opengl_state.framebuffers[id].gcmSurface.colorLocation[3]	= GCM_LOCATION_RSX;
+			_opengl_state.framebuffers[id].gcmSurface.colorOffset[1]	= 0;
+			_opengl_state.framebuffers[id].gcmSurface.colorOffset[2]	= 0;
+			_opengl_state.framebuffers[id].gcmSurface.colorOffset[3]	= 0;
+			_opengl_state.framebuffers[id].gcmSurface.colorPitch[1]	= 64;
+			_opengl_state.framebuffers[id].gcmSurface.colorPitch[2]	= 64;
+			_opengl_state.framebuffers[id].gcmSurface.colorPitch[3]	= 64;
+
+			_opengl_state.framebuffers[id].gcmSurface.depthFormat	= GCM_SURFACE_ZETA_Z24S8;
+			_opengl_state.framebuffers[id].gcmSurface.depthLocation	= GCM_LOCATION_RSX;
+			_opengl_state.framebuffers[id].gcmSurface.depthOffset	= 0;
+			_opengl_state.framebuffers[id].gcmSurface.depthPitch	= 64;
+			_opengl_state.framebuffers[id].depthData				= NULL;
+			_opengl_state.framebuffers[id].depthSize				= 0;
+
+			_opengl_state.framebuffers[id].gcmSurface.type			= GCM_SURFACE_TYPE_LINEAR;
+			_opengl_state.framebuffers[id].gcmSurface.antiAlias		= GCM_SURFACE_CENTER_1;
+
+			_opengl_state.framebuffers[id].gcmSurface.width			= 0;
+			_opengl_state.framebuffers[id].gcmSurface.height		= 0;
+			_opengl_state.framebuffers[id].gcmSurface.x				= 0;
+			_opengl_state.framebuffers[id].gcmSurface.y				= 0;
+		}
+	}
+}
+
+void glDeleteFramebuffers( GLsizei n, const GLuint *framebuffers)
+{
+	for(size_t i = 0; n > i; i++)
+	{
+		struct ps3gl_framebuffer* fb = &_opengl_state.framebuffers[framebuffers[i]];
+		if (fb->depthData != NULL) {
+			rsxFree(fb->depthData);
+			fb->depthData = NULL;
+			fb->depthSize = 0;
+		}
+		fb->allocated = false;
+	}
+}
+
+void glBindFramebuffer( GLenum target, GLuint framebuffer )
+{
+	if(target == GL_FRAMEBUFFER) _opengl_state.bound_read_framebuffer =_opengl_state.bound_draw_framebuffer = (framebuffer != 0) ? &_opengl_state.framebuffers[framebuffer] : NULL;
+	if(target == GL_READ_FRAMEBUFFER) _opengl_state.bound_read_framebuffer = (framebuffer != 0) ? &_opengl_state.framebuffers[framebuffer] : NULL;
+	if(target == GL_DRAW_FRAMEBUFFER) _opengl_state.bound_draw_framebuffer = (framebuffer != 0) ? &_opengl_state.framebuffers[framebuffer] : NULL;
+}
+
+GLAPI void APIENTRY glBlitFramebuffer (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter)
+{
+  gcmTransferScale scale;
+  gcmTransferSurface surface;
+
+  GLint dstW = dstX1-dstX0;
+  GLint dstH = dstY1-dstY0;
+
+  GLint srcW = srcX1-srcX0;
+  GLint srcH = srcY1-srcY0;
+
+  scale.conversion = GCM_TRANSFER_CONVERSION_TRUNCATE;
+  scale.format = GCM_TRANSFER_SCALE_FORMAT_A8R8G8B8;
+  scale.origin = GCM_TRANSFER_ORIGIN_CORNER;
+  scale.operation = GCM_TRANSFER_OPERATION_SRCCOPY;
+  scale.interp = GCM_TRANSFER_INTERPOLATOR_NEAREST;
+  scale.clipX = dstX0;
+  scale.clipY = dstY0;
+  scale.clipW = dstW;
+  scale.clipH = dstH;
+  scale.outX = dstX0;
+  scale.outY = dstY0;
+  scale.outW = dstW;
+  scale.outH = dstH;
+  scale.ratioX = (srcW << 20) / dstW;
+  scale.ratioY = (srcH << 20) / dstH;
+  scale.inX = rsxGetFixedUint16(srcX0);
+  scale.inY = rsxGetFixedUint16(srcY0);
+  scale.inW = srcW;
+  scale.inH = srcH;
+  scale.offset = _opengl_state.bound_read_framebuffer != NULL ? 
+				_opengl_state.bound_read_framebuffer->gcmSurface.colorOffset[0] :
+				color_offset[curr_fb^1];
+  scale.pitch = _opengl_state.bound_read_framebuffer != NULL ? 
+				_opengl_state.bound_read_framebuffer->gcmSurface.colorPitch[0] :
+				color_pitch;
+
+  surface.format = GCM_TRANSFER_SURFACE_FORMAT_A8R8G8B8;
+  surface.pitch = _opengl_state.bound_draw_framebuffer != NULL ? 
+				_opengl_state.bound_draw_framebuffer->gcmSurface.colorPitch[0] :
+				color_pitch;
+  surface.offset = _opengl_state.bound_draw_framebuffer != NULL ?
+				_opengl_state.bound_draw_framebuffer->gcmSurface.colorOffset[0] :
+				color_offset[curr_fb];
+
+  rsxSetTransferScaleMode(context, GCM_TRANSFER_LOCAL_TO_LOCAL, GCM_TRANSFER_SURFACE);
+  rsxSetTransferScaleSurface(context, &scale, &surface);
+}
+
+GLenum glCheckFramebufferStatus (GLenum target) {
+	return GL_FRAMEBUFFER_COMPLETE;
+}
+
+// TODO: Assumes attachment = GL_COLOR_ATTACHMENT0, textarget = GL_TEXTURE_2D and level = 0;
+void glFramebufferTexture2D (GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+	struct ps3gl_texture *tx = &_opengl_state.textures[texture];
+	struct ps3gl_framebuffer* dstFB;
+	if(target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER)
+		dstFB = _opengl_state.bound_draw_framebuffer;
+	else if(target == GL_READ_FRAMEBUFFER)
+		dstFB = _opengl_state.bound_read_framebuffer;
+	
+
+	dstFB->fbTexture = tx;
+
+	// If framebuffer don't swap channels
+	tx->gcmTexture.remap  = (
+				   (GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_A_SHIFT) |
+				   (GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_R_SHIFT) |
+				   (GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_G_SHIFT) |
+				   (GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_B_SHIFT) |
+				   (GCM_TEXTURE_REMAP_COLOR_A << GCM_TEXTURE_REMAP_COLOR_A_SHIFT) |
+				   (GCM_TEXTURE_REMAP_COLOR_R << GCM_TEXTURE_REMAP_COLOR_R_SHIFT) |
+				   (GCM_TEXTURE_REMAP_COLOR_G << GCM_TEXTURE_REMAP_COLOR_G_SHIFT) |
+				   (GCM_TEXTURE_REMAP_COLOR_B << GCM_TEXTURE_REMAP_COLOR_B_SHIFT)
+	);
+
+	gcmSurface* sf = &dstFB->gcmSurface;
+
+	sf->colorFormat		= GCM_SURFACE_A8R8G8B8;
+	sf->colorTarget		= GCM_SURFACE_TARGET_0;
+	sf->colorLocation[0]	= GCM_LOCATION_RSX;
+	sf->colorOffset[0]	= tx->gcmTexture.offset;
+	sf->colorPitch[0]	= tx->gcmTexture.pitch;
+	sf->width			= tx->gcmTexture.width;
+	sf->height			= tx->gcmTexture.height;
+
+	// YES WE NEED A REAL DEPTH BUFFER, IF NOT RSX (OR RPCS3?) WILL DROP ANY WRITES BEYOND ~1280X1280
+	// WE ALSO CAN'T SET THE DEPTH FORMAT TO 0 (RPCS3 DOES NOT LIKE THIS)
+	{
+		uint32_t depthPitch = ((tx->gcmTexture.width * 2u) + 63u) & ~63u;
+		uint32_t depthSize  = depthPitch * tx->gcmTexture.height;
+		if (dstFB->depthData != NULL && dstFB->depthSize < depthSize) {
+			rsxFree(dstFB->depthData);
+			dstFB->depthData = NULL;
+			dstFB->depthSize = 0;
+		}
+		if (dstFB->depthData == NULL) {
+			dstFB->depthData = rsxMemalign(128, depthSize);
+			dstFB->depthSize = depthSize;
+		}
+		uint32_t depthOff = 0;
+		rsxAddressToOffset(dstFB->depthData, &depthOff);
+		sf->depthFormat   = GCM_SURFACE_ZETA_Z16;
+		sf->depthLocation = GCM_LOCATION_RSX;
+		sf->depthOffset   = depthOff;
+		sf->depthPitch    = depthPitch;
+	}
+
+
+	// This is wrong but i dont think i can skip a depth attachment
+	/*
+	sf.depthFormat		= GCM_SURFACE_ZETA_Z24S8;
+	sf.depthLocation	= GCM_LOCATION_RSX;
+	sf.depthOffset		= depth_offset;
+	sf.depthPitch		= depth_pitch;
+	*/
+}
+
+void glGetIntegerv( GLenum pname, GLint *params )
+{
+	if(pname == GL_FRAMEBUFFER_BINDING) *params = _opengl_state.bound_draw_framebuffer ? _opengl_state.bound_draw_framebuffer->id : 0;
+	if(pname == GL_PACK_ALIGNMENT) *params = 1;
+}
+
+void glPixelStorei( GLenum pname, GLint param ) {}
+
+void glReadPixels( GLint x, GLint y,
+                                    GLsizei width, GLsizei height,
+                                    GLenum format, GLenum type,
+                                    GLvoid *pixels )
+{
+	void* data = (_opengl_state.bound_read_framebuffer == NULL) ?
+	(void*)color_buffer[curr_fb^1] :
+	(void*)_opengl_state.bound_read_framebuffer->fbTexture->data;
+
+    // Ensure that the draw calls were executed
+	if(format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+		rsxFinish(context, 1);
+		waitFinish();
+		const uint8_t* src = (const uint8_t*) data;
+		size_t srcRowBytes = width*4;
+		size_t dstRowBytes = (size_t) width * 4;
+		for(size_t row = 0; row < height; row++) {
+			const uint8_t* srcLine = src + ((size_t) y + (height - row)) * srcRowBytes + (size_t) (x * 4);
+			uint8_t* dstLine = pixels + (size_t) row * dstRowBytes;
+			for(size_t px = 0; px < width; px++) {
+				// Swizzle from ARGB to RGBA
+				uint8_t a = srcLine[px * 4 + 0];
+				uint8_t r = srcLine[px * 4 + 1];
+				uint8_t g = srcLine[px * 4 + 2];
+				uint8_t b = srcLine[px * 4 + 3];
+				dstLine[px * 4 + 0] = r;
+				dstLine[px * 4 + 1] = g;
+				dstLine[px * 4 + 2] = b;
+				dstLine[px * 4 + 3] = a;
+			}
+		}
 	}
 }
 
@@ -1444,7 +1683,6 @@ void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, cons
 	rsxSetVertexProgramParameter(context, (rsxVertexProgram*)s->blob, u->constHandle, (float*)value);
 }
 
-
 /* PS3GL Functions */
 
 static void _program_exit_callback(void)
@@ -1523,8 +1761,11 @@ void glGetFloatv(GLenum pname, GLfloat *params)
 	}
 }
 
-void _setup_draw_env(void)
-{
+void _setup_draw_env(void) {
+    if(_opengl_state.bound_draw_framebuffer)
+	    rsxSetSurface(context,&_opengl_state.bound_draw_framebuffer->gcmSurface);
+    else setRenderTarget(curr_fb);
+
 	rsxSetShadeModel(context, _opengl_state.shade_model);
 	rsxSetPointSize(context, _opengl_state.point_size);
 
@@ -1748,19 +1989,20 @@ void ps3glInit(void)
 
 	// Textures
 	_opengl_state.nextTextureID = 1;
+	_opengl_state.nextFramebufferID = 1;
 	_opengl_state.active_texture_unit = 0;
 	for (int u = 0; MAX_TEX_UNITS > u; u++) {
 		_opengl_state.bound_textures[u] = &_opengl_state.textures[0];
 		_opengl_state.texture_unit_enabled[u] = false;
 	}
-	activeBoundTex()->id = 0;
-	activeBoundTex()->allocated = true;
-	activeBoundTex()->data = NULL;
-	activeBoundTex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_LINEAR;
-	activeBoundTex()->magFilter = GCM_TEXTURE_LINEAR;
-	activeBoundTex()->wrapS = GCM_TEXTURE_REPEAT;
-	activeBoundTex()->wrapT = GCM_TEXTURE_REPEAT;
-	activeBoundTex()->wrapR = GCM_TEXTURE_REPEAT;
+	_ps3gl_active_bound_tex()->id = 0;
+	_ps3gl_active_bound_tex()->allocated = true;
+	_ps3gl_active_bound_tex()->data = NULL;
+	_ps3gl_active_bound_tex()->minFilter = GCM_TEXTURE_NEAREST_MIPMAP_LINEAR;
+	_ps3gl_active_bound_tex()->magFilter = GCM_TEXTURE_LINEAR;
+	_ps3gl_active_bound_tex()->wrapS = GCM_TEXTURE_REPEAT;
+	_ps3gl_active_bound_tex()->wrapT = GCM_TEXTURE_REPEAT;
+	_ps3gl_active_bound_tex()->wrapR = GCM_TEXTURE_REPEAT;
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
 
