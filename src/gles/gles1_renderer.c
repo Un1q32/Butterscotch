@@ -815,10 +815,19 @@ static void gles1_endFrame(Renderer* r) {
     float dstY = (winH - dstH) * 0.5f;
 
     float u0 = 0.0f;
-    float v0 = 0.0f;
     float u1 = (float) g->offscreenVpW / (float) g->offscreenTexW;
+    float v0 = 0.0f;
     float v1 = (float) g->offscreenVpH / (float) g->offscreenTexH;
 
+    // The FBO was drawn into with glOrthof(0,W,H,0) — i.e. game-Y=0 at
+    // top, which lands at high GL-storage Y in the texture. When we
+    // sample that texture for the on-screen quad, V=0 is the BOTTOM
+    // row of storage (game's Y=H = game-bottom) and V=v1 is the TOP
+    // row of the populated region (game's Y=0 = game-top). The visible
+    // framebuffer ortho is also Y-flipped (top-left origin), so to put
+    // game-top at screen-top we have to map screen-top vertices to
+    // V=v1 and screen-bottom vertices to V=0. Without this swap the
+    // entire image renders upside-down.
     GLfloat verts[8] = {
         dstX,        dstY,
         dstX + dstW, dstY,
@@ -826,28 +835,49 @@ static void gles1_endFrame(Renderer* r) {
         dstX + dstW, dstY + dstH,
     };
     GLfloat uvs[8] = {
-        u0, v0,
-        u1, v0,
         u0, v1,
         u1, v1,
+        u0, v0,
+        u1, v0,
     };
 
     // Save + override blend state for the blit pass (we want a plain
     // opaque copy of the offscreen colour buffer, not alpha blending).
-    GLboolean wasBlend = glIsEnabled(GL_BLEND);
+    // Also defensively disable scissor / depth / alpha tests — the
+    // game's draw code may have left any of these on, which would
+    // clip or discard parts of the blit quad on the way out.
+    GLboolean wasBlend   = glIsEnabled(GL_BLEND);
+    GLboolean wasScissor = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean wasDepth   = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean wasAlpha   = glIsEnabled(GL_ALPHA_TEST);
     glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, g->offscreenTex);
+    // Re-assert the offscreen texture's sampler state: GL_LINEAR for a
+    // soft 640x480 -> 480x320 downscale, GL_CLAMP_TO_EDGE so the unused
+    // POT-padding region (e.g. cols 640..1023, rows 480..511) cannot
+    // bleed into the edge of the displayed image.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
     glVertexPointer(2, GL_FLOAT, 0, verts);
     glTexCoordPointer(2, GL_FLOAT, 0, uvs);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisable(GL_TEXTURE_2D);
-    if (wasBlend) glEnable(GL_BLEND);
+    if (wasBlend)   glEnable(GL_BLEND);
+    if (wasScissor) glEnable(GL_SCISSOR_TEST);
+    if (wasDepth)   glEnable(GL_DEPTH_TEST);
+    if (wasAlpha)   glEnable(GL_ALPHA_TEST);
 
     if ((g->frameTick % 120) == 1) {
         GLenum err = glGetError();
