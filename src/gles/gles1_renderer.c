@@ -503,11 +503,75 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
 // Renderer vtable: frame + view + GUI passes
 // ============================================================================
 
+// Test pattern: draws a coloured grid directly into the visible framebuffer.
+// Bypasses the game projection so we can verify what the GL pipeline really
+// produces. If the resulting screenshot shows ONE pattern, the GL/iOS layer
+// path is good and any 4x tiling is coming from the game itself. If it shows
+// FOUR copies of the pattern, the tiling lives in the GL/iOS layer.
+static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
+
+    glViewport(0, 0, windowW, windowH);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrthof(0.0f, 1.0f, 1.0f, 0.0f, -1.0f, 1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    static const GLfloat verts[8] = {
+        0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f,  1.0f, 1.0f
+    };
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, verts);
+
+    // Four quadrants, each a different colour. Drawn one at a time via
+    // glScissor so the colours don't blend or overdraw.
+    glEnable(GL_SCISSOR_TEST);
+    int32_t halfW = windowW / 2;
+    int32_t halfH = windowH / 2;
+    // GL scissor uses bottom-left origin.
+    // TL = red
+    glScissor(0, halfH, halfW, windowH - halfH);
+    glColor4f(1.0f, 0.0f, 0.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // TR = green
+    glScissor(halfW, halfH, windowW - halfW, windowH - halfH);
+    glColor4f(0.0f, 1.0f, 0.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // BL = blue
+    glScissor(0, 0, halfW, halfH);
+    glColor4f(0.0f, 0.0f, 1.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // BR = yellow
+    glScissor(halfW, 0, windowW - halfW, halfH);
+    glColor4f(1.0f, 1.0f, 0.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_SCISSOR_TEST);
+
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+// Frames over which the diagnostic test pattern overrides the normal game
+// render. After this many frames the renderer reverts to drawing the game.
+// We make this short so the user can quickly see whether the pipeline is OK.
+#define BS_DIAG_PATTERN_FRAMES 180
+
 static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
     GLES1Renderer* g = asGLES1(r);
     g->frameTick++;
     if (gameW <= 0) gameW = windowW;
     if (gameH <= 0) gameH = windowH;
+
+    if (g->frameTick <= 4 || g->frameTick == 60 || g->frameTick == 180) {
+        fprintf(stderr, "[gles1] beginFrame tick=%u game=%dx%d window=%dx%d\n",
+                g->frameTick, gameW, gameH, windowW, windowH);
+    }
 
     glViewport(0, 0, windowW, windowH);
     glMatrixMode(GL_PROJECTION);
@@ -523,15 +587,48 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
 }
 
 static void gles1_endFrame(Renderer* r) {
-    (void) r;
+    GLES1Renderer* g = asGLES1(r);
+    // First N frames after startup we replace the rendered scene with a
+    // 4-colour quadrant pattern (top-left red, top-right green,
+    // bottom-left blue, bottom-right yellow). If the user reports that the
+    // pattern shows up correctly (one set of four quadrants filling the
+    // screen), the iOS GL pipeline is fine and the 4x tiling we've been
+    // chasing is coming from the game's own multi-instance / multi-view
+    // setup. If they see FOUR copies of the pattern, the tiling is in the
+    // GL/iOS layer path.
+    if (g->frameTick > 0 && g->frameTick <= BS_DIAG_PATTERN_FRAMES) {
+        GLint vp[4] = { 0 };
+        glGetIntegerv(GL_VIEWPORT, vp);
+        int32_t windowW = vp[2];
+        int32_t windowH = vp[3];
+        if (windowW > 0 && windowH > 0) {
+            gles1_drawDiagnosticTestPattern(windowW, windowH);
+        }
+        if (g->frameTick == BS_DIAG_PATTERN_FRAMES) {
+            fprintf(stderr, "[gles1] diagnostic test pattern done, resuming normal render\n");
+        }
+    }
     glFlush();
 }
 
 static void gles1_beginView(Renderer* r, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH,
-                            int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle) { }
-static void gles1_endView(Renderer* r) { }
-static void gles1_beginGUI(Renderer* r, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) { }
-static void gles1_endGUI(Renderer* r) { }
+                            int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle) {
+    GLES1Renderer* g = asGLES1(r);
+    (void) viewAngle;
+    if (g->frameTick <= 2 || g->frameTick == 60) {
+        fprintf(stderr, "[gles1] beginView tick=%u view=(%d,%d %dx%d) port=(%d,%d %dx%d)\n",
+                g->frameTick, viewX, viewY, viewW, viewH, portX, portY, portW, portH);
+    }
+}
+static void gles1_endView(Renderer* r) { (void) r; }
+static void gles1_beginGUI(Renderer* r, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) {
+    GLES1Renderer* g = asGLES1(r);
+    if (g->frameTick <= 2 || g->frameTick == 60) {
+        fprintf(stderr, "[gles1] beginGUI tick=%u gui=%dx%d port=(%d,%d %dx%d)\n",
+                g->frameTick, guiW, guiH, portX, portY, portW, portH);
+    }
+}
+static void gles1_endGUI(Renderer* r) { (void) r; }
 
 // ============================================================================
 // Renderer vtable: clear + flush
