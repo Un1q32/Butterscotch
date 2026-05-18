@@ -274,27 +274,64 @@ static void parseGEN8(BinaryReader* reader, DataWin* dw) {
 static void parseOPTN(BinaryReader* reader, DataWin* dw) {
     Optn* o = &dw->optn;
 
-    int32_t marker = BinaryReader_readInt32(reader);
-    if (marker != (int32_t)0x80000000) {
-        fprintf(stderr, "OPTN: expected new format marker 0x80000000, got 0x%08X\n", (uint32_t)marker);
-        exit(1);
+    int32_t shaderExtensionFlag = BinaryReader_readInt32(reader);
+    bool newFormat = shaderExtensionFlag == (int32_t) 0x80000000;
+
+    if (newFormat) {
+        MAYBE_UNUSED int32_t shaderExtVersion = BinaryReader_readInt32(reader);
+
+        o->info = BinaryReader_readUint64(reader);
+        o->scale = BinaryReader_readInt32(reader);
+        o->windowColor = BinaryReader_readUint32(reader);
+        o->colorDepth = BinaryReader_readUint32(reader);
+        o->resolution = BinaryReader_readUint32(reader);
+        o->frequency = BinaryReader_readUint32(reader);
+        o->vertexSync = BinaryReader_readUint32(reader);
+        o->priority = BinaryReader_readUint32(reader);
+        o->backImage = BinaryReader_readUint32(reader);
+        o->frontImage = BinaryReader_readUint32(reader);
+        o->loadImage = BinaryReader_readUint32(reader);
+        o->loadAlpha = BinaryReader_readUint32(reader);
+    } else {
+        BinaryReader_seek(reader, BinaryReader_getPosition(reader) - 4);
+        // Remap the boolean list into "modern" bitflags
+        o->info = 0;
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x1; // FullScreen
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x2; // InterpolatePixels
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x4; // UseNewAudio
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x8; // NoBorder
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x10; // ShowCursor
+        o->scale = BinaryReader_readInt32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x20; // Sizeable
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x40; // StayOnTop
+        o->windowColor = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x80; // ChangeResolution
+        o->colorDepth = BinaryReader_readUint32(reader);
+        o->resolution = BinaryReader_readUint32(reader);
+        o->frequency = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x100; // NoButtons
+        o->vertexSync = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x200; // ScreenKey
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x400; // HelpKey
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x800; // QuitKey
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x1000; // SaveKey
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x2000; // ScreenShotKey
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x4000; // CloseSec
+        o->priority = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x8000; // Freeze
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x10000; // ShowProgress
+        o->backImage = BinaryReader_readUint32(reader);
+        o->frontImage = BinaryReader_readUint32(reader);
+        o->loadImage = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x20000; // LoadTransparent
+        o->loadAlpha = BinaryReader_readUint32(reader);
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x40000; // ScaleProgress
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x80000; // DisplayErrors
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x100000; // WriteErrors
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x200000; // AbortErrors
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x400000; // VariableErrors
+        if (BinaryReader_readBool32(reader)) o->info |= (uint64_t) 0x800000; // CreationEventOrder
     }
-
-    int32_t shaderExtVersion = BinaryReader_readInt32(reader);
-    (void)shaderExtVersion; // always 2
-
-    o->info = BinaryReader_readUint64(reader);
-    o->scale = BinaryReader_readInt32(reader);
-    o->windowColor = BinaryReader_readUint32(reader);
-    o->colorDepth = BinaryReader_readUint32(reader);
-    o->resolution = BinaryReader_readUint32(reader);
-    o->frequency = BinaryReader_readUint32(reader);
-    o->vertexSync = BinaryReader_readUint32(reader);
-    o->priority = BinaryReader_readUint32(reader);
-    o->backImage = BinaryReader_readUint32(reader);
-    o->frontImage = BinaryReader_readUint32(reader);
-    o->loadImage = BinaryReader_readUint32(reader);
-    o->loadAlpha = BinaryReader_readUint32(reader);
 
     // Constants SimpleList
     o->constantCount = BinaryReader_readUint32(reader);
@@ -839,24 +876,40 @@ static void parseSHDR(BinaryReader* reader, DataWin* dw) {
             sh->vertexAttributes = nullptr;
         }
 
-        // Version field (bytecodeVersion > 13)
-        sh->version = BinaryReader_readInt32(reader);
+        // Version field and console shader variants only exist on bytecodeVersion > 13.
+        if (dw->gen8.bytecodeVersion > 13) {
+            sh->version = BinaryReader_readInt32(reader);
 
-        sh->pssl_VertexOffset = BinaryReader_readUint32(reader);
-        sh->pssl_VertexLen = BinaryReader_readUint32(reader);
-        sh->pssl_PixelOffset = BinaryReader_readUint32(reader);
-        sh->pssl_PixelLen = BinaryReader_readUint32(reader);
-        sh->cgVita_VertexOffset = BinaryReader_readUint32(reader);
-        sh->cgVita_VertexLen = BinaryReader_readUint32(reader);
-        sh->cgVita_PixelOffset = BinaryReader_readUint32(reader);
-        sh->cgVita_PixelLen = BinaryReader_readUint32(reader);
+            sh->pssl_VertexOffset = BinaryReader_readUint32(reader);
+            sh->pssl_VertexLen = BinaryReader_readUint32(reader);
+            sh->pssl_PixelOffset = BinaryReader_readUint32(reader);
+            sh->pssl_PixelLen = BinaryReader_readUint32(reader);
+            sh->cgVita_VertexOffset = BinaryReader_readUint32(reader);
+            sh->cgVita_VertexLen = BinaryReader_readUint32(reader);
+            sh->cgVita_PixelOffset = BinaryReader_readUint32(reader);
+            sh->cgVita_PixelLen = BinaryReader_readUint32(reader);
 
-        if (sh->version >= 2) {
-            sh->cgPS3_VertexOffset = BinaryReader_readUint32(reader);
-            sh->cgPS3_VertexLen = BinaryReader_readUint32(reader);
-            sh->cgPS3_PixelOffset = BinaryReader_readUint32(reader);
-            sh->cgPS3_PixelLen = BinaryReader_readUint32(reader);
+            if (sh->version >= 2) {
+                sh->cgPS3_VertexOffset = BinaryReader_readUint32(reader);
+                sh->cgPS3_VertexLen = BinaryReader_readUint32(reader);
+                sh->cgPS3_PixelOffset = BinaryReader_readUint32(reader);
+                sh->cgPS3_PixelLen = BinaryReader_readUint32(reader);
+            } else {
+                sh->cgPS3_VertexOffset = 0;
+                sh->cgPS3_VertexLen = 0;
+                sh->cgPS3_PixelOffset = 0;
+                sh->cgPS3_PixelLen = 0;
+            }
         } else {
+            sh->version = 0;
+            sh->pssl_VertexOffset = 0;
+            sh->pssl_VertexLen = 0;
+            sh->pssl_PixelOffset = 0;
+            sh->pssl_PixelLen = 0;
+            sh->cgVita_VertexOffset = 0;
+            sh->cgVita_VertexLen = 0;
+            sh->cgVita_PixelOffset = 0;
+            sh->cgVita_PixelLen = 0;
             sh->cgPS3_VertexOffset = 0;
             sh->cgPS3_VertexLen = 0;
             sh->cgPS3_PixelOffset = 0;
@@ -1767,6 +1820,8 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
 
     if (codeCount == 0) { free(codePtrs); c->entries = nullptr; return; }
 
+    bool oldFormat = 14 >= dw->gen8.bytecodeVersion;
+
     c->entries = safeCalloc(codeCount, sizeof(CodeEntry));
     repeat(codeCount, i) {
         if (codePtrs[i] == 0) continue;
@@ -1775,17 +1830,37 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
         entry->present = true;
         entry->name = readStringPtr(reader, dw);
         entry->length = BinaryReader_readUint32(reader);
-        entry->localsCount = BinaryReader_readUint16(reader);
-        entry->argumentsCount = BinaryReader_readUint16(reader);
 
-        // bytecodeRelAddr is relative to the position of this field
-        size_t relAddrFieldPos = BinaryReader_getPosition(reader);
-        int32_t bytecodeRelAddr = BinaryReader_readInt32(reader);
-        entry->bytecodeAbsoluteOffset = (uint32_t)((int64_t)relAddrFieldPos + bytecodeRelAddr);
+        if (oldFormat) {
+            // BC<=14: instructions are inline right after the length field.
+            // No localsCount/argumentsCount/bytecodeRelAddr/offset fields.
+            entry->localsCount = 0;
+            entry->argumentsCount = 0;
+            entry->offset = 0;
+            entry->bytecodeAbsoluteOffset = (uint32_t) BinaryReader_getPosition(reader);
+            BinaryReader_skip(reader, entry->length);
+        } else {
+            entry->localsCount = BinaryReader_readUint16(reader);
+            entry->argumentsCount = BinaryReader_readUint16(reader);
 
-        entry->offset = BinaryReader_readUint32(reader);
+            // bytecodeRelAddr is relative to the position of this field
+            size_t relAddrFieldPos = BinaryReader_getPosition(reader);
+            int32_t bytecodeRelAddr = BinaryReader_readInt32(reader);
+            entry->bytecodeAbsoluteOffset = (uint32_t)((int64_t)relAddrFieldPos + bytecodeRelAddr);
+
+            entry->offset = BinaryReader_readUint32(reader);
+        }
     }
     free(codePtrs);
+
+    size_t chunkEnd = chunkDataStart + chunkLength;
+
+    if (oldFormat) {
+        // BC<=14: bytecode is intermixed with entry headers. Capture the whole chunk as the bytecode buffer so that the per-entry bytecodeAbsoluteOffset values resolve correctly into it.
+        dw->bytecodeBufferBase = chunkDataStart;
+        dw->bytecodeBuffer = BinaryReader_readBytesAt(reader, chunkDataStart, chunkLength);
+        return;
+    }
 
     // Compute bytecode blob range and load into owned buffer.
     // The bytecode blob starts at the minimum bytecodeAbsoluteOffset and
@@ -1798,7 +1873,6 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
         }
     }
     if (blobStart == UINT32_MAX) blobStart = (uint32_t) chunkDataStart;
-    size_t chunkEnd = chunkDataStart + chunkLength;
     size_t blobSize = chunkEnd - blobStart;
 
     dw->bytecodeBufferBase = blobStart;
@@ -1808,21 +1882,34 @@ static void parseCODE(BinaryReader* reader, DataWin* dw, uint32_t chunkLength, s
 static void parseVARI(BinaryReader* reader, DataWin* dw, uint32_t chunkLength) {
     Vari* v = &dw->vari;
 
-    v->varCount1 = BinaryReader_readUint32(reader);
-    v->varCount2 = BinaryReader_readUint32(reader);
-    v->maxLocalVarCount = BinaryReader_readUint32(reader);
+    // BC<=14 has no header (varCount1/varCount2/maxLocalVarCount) and 12-byte entries (no instanceType/varID).
+    // BC>=15 has a 12-byte header and 20-byte entries.
+    bool oldFormat = dw->gen8.bytecodeVersion <= 14;
 
-    // Variable entries are packed sequentially (no pointer table)
-    // Number of entries = (chunkLength - 12) / 20
-    v->variableCount = (chunkLength - 12) / 20;
+    if (oldFormat) {
+        v->varCount1 = 0;
+        v->varCount2 = 0;
+        v->maxLocalVarCount = 0;
+        v->variableCount = chunkLength / 12;
+    } else {
+        v->varCount1 = BinaryReader_readUint32(reader);
+        v->varCount2 = BinaryReader_readUint32(reader);
+        v->maxLocalVarCount = BinaryReader_readUint32(reader);
+        v->variableCount = (chunkLength - 12) / 20;
+    }
 
     if (v->variableCount > 0) {
         v->variables = safeMalloc(v->variableCount * sizeof(Variable));
         repeat(v->variableCount, i) {
             Variable* var = &v->variables[i];
             var->name = readStringPtr(reader, dw);
-            var->instanceType = BinaryReader_readInt32(reader);
-            var->varID = BinaryReader_readInt32(reader);
+            if (oldFormat) {
+                var->instanceType = 0;
+                var->varID = 0;
+            } else {
+                var->instanceType = BinaryReader_readInt32(reader);
+                var->varID = BinaryReader_readInt32(reader);
+            }
             var->occurrences = BinaryReader_readUint32(reader);
             var->firstAddress = BinaryReader_readUint32(reader);
         }
@@ -1831,8 +1918,26 @@ static void parseVARI(BinaryReader* reader, DataWin* dw, uint32_t chunkLength) {
     }
 }
 
-static void parseFUNC(BinaryReader* reader, DataWin* dw) {
+static void parseFUNC(BinaryReader* reader, DataWin* dw, uint32_t chunkLength) {
     Func* f = &dw->func;
+
+    // BC<=14 packs functions as a flat 12-byte-per-entry array (no SimpleList count prefix) and has no CodeLocals section.
+    if (dw->gen8.bytecodeVersion <= 14) {
+        f->functionCount = chunkLength / 12;
+        if (f->functionCount > 0) {
+            f->functions = safeMalloc(f->functionCount * sizeof(Function));
+            repeat(f->functionCount, i) {
+                f->functions[i].name = readStringPtr(reader, dw);
+                f->functions[i].occurrences = BinaryReader_readUint32(reader);
+                f->functions[i].firstAddress = BinaryReader_readUint32(reader);
+            }
+        } else {
+            f->functions = nullptr;
+        }
+        f->codeLocalsCount = 0;
+        f->codeLocals = nullptr;
+        return;
+    }
 
     // Part 1: Functions SimpleList
     f->functionCount = BinaryReader_readUint32(reader);
@@ -2209,7 +2314,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         } else if (options.parseVari && memcmp(chunkName, "VARI", 4) == 0) {
             parseVARI(&reader, dw, chunkLength);
         } else if (options.parseFunc && memcmp(chunkName, "FUNC", 4) == 0) {
-            parseFUNC(&reader, dw);
+            parseFUNC(&reader, dw, chunkLength);
         } else if (options.parseStrg && memcmp(chunkName, "STRG", 4) == 0) {
             parseSTRG(&reader, dw);
         } else if (options.parseTxtr && memcmp(chunkName, "TXTR", 4) == 0) {
