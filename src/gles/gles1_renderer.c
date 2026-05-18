@@ -40,25 +40,6 @@ static inline void unpackBGR(uint32_t bgr, float a, GLfloat out[4]) {
 // but we always allocate the larger struct so a downcast is safe.
 // ============================================================================
 
-// Cache slot for one TXTR entry. We map TXTR index -> up to BS_MAX_BANDS
-// GL texture objects, splitting the atlas vertically into 1024-row
-// bands so PowerVR MBX Lite's 1024x1024 GL_MAX_TEXTURE_SIZE doesn't
-// force us to downsample the source pixels. UNDERTALE ships atlases
-// at 1024x2048 (2 bands); other GMS:Studio games may ship 1024x1024
-// (1 band) or up to 1024x4096 (4 bands).
-//
-// width  = original atlas width in source pixels.
-// height = original atlas height in source pixels.
-// bandHeight = uniform per-band height (= maxTextureSize); the last
-//              band may be partially-populated if height isn't a multiple.
-// numBands = ceil(height / bandHeight).
-//
-// Sprite / glyph rectangles index into this slot using the original
-// (sourceX, sourceY) pixel coords. The renderer code does:
-//   band     = sourceY / bandHeight
-//   localY   = sourceY - band*bandHeight
-//   v        = localY / bandHeight
-// to pick the right band texture and remap V into [0,1].
 #define BS_MAX_BANDS 4
 
 typedef struct {
@@ -116,10 +97,6 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
     r->drawValign = 0;
     r->circlePrecision = 24;
 
-    // Prefer our own FILE* (set via GLES1Renderer_setDataWinPath) so we
-    // don't race with the parser's room-payload lazy loader on a shared
-    // file position. Fall back to dataWin->lazyLoadFile if the embedder
-    // didn't tell us a path.
     if (g->dataWinPath != NULL) {
         g->dataWinFile = fopen(g->dataWinPath, "rb");
         g->ownsFile = (g->dataWinFile != NULL);
@@ -138,19 +115,15 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
                 (int) g->ownsFile, (unsigned) dataWin->txtr.count);
     }
 
-    // Allocate one cache slot per TXTR entry.
     if (dataWin->txtr.count > 0) {
         g->slotCount = dataWin->txtr.count;
         g->slots = (BSTexCacheSlot*) calloc(g->slotCount, sizeof(BSTexCacheSlot));
     }
-    g->logBudget = 8; // first 8 ensureTexture calls get fully logged
+    g->logBudget = 8; 
 
     g->frameTick = 0;
     g->residentBytes = 0;
-    // ~12 MB conservative VRAM budget for MBX Lite (16 MB shared with FB).
-    // 12 MB is enough for 3 RGBA 1024x1024 atlases, which covers a typical
-    // Undertale frame (1 sprite atlas + 1 bg atlas + 1 font atlas).
-    g->residentBudget = 12u * 1024u * 1024u;
+    g->residentBudget = 12u * 1024u * 1024u; // ~12 MB VRAM budget for MBX Lite
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
@@ -159,14 +132,11 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
 
-    // Find out what the GPU actually accepts. PowerVR MBX Lite caps at
-    // 1024x1024 even though GMS:Studio ships atlases up to 2048x2048
-    // (and 4096 on later devices). Anything larger silently rejects
-    // from glTexImage2D with GL_INVALID_VALUE — we have to downsample.
     GLint maxTex = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
-    if (maxTex <= 0) maxTex = 1024; // sensible MBX Lite default if the query fails
+    if (maxTex <= 0) maxTex = 1024; 
     g->maxTextureSize = maxTex;
+    
     fprintf(stderr, "[gles1] GL_MAX_TEXTURE_SIZE = %d\n", (int) maxTex);
     const GLubyte* vendor = glGetString(GL_VENDOR);
     const GLubyte* renderer = glGetString(GL_RENDERER);
@@ -177,11 +147,6 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
             version ? (const char*) version : "(null)");
 }
 
-// Downsample an RGBA8 buffer in place by a power-of-two factor in each
-// axis. Used to fit Undertale's 1024x2048 atlases onto MBX Lite's
-// 1024x1024 cap. Box-filter average of factorX*factorY source pixels
-// into one destination pixel. Mutates *pPixels (frees old, allocates new)
-// and updates *pW / *pH.
 static bool gles1_downsampleRGBA(stbi_uc** pPixels, int* pW, int* pH, int factorX, int factorY) {
     if (factorX < 1 || factorY < 1) return false;
     if (factorX == 1 && factorY == 1) return true;
@@ -251,12 +216,9 @@ static void gles1_destroy(Renderer* r) {
 }
 
 // ============================================================================
-// Texture streaming — read PNG blob from data.win lazily, decode via
-// stb_image, upload to a GL texture. Cached for subsequent frames.
-// LRU eviction kicks in when residentBytes > residentBudget.
+// Texture streaming
 // ============================================================================
 
-// Is this slot resident in VRAM right now?
 static inline bool gles1_slotIsResident(const BSTexCacheSlot* s) {
     for (int b = 0; b < BS_MAX_BANDS; b++) {
         if (s->glHandles[b] != 0) return true;
@@ -287,157 +249,91 @@ static void gles1_evictLRU(GLES1Renderer* g, uint32_t bytesToFree) {
     }
 }
 
-// Internal: decode the TXTR blob and upload all bands. Mutates *slot.
-// On failure leaves slot in non-resident state and returns false.
 static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTexCacheSlot* slot) {
-    if (g->dataWinFile == NULL) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: dataWinFile is NULL\n", txtrIndex);
-            g->logBudget--;
-        }
-        return false;
-    }
+    if (g->dataWinFile == NULL) return false;
 
     Texture* tex = &g->base.dataWin->txtr.textures[txtrIndex];
-    if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureSlot[%d]: blobOffset=%u blobSize=%u\n",
-                txtrIndex, (unsigned) tex->blobOffset, (unsigned) tex->blobSize);
-    }
-    if (tex->blobOffset == 0 || tex->blobSize == 0) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: blob coordinates are zero — external texture?\n", txtrIndex);
-            g->logBudget--;
-        }
-        return false;
-    }
+    if (tex->blobOffset == 0 || tex->blobSize == 0) return false;
 
     uint8_t* compressed = (uint8_t*) malloc(tex->blobSize);
-    if (compressed == NULL) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: malloc(%u) failed\n",
-                    txtrIndex, (unsigned) tex->blobSize);
-            g->logBudget--;
-        }
-        return false;
-    }
+    if (compressed == NULL) return false;
+    
     if (fseek(g->dataWinFile, (long) tex->blobOffset, SEEK_SET) != 0) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: fseek(%u) failed\n",
-                    txtrIndex, (unsigned) tex->blobOffset);
-            g->logBudget--;
-        }
         free(compressed);
         return false;
     }
+    
     size_t got = fread(compressed, 1, tex->blobSize, g->dataWinFile);
     if (got != tex->blobSize) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: fread short: got %zu, wanted %u\n",
-                    txtrIndex, got, (unsigned) tex->blobSize);
-            g->logBudget--;
-        }
         free(compressed);
         return false;
     }
+    
     int w = 0, h = 0, ch = 0;
+    // CRITICAL: Requesting 4 channels strictly forces RGBA extraction.
     stbi_uc* pixels = stbi_load_from_memory(compressed, (int) tex->blobSize, &w, &h, &ch, 4);
     free(compressed);
-    if (pixels == NULL || w <= 0 || h <= 0) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: stbi decode failed: %s (w=%d h=%d)\n",
-                    txtrIndex, stbi_failure_reason() ? stbi_failure_reason() : "(no reason)", w, h);
-            g->logBudget--;
-        }
-        return false;
-    }
-    int origW = w, origH = h;
-    if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureSlot[%d]: decoded %dx%d (ch=%d)\n", txtrIndex, w, h, ch);
-    }
+    
+    if (pixels == NULL || w <= 0 || h <= 0) return false;
 
-    // Width handling: if the atlas is wider than GL_MAX_TEXTURE_SIZE
-    // (rare — Undertale is 1024 wide and MBX Lite caps at 1024) we
-    // fall back to box-filter downsampling on the X axis only, so
-    // banding can still handle the Y axis at full resolution.
+    int origW = w, origH = h;
+
     int factorX = 1;
     while (w / factorX > g->maxTextureSize) factorX *= 2;
     if (factorX != 1) {
         if (!gles1_downsampleRGBA(&pixels, &w, &h, factorX, 1)) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: X-downsample %dx failed; dropping atlas\n",
-                    txtrIndex, factorX);
             stbi_image_free(pixels);
             return false;
         }
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot[%d]: X-downsampled %d -> %d (factor %d)\n",
-                    txtrIndex, origW, w, factorX);
-        }
     }
 
-    // Choose band height. Standard case: bands of maxTextureSize rows.
     int32_t bandH = g->maxTextureSize;
     int32_t numBands = (h + bandH - 1) / bandH;
     if (numBands > BS_MAX_BANDS) {
-        // Atlas way too tall — fall back to Y-downsampling.
         int factorY = 1;
         while ((h + factorY - 1) / factorY > BS_MAX_BANDS * g->maxTextureSize) factorY *= 2;
         if (factorY > 1) {
             if (!gles1_downsampleRGBA(&pixels, &w, &h, 1, factorY)) {
-                fprintf(stderr, "[gles1] ensureSlot[%d]: Y-downsample %dx failed; dropping atlas\n",
-                        txtrIndex, factorY);
                 stbi_image_free(pixels);
                 return false;
-            }
-            if (g->logBudget > 0) {
-                fprintf(stderr, "[gles1] ensureSlot[%d]: Y-downsampled %d -> %d (factor %d) — atlas exceeded %d-band cap\n",
-                        txtrIndex, origH, h, factorY, BS_MAX_BANDS);
             }
         }
         numBands = (h + bandH - 1) / bandH;
     }
 
-    // Upload one texture per band. The slot's UV math will pick the
-    // right band based on the source-Y coord of each drawn rect.
+    // FIX: Force unpack alignment to 1 byte. OpenGL by default expects 4-byte 
+    // row alignment. Even though RGBA (w*4) is usually naturally aligned, 
+    // older iOS MBX Lite drivers can stumble on stride mismatches causing 
+    // 4x duplication or slanted striping. This forces contiguous reading.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     uint32_t totalBytes = 0;
-    int32_t lastBandH = bandH;
     for (int32_t b = 0; b < numBands; b++) {
         int32_t rowStart = b * bandH;
         int32_t rowEnd   = rowStart + bandH;
         if (rowEnd > h) rowEnd = h;
         int32_t thisBandH = rowEnd - rowStart;
         if (thisBandH <= 0) { numBands = b; break; }
-        // We always allocate a power-of-two-friendly bandH; the last
-        // band's unused tail rows stay uninitialized (and aren't
-        // sampled because TPAG rects don't go past the atlas height).
-        // We still upload at full bandH to keep UV math uniform.
+        
         uint32_t bandBytes = (uint32_t)(w * bandH * 4);
         if (g->residentBytes + totalBytes + bandBytes > g->residentBudget) {
             gles1_evictLRU(g, totalBytes + bandBytes);
         }
+        
         GLuint handle = 0;
         glGenTextures(1, &handle);
         glBindTexture(GL_TEXTURE_2D, handle);
-        // GL_LINEAR on sprite/glyph atlases: the game renders into a
-        // 480x320 visible framebuffer with an ortho of game's native
-        // 640x480 — i.e. each sprite is sub-pixel scaled by 0.75x by
-        // 0.667. On PowerVR MBX Lite that produces row-dropping zebra
-        // bands under GL_NEAREST sampling. Bilinear filtering averages
-        // neighbouring texels and removes the bands at the cost of a
-        // small softness on glyph edges — an acceptable trade because
-        // the screen is 480x320 anyway and pixel-perfect glyphs would
-        // require an integer-multiple framebuffer (320x240 or 640x480)
-        // that the device hardware doesn't provide.
+        
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
         if (thisBandH == bandH) {
-            // Whole band — upload directly.
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                          pixels + (size_t) rowStart * w * 4);
         } else {
-            // Short band (atlas height not multiple of bandH). Upload
-            // a full bandH texture with the source rows + black tail.
+            // Memory safe padded short-band
             uint8_t* padded = (uint8_t*) calloc((size_t) w * bandH * 4, 1);
             if (padded != NULL) {
                 memcpy(padded, pixels + (size_t) rowStart * w * 4, (size_t) w * thisBandH * 4);
@@ -447,12 +343,12 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
             }
         }
+        
         GLenum glErr = glGetError();
         if (glErr != GL_NO_ERROR) {
             fprintf(stderr, "[gles1] ensureSlot[%d] band %d: glTexImage2D failed 0x%04x (size %dx%d)\n",
                     txtrIndex, (int) b, (unsigned) glErr, w, bandH);
             glDeleteTextures(1, &handle);
-            // Free already-uploaded bands.
             for (int32_t bb = 0; bb < b; bb++) {
                 glDeleteTextures(1, &slot->glHandles[bb]);
                 slot->glHandles[bb] = 0;
@@ -462,7 +358,6 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         }
         slot->glHandles[b] = handle;
         totalBytes += bandBytes;
-        lastBandH = thisBandH;
     }
     stbi_image_free(pixels);
 
@@ -474,24 +369,11 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
     slot->lastUsedTick = g->frameTick;
     g->residentBytes += totalBytes;
 
-    if (g->logBudget > 0) {
-        fprintf(stderr, "[gles1] ensureSlot[%d]: uploaded %dx%d in %d band(s) of %d rows (last=%d), %u KB\n",
-                txtrIndex, w, h, (int) numBands, (int) bandH, (int) lastBandH,
-                (unsigned)(totalBytes / 1024));
-        g->logBudget--;
-    }
     return true;
 }
 
 static BSTexCacheSlot* gles1_ensureSlot(GLES1Renderer* g, int32_t txtrIndex) {
-    if (txtrIndex < 0 || (uint32_t) txtrIndex >= g->slotCount) {
-        if (g->logBudget > 0) {
-            fprintf(stderr, "[gles1] ensureSlot: index %d out of range [0, %u)\n",
-                    txtrIndex, g->slotCount);
-            g->logBudget--;
-        }
-        return NULL;
-    }
+    if (txtrIndex < 0 || (uint32_t) txtrIndex >= g->slotCount) return NULL;
     BSTexCacheSlot* slot = &g->slots[txtrIndex];
     slot->lastUsedTick = g->frameTick;
     if (gles1_slotIsResident(slot)) return slot;
@@ -499,8 +381,6 @@ static BSTexCacheSlot* gles1_ensureSlot(GLES1Renderer* g, int32_t txtrIndex) {
     return slot;
 }
 
-// Bake the quad geometry for a sprite/tpag draw into local vertex
-// + texcoord arrays. Used by drawSprite and drawSpritePart.
 static void gles1_buildSpriteQuad(
         float dstX, float dstY, float dstW, float dstH,
         float originX, float originY, float xscale, float yscale, float angleDeg,
@@ -508,7 +388,6 @@ static void gles1_buildSpriteQuad(
         GLfloat out_verts[8], GLfloat out_uvs[8]) {
     float c = cosf(angleDeg * 0.01745329252f);
     float s = sinf(angleDeg * 0.01745329252f);
-    // Local corners relative to the pivot.
     float lx[4] = { -originX,            dstW - originX,       -originX,             dstW - originX };
     float ly[4] = { -originY,            -originY,             dstH - originY,       dstH - originY };
     for (int i = 0; i < 4; i++) {
@@ -523,9 +402,6 @@ static void gles1_buildSpriteQuad(
     out_uvs[6] = u1; out_uvs[7] = v1;
 }
 
-// Submit one textured quad. Used by both the band-spanning and
-// single-band paths below. Local helper — caller fills in dstRect
-// + UVs.
 static void gles1_emitQuad(GLuint handle,
                            float dstX, float dstY, float dstW, float dstH,
                            float originX, float originY,
@@ -534,12 +410,8 @@ static void gles1_emitQuad(GLuint handle,
                            const GLfloat rgba[4]) {
     GLfloat verts[8];
     GLfloat uvs[8];
-    gles1_buildSpriteQuad(
-        dstX, dstY, dstW, dstH,
-        originX, originY,
-        xscale, yscale, angleDeg,
-        u0, v0, u1, v1,
-        verts, uvs);
+    gles1_buildSpriteQuad(dstX, dstY, dstW, dstH, originX, originY,
+                          xscale, yscale, angleDeg, u0, v0, u1, v1, verts, uvs);
 
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, handle);
@@ -558,7 +430,6 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
                                float dstX, float dstY,
                                float originX, float originY,
                                float xscale, float yscale, float angleDeg,
-                               // optional sub-rect clipping inside the tpag (or -1 to use full):
                                int32_t subX, int32_t subY, int32_t subW, int32_t subH,
                                uint32_t color, float alpha) {
     DataWin* dw = g->base.dataWin;
@@ -568,7 +439,6 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
     BSTexCacheSlot* slot = gles1_ensureSlot(g, it->texturePageId);
     if (slot == NULL || slot->bandHeight <= 0) return;
 
-    // Determine source rectangle within the atlas (in original pixels).
     int32_t srcX = it->sourceX + (subX >= 0 ? subX : 0);
     int32_t srcY = it->sourceY + (subY >= 0 ? subY : 0);
     int32_t srcW = (subW > 0) ? subW : it->sourceWidth;
@@ -576,8 +446,6 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
 
     if (srcW <= 0 || srcH <= 0) return;
 
-    // targetX/Y/W/H: where this sub-image sits inside the sprite's
-    // bounding box, after the atlas has trimmed away transparent edges.
     float ofsX = (float) it->targetX;
     float ofsY = (float) it->targetY;
 
@@ -592,8 +460,6 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
     float u1 = (float)(srcX + srcW) / uScale;
     float fullDstW = (float) srcW;
 
-    // Fast path: sub-rect lives entirely in one band (true for almost
-    // every sprite + every glyph).
     if (firstBand == lastBand) {
         int32_t bandTop = firstBand * bandH;
         float v0 = (float)(srcY - bandTop) / (float) bandH;
@@ -602,18 +468,10 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
                        dstX, dstY, fullDstW, (float) srcH,
                        originX - ofsX, originY - ofsY,
                        xscale, yscale, angleDeg,
-                       u0, v0, u1, v1,
-                       rgba);
+                       u0, v0, u1, v1, rgba);
         return;
     }
 
-    // Slow path: rect spans 2 or more bands. Emit one quad per band
-    // with the dest height proportionally split. Rotation around this
-    // path is unusual (rotated sprites are typically small), so we
-    // just scale Y-segments by the modelview — the rotation is applied
-    // in buildSpriteQuad to the whole "dst" rect of each segment, not
-    // to the originally-intended single rect; for axis-aligned draws
-    // (angleDeg=0) this produces a pixel-identical result.
     int32_t totalSrcH = srcH;
     float dstStartY = dstY;
     int32_t srcCursor = srcY;
@@ -633,8 +491,7 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
                        dstX, dstStartY, fullDstW, (float) segH,
                        originX - ofsX, segOriginY,
                        xscale, yscale, angleDeg,
-                       u0, v0, u1, v1,
-                       rgba);
+                       u0, v0, u1, v1, rgba);
         dstStartY += segH * yscale;
         srcCursor += segH;
         srcRemaining -= segH;
@@ -642,24 +499,10 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
     (void) totalSrcH;
 }
 
-
 // ============================================================================
 // Renderer vtable: frame + view + GUI passes
 // ============================================================================
 
-// Direct rendering path. Earlier versions of this renderer tried
-// rendering the game into an offscreen 1024x512 FBO at the game's
-// native 640x480 resolution and then blitting that texture down to
-// the visible 480x320 framebuffer in a single bilinear pass, in the
-// hope that landing every sprite on an integer-aligned pixel grid
-// would eliminate the per-sprite scaling banding that PowerVR MBX
-// Lite produces under non-integer scale factors. In practice the
-// MBX Lite FBO path returned a tiled / repeated image that no
-// amount of state hygiene (scissor disable, wrap=CLAMP_TO_EDGE,
-// V-flip in UVs, manual glClear) cured. Investing more time in it
-// was not worth blocking real gameplay validation, so we render
-// directly into the iOS-provided renderbuffer and accept the
-// residual banding — GL_LINEAR atlas filters keep it visually mild.
 static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
     GLES1Renderer* g = asGLES1(r);
     g->frameTick++;
@@ -669,33 +512,26 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
     glViewport(0, 0, windowW, windowH);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    // Draw in game-space coordinates with (0,0) at top-left, matching
-    // GMS:Studio conventions. The visible framebuffer Y is the same
-    // direction as iOS layer Y for our 480x320 landscape view.
     glOrthof(0.0f, (GLfloat) gameW, (GLfloat) gameH, 0.0f, -1.0f, 1.0f);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    
+    // FIX: Ensure no residual state messes up the start of the frame.
+    glDisable(GL_TEXTURE_2D);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 }
 
 static void gles1_endFrame(Renderer* r) {
-    GLES1Renderer* g = asGLES1(r);
-    (void) g;
+    (void) r;
     glFlush();
 }
 
 static void gles1_beginView(Renderer* r, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH,
-                            int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle) {
-    (void) r; (void) viewX; (void) viewY; (void) viewW; (void) viewH;
-    (void) portX; (void) portY; (void) portW; (void) portH; (void) viewAngle;
-}
-
-static void gles1_endView(Renderer* r) { (void) r; }
-
-static void gles1_beginGUI(Renderer* r, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) {
-    (void) r; (void) guiW; (void) guiH; (void) portX; (void) portY; (void) portW; (void) portH;
-}
-
-static void gles1_endGUI(Renderer* r) { (void) r; }
+                            int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle) { }
+static void gles1_endView(Renderer* r) { }
+static void gles1_beginGUI(Renderer* r, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) { }
+static void gles1_endGUI(Renderer* r) { }
 
 // ============================================================================
 // Renderer vtable: clear + flush
@@ -716,12 +552,6 @@ static void gles1_flush(Renderer* r) {
 
 // ============================================================================
 // Renderer vtable: draw stubs
-//
-// These are intentional no-ops for the first on-device milestone. They
-// will be replaced with real GLES 1.1 fixed-function draws once we have
-// confirmation that the framework + context + buffer present pipeline
-// works on the iPod Touch 2G. Filling them in incrementally lets us
-// keep iterating from real-device logs instead of guessing.
 // ============================================================================
 
 static void gles1_drawSprite(Renderer* r, int32_t tpagIndex, float x, float y, float ox, float oy, float xs, float ys, float ang, uint32_t color, float alpha) {
@@ -818,28 +648,15 @@ static void gles1_drawLineColor(Renderer* r, float x1, float y1, float x2, float
 }
 
 // ============================================================================
-// Text drawing — bitmap-font path
+// Text drawing
 // ============================================================================
-//
-// GMS:Studio fonts are baked into a single TPAG (or for sprite fonts,
-// one TPAG per glyph) at build time. To render text we:
-//   1. Resolve the Font from dataWin->font.fonts[drawFont].
-//   2. Resolve its atlas TPAG (or per-glyph TPAGs for sprite fonts).
-//   3. Walk each line of UTF-8 text, looking up each glyph in the font,
-//      computing UV from glyph sourceX/Y/W/H + atlas TPAG offset, and
-//      emitting a 2-triangle strip per glyph.
-//
-// We bind the atlas texture once per glyph (the same atlas is usually
-// reused across all glyphs in a line) — GLES 1.1 doesn't have batched
-// glDrawArrays with multiple textures and a per-glyph rebind is cheap
-// when the bind is to the already-bound id.
 
 typedef struct {
     Font* font;
-    TexturePageItem* atlasTpag; // single TPAG for regular fonts (NULL for sprite fonts)
+    TexturePageItem* atlasTpag;
     int32_t atlasTpagIndex;
-    BSTexCacheSlot* slot;       // band-aware slot for regular fonts (NULL for sprite fonts)
-    Sprite* spriteFontSprite;   // source sprite for sprite fonts (NULL otherwise)
+    BSTexCacheSlot* slot;
+    Sprite* spriteFontSprite;
 } FontState;
 
 static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) {
@@ -870,14 +687,6 @@ static bool gles1_resolveFontState(GLES1Renderer* g, Font* font, FontState* st) 
     return false;
 }
 
-// Look up the atlas + UV coords + on-line glyph origin for a single
-// glyph. Returns false if the glyph's atlas isn't resolvable (so the
-// caller advances the cursor without drawing).
-//
-// Glyphs almost always fit inside a single band (they're ≤30px tall and
-// the band granularity is 1024). For the rare case a glyph straddles a
-// band boundary we just clamp to the lower band; the visible cropping
-// is one frame of one glyph and almost imperceptible for tiny text.
 static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph,
                                float cursorX, float cursorY,
                                GLuint* outTex, float* outU0, float* outV0, float* outU1, float* outV1,
@@ -909,8 +718,6 @@ static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph
         return true;
     }
 
-    // Regular font: glyph sourceX/Y are coords inside the atlas TPAG,
-    // so add atlas TPAG origin to land on the actual atlas texel.
     BSTexCacheSlot* slot = st->slot;
     if (slot == NULL || slot->bandHeight <= 0) return false;
     int32_t absX = st->atlasTpag->sourceX + glyph->sourceX;
@@ -929,11 +736,6 @@ static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph
     return true;
 }
 
-// Common body of drawText / drawTextColor. The two only differ in how
-// they sample color: drawText uses renderer->drawColor as a flat color,
-// drawTextColor takes 4 corner colors but for now we just use c1 as
-// a flat color (the runtime hardly uses the gradient variant for
-// Undertale).
 static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
                                    float x, float y, float xscale, float yscale, float angleDeg,
                                    uint32_t color, float alpha) {
@@ -1008,8 +810,6 @@ static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
                             glBindTexture(GL_TEXTURE_2D, glyphTex);
                             lastBoundTex = glyphTex;
                         }
-                        // Build the four corners with local-then-transform geometry
-                        // matching the matrix `[xscale*c, -yscale*s; xscale*s, yscale*c]` then translate by (x,y).
                         float lxs[4] = { lx0,       lx0 + dstW, lx0,        lx0 + dstW };
                         float lys[4] = { ly0,       ly0,        ly0 + dstH, ly0 + dstH };
                         GLfloat verts[8];
@@ -1049,17 +849,13 @@ static void gles1_drawText(Renderer* r, const char* text, float x, float y, floa
 
 static void gles1_drawTextColor(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang,
                                 int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha) {
-    (void) c2; (void) c3; (void) c4; // GLES 1.1 fixed pipeline path: flatten to top-left color
+    (void) c2; (void) c3; (void) c4; 
     uint32_t bgr = (c1 >= 0) ? (uint32_t) c1 : r->drawColor;
     gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, bgr, alpha);
 }
 
-static int32_t gles1_createSpriteFromSurface(Renderer* r, int32_t sid, int32_t x, int32_t y, int32_t w, int32_t h, bool removeback, bool smooth, int32_t xo, int32_t yo) {
-    (void) r; (void) sid; (void) x; (void) y; (void) w; (void) h; (void) removeback; (void) smooth; (void) xo; (void) yo;
-    return -1;
-}
-
-static void gles1_deleteSprite(Renderer* r, int32_t s) { (void) r; (void) s; }
+static int32_t gles1_createSpriteFromSurface(Renderer* r, int32_t sid, int32_t x, int32_t y, int32_t w, int32_t h, bool removeback, bool smooth, int32_t xo, int32_t yo) { return -1; }
+static void gles1_deleteSprite(Renderer* r, int32_t s) { }
 
 // ============================================================================
 // Renderer vtable: GPU state
@@ -1070,9 +866,7 @@ static void gles1_gpuSetBlendMode(Renderer* r, int32_t mode) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
-static void gles1_gpuSetBlendModeExt(Renderer* r, int32_t s, int32_t d) {
-    (void) r; (void) s; (void) d;
-}
+static void gles1_gpuSetBlendModeExt(Renderer* r, int32_t s, int32_t d) { }
 
 static void gles1_gpuSetBlendEnable(Renderer* r, bool e) {
     (void) r;
@@ -1107,60 +901,22 @@ static bool gles1_gpuGetBlendEnable(Renderer* r) {
     return glIsEnabled(GL_BLEND) == GL_TRUE;
 }
 
-static void gles1_gpuSetFog(Renderer* r, bool e, uint32_t color) {
-    (void) r; (void) e; (void) color;
-}
+static void gles1_gpuSetFog(Renderer* r, bool e, uint32_t color) { }
 
 // ============================================================================
 // Renderer vtable: surfaces
 // ============================================================================
 
-static int32_t gles1_createSurface(Renderer* r, int32_t w, int32_t h) {
-    (void) r; (void) w; (void) h;
-    return -1;
-}
-
-static bool gles1_surfaceExists(Renderer* r, int32_t s) {
-    (void) r; (void) s;
-    return false;
-}
-
-static bool gles1_setRenderTarget(Renderer* r, int32_t s) {
-    (void) r; (void) s;
-    return true;
-}
-
-static float gles1_getSurfaceWidth(Renderer* r, int32_t s) {
-    (void) r; (void) s;
-    return 0.0f;
-}
-
-static float gles1_getSurfaceHeight(Renderer* r, int32_t s) {
-    (void) r; (void) s;
-    return 0.0f;
-}
-
-static void gles1_drawSurface(Renderer* r, int32_t s, int32_t sl, int32_t st, int32_t sw, int32_t sh, float x, float y, float xs, float ys, float ang, uint32_t color, float alpha) {
-    (void) r; (void) s; (void) sl; (void) st; (void) sw; (void) sh;
-    (void) x; (void) y; (void) xs; (void) ys; (void) ang; (void) color; (void) alpha;
-}
-
-static void gles1_surfaceResize(Renderer* r, int32_t s, int32_t w, int32_t h) {
-    (void) r; (void) s; (void) w; (void) h;
-}
-
-static void gles1_surfaceFree(Renderer* r, int32_t s) {
-    (void) r; (void) s;
-}
-
-static void gles1_surfaceCopy(Renderer* r, int32_t ds, int32_t dx, int32_t dy, int32_t ss, int32_t sx, int32_t sy, int32_t sw, int32_t sh, bool part) {
-    (void) r; (void) ds; (void) dx; (void) dy; (void) ss; (void) sx; (void) sy; (void) sw; (void) sh; (void) part;
-}
-
-static bool gles1_surfaceGetPixels(Renderer* r, int32_t s, uint8_t* out) {
-    (void) r; (void) s; (void) out;
-    return false;
-}
+static int32_t gles1_createSurface(Renderer* r, int32_t w, int32_t h) { return -1; }
+static bool gles1_surfaceExists(Renderer* r, int32_t s) { return false; }
+static bool gles1_setRenderTarget(Renderer* r, int32_t s) { return true; }
+static float gles1_getSurfaceWidth(Renderer* r, int32_t s) { return 0.0f; }
+static float gles1_getSurfaceHeight(Renderer* r, int32_t s) { return 0.0f; }
+static void gles1_drawSurface(Renderer* r, int32_t s, int32_t sl, int32_t st, int32_t sw, int32_t sh, float x, float y, float xs, float ys, float ang, uint32_t color, float alpha) { }
+static void gles1_surfaceResize(Renderer* r, int32_t s, int32_t w, int32_t h) { }
+static void gles1_surfaceFree(Renderer* r, int32_t s) { }
+static void gles1_surfaceCopy(Renderer* r, int32_t ds, int32_t dx, int32_t dy, int32_t ss, int32_t sx, int32_t sy, int32_t sw, int32_t sh, bool part) { }
+static bool gles1_surfaceGetPixels(Renderer* r, int32_t s, uint8_t* out) { return false; }
 
 // ============================================================================
 // Constructor + vtable instance
@@ -1198,8 +954,8 @@ static RendererVtable kGles1Vtable = {
     .gpuGetColorWriteEnable   = gles1_gpuGetColorWriteEnable,
     .gpuGetBlendEnable        = gles1_gpuGetBlendEnable,
     .gpuSetFog                = gles1_gpuSetFog,
-    .drawTile                 = NULL,  // fall back to drawSpritePart
-    .drawTiled                = NULL,  // fall back to per-tile loop
+    .drawTile                 = NULL,  
+    .drawTiled                = NULL,  
     .createSurface            = gles1_createSurface,
     .surfaceExists            = gles1_surfaceExists,
     .setRenderTarget          = gles1_setRenderTarget,
