@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
+
+if(PLATFORM STREQUAL "ps3")
+set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/cmake/ppu.cmake)
+endif()
+
 project(butterscotch C)
 
 set(CMAKE_C_STANDARD 99)
@@ -51,12 +56,16 @@ endif()
 #
 # If only a single bytecode version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
 # performance on low end hardware!
-option(ENABLE_BC16 "Enable support for Bytecode Version 16" ON)
+option(ENABLE_BC14 "Enable support for Bytecode Version 13/14" ON)
+option(ENABLE_BC16 "Enable support for Bytecode Version 15/16" ON)
 option(ENABLE_BC17 "Enable support for Bytecode Version 17" ON)
 option(ENABLE_LEGACY_GL "Enable the legacy OpenGL renderer" ON)
 option(ENABLE_MODERN_GL "Enable the modern OpenGL renderer" ON)
-if(NOT ENABLE_BC16 AND NOT ENABLE_BC17)
+if(NOT ENABLE_BC14 AND NOT ENABLE_BC16 AND NOT ENABLE_BC17)
     message(FATAL_ERROR "You need to build Butterscotch with at least one bytecode version enabled!")
+endif()
+if(ENABLE_BC14)
+    add_compile_definitions(ENABLE_BC14)
 endif()
 if(ENABLE_BC16)
     add_compile_definitions(ENABLE_BC16)

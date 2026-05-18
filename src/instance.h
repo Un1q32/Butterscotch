@@ -92,7 +92,6 @@ static inline void Instance_setSelfVar(Instance* inst, int32_t varID, RValue val
     requireNotNull(inst);
     // One lookup: returns the existing slot, or inserts UNDEFINED and returns the new slot.
     RValue* slot = IntRValueHashMap_getOrInsertUndefined(&inst->selfVars, varID);
-    RValue_free(slot);
     if (val.type == RVALUE_STRING && val.string != nullptr) {
         val = RValue_makeOwnedString(safeStrdup(val.string));
     } else if (val.type == RVALUE_ARRAY && val.array != nullptr) {
@@ -107,6 +106,7 @@ static inline void Instance_setSelfVar(Instance* inst, int32_t varID, RValue val
         Instance_structIncRef(val.structInst);
         val.ownsReference = true;
     }
+    RValue_free(slot);
     *slot = val;
 }
 

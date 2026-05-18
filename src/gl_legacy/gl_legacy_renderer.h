@@ -35,7 +35,6 @@ typedef struct {
 
     bool colorWriteR, colorWriteG, colorWriteB, colorWriteA;
 
-#ifndef PLATFORM_PS3
     // FBO for render-to-texture (game renders here, then blitted to screen)
     GLuint fbo;
     GLuint fboTexture;
@@ -48,7 +47,6 @@ typedef struct {
     int32_t* surfaceWidth;
     int32_t* surfaceHeight;
     uint32_t surfaceCount;
-#endif
 } GLLegacyRenderer;
 
 Renderer* GLLegacyRenderer_create(void);

@@ -106,7 +106,6 @@ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
     if (inst->objectIndex >= 0 && dataWin->objt.count > (uint32_t) inst->objectIndex) {
         removeInstanceFromList(&runner->instancesByExactObject[inst->objectIndex], inst);
     }
-    SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
 }
 
 void Runner_clearAllObjectLists(Runner* runner) {
@@ -262,7 +261,10 @@ const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype) {
                 case OTHER_GAME_START:      return "GameStart";
                 case OTHER_ROOM_START:      return "RoomStart";
                 case OTHER_ROOM_END:        return "RoomEnd";
+                case OTHER_NO_MORE_LIVES:   return "NoMoreLives";
+                case OTHER_ANIMATION_END:   return "AnimationEnd";
                 case OTHER_END_OF_PATH:     return "EndOfPath";
+                case OTHER_NO_MORE_HEALTH:  return "NoMoreHealth";
                 case OTHER_USER0 +  0:      return "UserEvent0";
                 case OTHER_USER0 +  1:      return "UserEvent1";
                 case OTHER_USER0 +  2:      return "UserEvent2";
@@ -414,6 +416,18 @@ void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventS
     }
 }
 
+void Runner_setLives(Runner* runner, GMLReal value) {
+    GMLReal old = runner->lives;
+    runner->lives = value;
+    if (old > 0.0 && 0.0 >= value) Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_NO_MORE_LIVES);
+}
+
+void Runner_setHealth(Runner* runner, GMLReal value) {
+    GMLReal old = runner->health;
+    runner->health = value;
+    if (old > 0.0 && 0.0 >= value) Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_NO_MORE_HEALTH);
+}
+
 // ===[ Background Scrolling & Drawing ]===
 
 void Runner_scrollBackgrounds(Runner* runner) {
@@ -474,6 +488,11 @@ static int compareDrawableDepth(const void* a, const void* b) {
     if (da->type == DRAWABLE_INSTANCE && db->type == DRAWABLE_INSTANCE) {
         if (db->instance->instanceId > da->instance->instanceId) return 1;
         if (da->instance->instanceId > db->instance->instanceId) return -1;
+    }
+    // At same depth, layers with higher ID draw FIRST (behind).
+    if (da->type == DRAWABLE_LAYER && db->type == DRAWABLE_LAYER) {
+        if (db->runtimeLayerId > da->runtimeLayerId) return 1;
+        if (da->runtimeLayerId > db->runtimeLayerId) return -1;
     }
     return 0;
 }
@@ -1271,6 +1290,11 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
     repeat(room->gameObjectCount, i) {
         RoomGameObject* roomObj = &room->gameObjects[i];
 
+        if (roomObj->objectDefinition == -1) {
+            fprintf(stderr, "Runner: Object %d in room %s does not have a valid object definition reference! Was it deleted in the editor?\n", roomObj->instanceID, room->name);
+            continue;
+        }
+
         // Skip if a persistent instance carried over from the previous room already owns this ID (re-entering the persistent instance's home room, don't create a duplicate!).
         if (hmget(runner->instancesById, roomObj->instanceID) != nullptr) continue;
         if (isObjectDisabled(runner, roomObj->objectDefinition)) continue;
@@ -1470,6 +1494,9 @@ void Runner_reset(Runner* runner) {
 
     runner->pendingRoom = -1;
     runner->asyncLoadMapId = -1;
+    runner->score = 0.0;
+    runner->lives = -1.0;
+    runner->health = 0.0;
     runner->gameStartFired = false;
     runner->currentRoomIndex = -1;
     runner->currentRoomOrderPosition = -1;
@@ -1678,30 +1705,39 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     // Create assets map
     shdefault(runner->assetsByName, -1);
     repeat(dataWin->objt.count, i) {
+        if (!dataWin->objt.objects[i].present) continue;
         shput(runner->assetsByName, dataWin->objt.objects[i].name, i);
     }
     repeat(dataWin->sprt.count, i) {
+        if (!dataWin->sprt.sprites[i].present) continue;
         shput(runner->assetsByName, dataWin->sprt.sprites[i].name, i);
     }
     repeat(dataWin->sond.count, i) {
+        if (!dataWin->sond.sounds[i].present) continue;
         shput(runner->assetsByName, dataWin->sond.sounds[i].name, i);
     }
     repeat(dataWin->bgnd.count, i) {
+        if (!dataWin->bgnd.backgrounds[i].present) continue;
         shput(runner->assetsByName, dataWin->bgnd.backgrounds[i].name, i);
     }
     repeat(dataWin->path.count, i) {
+        if (!dataWin->path.paths[i].present) continue;
         shput(runner->assetsByName, dataWin->path.paths[i].name, i);
     }
     repeat(dataWin->scpt.count, i) {
+        if (!dataWin->scpt.scripts[i].present) continue;
         shput(runner->assetsByName, dataWin->scpt.scripts[i].name, i);
     }
     repeat(dataWin->font.count, i) {
+        if (!dataWin->font.fonts[i].present) continue;
         shput(runner->assetsByName, dataWin->font.fonts[i].name, i);
     }
     repeat(dataWin->tmln.count, i) {
+        if (!dataWin->tmln.timelines[i].present) continue;
         shput(runner->assetsByName, dataWin->tmln.timelines[i].name, i);
     }
     repeat(dataWin->room.count, i) {
+        if (!dataWin->room.rooms[i].present) continue;
         shput(runner->assetsByName, dataWin->room.rooms[i].name, i);
     }
 
@@ -1871,6 +1907,7 @@ void Runner_cleanupDestroyedInstances(Runner* runner) {
             runner->instances[writeIdx++] = inst;
         } else {
             Runner_removeInstanceFromObjectLists(runner, inst);
+            SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
             hmdel(runner->instancesById, inst->instanceId);
             Instance_free(inst);
             // Cached drawables hold raw Instance* that we just freed; force a rebuild before the next draw.
@@ -2749,6 +2786,12 @@ bool Runner_surfaceResetTarget(Runner* runner) {
     int32_t newTarget = newTop == -1 ? APPLICATION_SURFACE_ID : runner->surfaceStack[newTop];
     runner->renderer->vtable->setRenderTarget(runner->renderer, newTarget);
     return true;
+}
+
+int32_t Runner_surfaceGetTarget(Runner* runner) {
+    int32_t top = findStackTop(runner);
+    if (top == -1) return -1;
+    return runner->surfaceStack[top];
 }
 
 // ===[ State Dump ]===
