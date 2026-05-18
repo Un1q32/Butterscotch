@@ -3231,6 +3231,90 @@ static RValue executeLoop(VMContext* ctx) {
     return RValue_makeUndefined();
 }
 
+// Rewrites bytecode version 14 opcodes to use bytecode version 16 opcodes
+static void rewriteBytecode14To16(VMContext* ctx) {
+    DataWin* dw = ctx->dataWin;
+    uint8_t* buf = dw->bytecodeBuffer;
+    size_t base = dw->bytecodeBufferBase;
+
+    repeat(dw->code.count, codeIdx) {
+        CodeEntry* entry = &dw->code.entries[codeIdx];
+        if (entry->length == 0) continue;
+
+        uint32_t ip = entry->bytecodeAbsoluteOffset;
+        uint32_t end = ip + entry->length;
+
+        while (ip < end) {
+            uint32_t instrAddr = ip;
+            uint32_t instr = BinaryUtils_readUint32(&buf[instrAddr - base]);
+            uint8_t oldKind = (instr >> 24) & 0xFF;
+            uint8_t type1 = (instr >> 16) & 0x0F;
+
+            uint8_t newKind = oldKind;
+            switch (oldKind) {
+                case 0x03: newKind = OP_CONV; break;
+                case 0x04: newKind = OP_MUL; break;
+                case 0x05: newKind = OP_DIV; break;
+                case 0x06: newKind = OP_REM; break;
+                case 0x07: newKind = OP_MOD; break;
+                case 0x08: newKind = OP_ADD; break;
+                case 0x09: newKind = OP_SUB; break;
+                case 0x0A: newKind = OP_AND; break;
+                case 0x0B: newKind = OP_OR; break;
+                case 0x0C: newKind = OP_XOR; break;
+                case 0x0D: newKind = OP_NEG; break;
+                case 0x0E: newKind = OP_NOT; break;
+                case 0x0F: newKind = OP_SHL; break;
+                case 0x10: newKind = OP_SHR; break;
+                case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16:
+                    newKind = OP_CMP;
+                    instr = (instr & 0xFF0000FF) | ((uint32_t)(oldKind - 0x10) << 8);
+                    break;
+                case 0x41: newKind = OP_POP; break;
+                case 0x82: newKind = OP_DUP; break;
+                case 0x9D: newKind = OP_RET; break;
+                case 0x9E: newKind = OP_EXIT; break;
+                case 0x9F: newKind = OP_POPZ; break;
+                case 0xB7: newKind = OP_B; break;
+                case 0xB8: newKind = OP_BT; break;
+                case 0xB9: newKind = OP_BF; break;
+                case 0xBB: newKind = OP_PUSHENV; break;
+                case 0xBC: newKind = OP_POPENV; break;
+                case 0xDA: newKind = OP_CALL; break;
+                case 0xC0:
+                    if (type1 == GML_TYPE_INT16) {
+                        newKind = OP_PUSHI;
+                    }
+                    break;
+            }
+
+            if (newKind != oldKind || oldKind == 0x11 || oldKind == 0x12 || oldKind == 0x13 || oldKind == 0x14 || oldKind == 0x16) {
+                instr = (instr & 0x00FFFFFF) | ((uint32_t)newKind << 24);
+                BinaryUtils_writeUint32(&buf[instrAddr - base], instr);
+            }
+
+            uint32_t size = 4;
+            switch (newKind) {
+                case OP_PUSH: case OP_PUSHLOC: case OP_PUSHGLB: case OP_PUSHBLTN:
+                    if (type1 == GML_TYPE_INT16) size = 4;
+                    else if (type1 == GML_TYPE_DOUBLE || type1 == GML_TYPE_INT64) size = 12;
+                    else size = 8;
+                    break;
+                case OP_POP:
+                    size = (type1 == GML_TYPE_INT16) ? 4 : 8;
+                    break;
+                case OP_CALL:
+                    size = 8;
+                    break;
+                case OP_BREAK:
+                    size = (type1 == GML_TYPE_INT32) ? 8 : 4;
+                    break;
+            }
+            ip += size;
+        }
+    }
+}
+
 // ===[ Public API ]===
 
 VMContext* VM_create(DataWin* dataWin) {
@@ -3252,6 +3336,10 @@ VMContext* VM_create(DataWin* dataWin) {
     ctx->currentEventObjectIndex = -1;
 
     ctx->profiler = nullptr; // lazily allocated by Profiler_setEnabled(&ctx->profiler, true)
+
+    if (dataWin->gen8.bytecodeVersion == 13 || dataWin->gen8.bytecodeVersion == 14) {
+        rewriteBytecode14To16(ctx);
+    }
 
     // Validate that no code entry exceeds MAX_CODE_LOCALS (the VM uses stack-allocated arrays of this size)
     repeat(dataWin->code.count, i) {
