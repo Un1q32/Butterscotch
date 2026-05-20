@@ -1584,6 +1584,11 @@ static bool SWRenderer_setRenderTarget(Renderer* renderer, int32_t surfaceID)
 
 static float SWRenderer_getSurfaceWidth(Renderer* renderer, int32_t surfaceID)
 {
+	SWRenderer* swr = (SWRenderer*) renderer;
+	if (surfaceID == APPLICATION_SURFACE_ID) {
+		return (float) swr->width;
+	}
+	
 	UNIMP();
 	(void)renderer; (void)surfaceID;
 	return 0.0f;
@@ -1591,6 +1596,11 @@ static float SWRenderer_getSurfaceWidth(Renderer* renderer, int32_t surfaceID)
 
 static float SWRenderer_getSurfaceHeight(Renderer* renderer, int32_t surfaceID)
 {
+	SWRenderer* swr = (SWRenderer*) renderer;
+	if (surfaceID == APPLICATION_SURFACE_ID) {
+		return (float) swr->height;
+	}
+	
 	UNIMP();
 	(void)renderer; (void)surfaceID;
 	return 0.0f;
@@ -1789,53 +1799,63 @@ static void SWRenderer_drawTiledPart(Renderer* renderer, int32_t tpagIndex,
 	(void)color; (void)alpha;
 }
 
+static int32_t SWRenderer_ensureApplicationSurface(Renderer* renderer, int32_t width, int32_t height)
+{
+	UNIMP();
+	(void) renderer;
+	(void) width;
+	(void) height;
+	return -1;
+}
+
 static RendererVtable swrVtable =
 {
-	.init                    = SWRenderer_init,
-	.destroy                 = SWRenderer_destroy,
-	.beginFrame              = SWRenderer_beginFrame,
-	.endFrameInit            = SWRenderer_endFrameInit,
-	.endFrameEnd             = SWRenderer_endFrameEnd,
-	.beginView               = SWRenderer_beginView,
-	.endView                 = SWRenderer_endView,
-	.beginGUI                = SWRenderer_beginGUI,
-	.endGUI                  = SWRenderer_endGUI,
-	.drawSprite              = SWRenderer_drawSprite,
-	.drawSpritePart          = SWRenderer_drawSpritePart,
-	.drawSpritePos           = SWRenderer_drawSpritePos,
-	.drawRectangle           = SWRenderer_drawRectangle,
-	.drawRectangleColor      = SWRenderer_drawRectangleColor,
-	.drawLine                = SWRenderer_drawLine,
-	.drawTriangle            = SWRenderer_drawTriangle,
-	.drawLineColor           = SWRenderer_drawLineColor,
-	.drawText                = SWRenderer_drawText,
-	.drawTextColor           = SWRenderer_drawTextColor,
-	.flush                   = SWRenderer_flush,
-	.clearScreen             = SWRenderer_clearScreen,
-	.createSpriteFromSurface = SWRenderer_createSpriteFromSurface,
-	.deleteSprite            = SWRenderer_deleteSprite,
-	.gpuSetBlendMode         = SWRenderer_gpuSetBlendMode,
-	.gpuSetBlendModeExt      = SWRenderer_gpuSetBlendModeExt,
-	.gpuSetBlendEnable       = SWRenderer_gpuSetBlendEnable,
-	.gpuSetAlphaTestEnable   = SWRenderer_gpuSetAlphaTestEnable,
-	.gpuSetAlphaTestRef      = SWRenderer_gpuSetAlphaTestRef,
-	.gpuSetColorWriteEnable  = SWRenderer_gpuSetColorWriteEnable,
-	.gpuGetColorWriteEnable  = SWRenderer_gpuGetColorWriteEnable,
-	.gpuGetBlendEnable       = SWRenderer_gpuGetBlendEnable,
-	.gpuSetFog               = SWRenderer_gpuSetFog,
-	.drawTile                = NULL,
-	.drawTiled               = SWRenderer_drawTiled,
-	.createSurface           = SWRenderer_createSurface,
-	.surfaceExists           = SWRenderer_surfaceExists,
-	.setRenderTarget         = SWRenderer_setRenderTarget,
-	.getSurfaceWidth         = SWRenderer_getSurfaceWidth,
-	.getSurfaceHeight        = SWRenderer_getSurfaceHeight,
-	.drawSurface             = SWRenderer_drawSurface,
-	.surfaceResize           = SWRenderer_surfaceResize,
-	.surfaceFree             = SWRenderer_surfaceFree,
-	.surfaceCopy             = SWRenderer_surfaceCopy,
-	.surfaceGetPixels        = SWRenderer_surfaceGetPixels,
-	.drawTiledPart           = SWRenderer_drawTiledPart,
+	.init                     = SWRenderer_init,
+	.destroy                  = SWRenderer_destroy,
+	.beginFrame               = SWRenderer_beginFrame,
+	.endFrameInit             = SWRenderer_endFrameInit,
+	.endFrameEnd              = SWRenderer_endFrameEnd,
+	.beginView                = SWRenderer_beginView,
+	.endView                  = SWRenderer_endView,
+	.beginGUI                 = SWRenderer_beginGUI,
+	.endGUI                   = SWRenderer_endGUI,
+	.drawSprite               = SWRenderer_drawSprite,
+	.drawSpritePart           = SWRenderer_drawSpritePart,
+	.drawSpritePos            = SWRenderer_drawSpritePos,
+	.drawRectangle            = SWRenderer_drawRectangle,
+	.drawRectangleColor       = SWRenderer_drawRectangleColor,
+	.drawLine                 = SWRenderer_drawLine,
+	.drawTriangle             = SWRenderer_drawTriangle,
+	.drawLineColor            = SWRenderer_drawLineColor,
+	.drawText                 = SWRenderer_drawText,
+	.drawTextColor            = SWRenderer_drawTextColor,
+	.flush                    = SWRenderer_flush,
+	.clearScreen              = SWRenderer_clearScreen,
+	.createSpriteFromSurface  = SWRenderer_createSpriteFromSurface,
+	.deleteSprite             = SWRenderer_deleteSprite,
+	.gpuSetBlendMode          = SWRenderer_gpuSetBlendMode,
+	.gpuSetBlendModeExt       = SWRenderer_gpuSetBlendModeExt,
+	.gpuSetBlendEnable        = SWRenderer_gpuSetBlendEnable,
+	.gpuSetAlphaTestEnable    = SWRenderer_gpuSetAlphaTestEnable,
+	.gpuSetAlphaTestRef       = SWRenderer_gpuSetAlphaTestRef,
+	.gpuSetColorWriteEnable   = SWRenderer_gpuSetColorWriteEnable,
+	.gpuGetColorWriteEnable   = SWRenderer_gpuGetColorWriteEnable,
+	.gpuGetBlendEnable        = SWRenderer_gpuGetBlendEnable,
+	.gpuSetFog                = SWRenderer_gpuSetFog,
+	.drawTile                 = NULL,
+	.drawTiled                = SWRenderer_drawTiled,
+	.createSurface            = SWRenderer_createSurface,
+	.surfaceExists            = SWRenderer_surfaceExists,
+	.setRenderTarget          = SWRenderer_setRenderTarget,
+	.ensureApplicationSurface = SWRenderer_ensureApplicationSurface,
+	.getSurfaceWidth          = SWRenderer_getSurfaceWidth,
+	.getSurfaceHeight         = SWRenderer_getSurfaceHeight,
+	.drawSurface              = SWRenderer_drawSurface,
+	.surfaceResize            = SWRenderer_surfaceResize,
+	.surfaceFree              = SWRenderer_surfaceFree,
+	.surfaceCopy              = SWRenderer_surfaceCopy,
+	.surfaceGetPixels         = SWRenderer_surfaceGetPixels,
+	.drawTiledPart            = SWRenderer_drawTiledPart,
 };
 
 void SWRenderer_clearFrameBuffer(Renderer* renderer, uint32_t color)
