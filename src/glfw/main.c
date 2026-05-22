@@ -1227,9 +1227,6 @@ int main(int argc, char* argv[]) {
         GlfwGamepad_poll(runner->gamepads);
 #endif
 
-        // Process input recording/playback (must happen after glfwPollEvents, before Runner_step)
-        InputRecording_processFrame(globalInputRecording, runner->keyboard, runner->frameCount);
-
         // Debug key bindings
         if (runner->debugMode) {
             // Pause
@@ -1237,8 +1234,27 @@ int main(int argc, char* argv[]) {
                 debugPaused = !debugPaused;
                 fprintf(stderr, "Debug: %s\n", debugPaused ? "Paused" : "Resumed");
             }
+        }
 
-            // Go to next room
+        // Run the game step if the game is paused
+        bool shouldStep = true;
+        if (runner->debugMode && debugPaused) {
+            shouldStep = RunnerKeyboard_checkPressed(runner->keyboard, 'O');
+            if (shouldStep) fprintf(stderr, "Debug: Frame advance (frame %d)\n", runner->frameCount);
+        }
+
+        double frameStartTime = 0;
+
+        if (shouldStep) {
+            if (args.traceFrames) {
+                frameStartTime = glfwGetTime();
+                fprintf(stderr, "Frame %d (Start)\n", runner->frameCount);
+            }
+
+            // Process input recording/playback (must happen after glfwPollEvents, before Runner_step)
+            InputRecording_processFrame(globalInputRecording, runner->keyboard, runner->frameCount);
+
+                        // Go to next room
             if (RunnerKeyboard_checkPressed(runner->keyboard, VK_PAGEUP)) {
                 DataWin* dw = runner->dataWin;
                 if ((int32_t) dw->gen8.roomOrderCount > runner->currentRoomOrderPosition + 1) {
@@ -1302,23 +1318,7 @@ int main(int argc, char* argv[]) {
                 runner->vmContext->globalVars[interactVarId] = RValue_makeInt32(0);
                 printf("Changed global.interact [%d] value!\n", interactVarId);
             }
-        }
-
-        // Run the game step if the game is paused
-        bool shouldStep = true;
-        if (runner->debugMode && debugPaused) {
-            shouldStep = RunnerKeyboard_checkPressed(runner->keyboard, 'O');
-            if (shouldStep) fprintf(stderr, "Debug: Frame advance (frame %d)\n", runner->frameCount);
-        }
-
-        double frameStartTime = 0;
-
-        if (shouldStep) {
-            if (args.traceFrames) {
-                frameStartTime = glfwGetTime();
-                fprintf(stderr, "Frame %d (Start)\n", runner->frameCount);
-            }
-
+            
             // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
             Runner_step(runner);
 
