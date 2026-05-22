@@ -141,6 +141,7 @@ typedef struct {
     bool headless;
     bool traceFrames;
     bool printRooms;
+    bool printObjects;
     bool printDeclaredFunctions;
     int exitAtFrame;
     int traceBytecodeAfterFrame;
@@ -218,6 +219,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
         {"screenshot-surfaces-at-frame", required_argument, nullptr, 'V'},
         {"headless",            no_argument,       nullptr, 'h'},
         {"print-rooms", no_argument,               nullptr, 'r'},
+        {"print-objects", no_argument,             nullptr, 'b'},
         {"print-declared-functions", no_argument,  nullptr, 'p'},
         {"trace-variable-reads", required_argument,  nullptr, 'R'},
         {"trace-variable-writes", required_argument, nullptr, 'W'},
@@ -309,6 +311,9 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 break;
             case 'r':
                 args->printRooms = true;
+                break;
+            case 'b':
+                args->printObjects = true;
                 break;
             case 'p':
                 args->printDeclaredFunctions = true;
@@ -921,6 +926,47 @@ int main(int argc, char* argv[]) {
 
             if (loadedHere && !room->eagerlyLoaded) {
                 DataWin_freeRoomPayload(room);
+            }
+        }
+        VM_free(vm);
+        DataWin_free(dataWin);
+        return 0;
+    }
+
+    if (args.printObjects) {
+        forEachIndexed(GameObject, obj, idx, dataWin->objt.objects, dataWin->objt.count) {
+            uint32_t totalEvents = 0;
+            repeat(OBJT_EVENT_TYPE_COUNT, e) {
+                totalEvents += obj->eventLists[e].eventCount;
+            }
+            printf("[%u] %s:\n", idx, obj->name);
+            if (obj->parentId >= 0 && (uint32_t) obj->parentId < dataWin->objt.count) {
+                printf("  Parent: %s (%d)\n", dataWin->objt.objects[obj->parentId].name, obj->parentId);
+            } else {
+                printf("  Parent: none\n");
+            }
+            if (obj->spriteId >= 0 && (uint32_t) obj->spriteId < dataWin->sprt.count) {
+                printf("  Sprite: %s (%d)\n", dataWin->sprt.sprites[obj->spriteId].name, obj->spriteId);
+            } else {
+                printf("  Sprite: none\n");
+            }
+            printf("  Solid: %d\n", obj->solid);
+            printf("  Persistent: %d\n", obj->persistent);
+            printf("  Visible: %d\n", obj->visible);
+            printf("  Depth: %d\n", obj->depth);
+            printf("  Events (%u):\n", totalEvents);
+            repeat(OBJT_EVENT_TYPE_COUNT, e) {
+                ObjectEventList* list = &obj->eventLists[e];
+                repeat(list->eventCount, eIdx) {
+                    ObjectEvent* event = &list->events[eIdx];
+                    const char* eventName = Runner_getEventName((int32_t) e, (int32_t) event->eventSubtype);
+                    int32_t codeId = -1;
+                    if (event->actionCount > 0) codeId = event->actions[0].codeId;
+                    printf("    %s:\n", eventName);
+                    printf("      Sub Type: %u\n", event->eventSubtype);
+                    printf("      Code ID: %d\n", codeId);
+                    printf("      Actions: %u\n", event->actionCount);
+                }
             }
         }
         VM_free(vm);
