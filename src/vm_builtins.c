@@ -268,6 +268,7 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "image_blend", BUILTIN_VAR_IMAGE_BLEND },
     { "image_index", BUILTIN_VAR_IMAGE_INDEX },
     { "image_number", BUILTIN_VAR_IMAGE_NUMBER },
+    { "image_single", BUILTIN_VAR_IMAGE_SINGLE },
     { "image_speed", BUILTIN_VAR_IMAGE_SPEED },
     { "image_xscale", BUILTIN_VAR_IMAGE_XSCALE },
     { "image_yscale", BUILTIN_VAR_IMAGE_YSCALE },
@@ -503,6 +504,13 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
                 return RValue_makeReal((GMLReal) sprite->textureCount);
             }
             return RValue_makeReal(0.0);
+        }
+        case BUILTIN_VAR_IMAGE_SINGLE: {
+            if (inst == nullptr) break;
+            if (inst->imageSpeed == 0.0) {
+                return RValue_makeReal((GMLReal) inst->imageIndex);
+            }
+            return RValue_makeReal(-1.0);
         }
         case BUILTIN_VAR_SPRITE_INDEX:
             if (inst == nullptr) break;
@@ -997,6 +1005,17 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
             if (inst == nullptr) break;
             inst->imageBlend = (uint32_t) RValue_toReal(val);
             return;
+        case BUILTIN_VAR_IMAGE_SINGLE: {
+            if (inst == nullptr) break;
+            float value = (float) RValue_toReal(val);
+            if (value < 0.0) {
+                inst->imageSpeed = 1.0;
+            } else {
+                inst->imageSpeed = 0.0;
+                inst->imageIndex = value;
+            }
+            return;
+        }
         case BUILTIN_VAR_SPRITE_INDEX: {
             if (inst == nullptr) break;
             int32_t value = RValue_toInt32(val);
@@ -4258,13 +4277,40 @@ static RValue builtin_sound_play(VMContext* ctx, RValue* args, MAYBE_UNUSED int3
     AudioSystem* audio = getAudioSystem(ctx);
     if (audio == nullptr) return RValue_makeReal(-1.0);
 
-    // Do not attempt to play "undefined" sounds (matches GameMaker-HTML5 behavior, and fixes random sound effects on room transitions in DELTARUNE Chapter 2)
+    // Do not attempt to play "undefined" sounds
     if (args[0].type == RVALUE_UNDEFINED)
         return RValue_makeReal(-1.0);
 
     int32_t soundIndex = RValue_toInt32(args[0]);
     int32_t instanceId = audio->vtable->playSound(audio, soundIndex, 10, false);
     return RValue_makeReal((GMLReal) instanceId);
+}
+
+// same as builtin_sound_play with loop enabled
+static RValue builtin_sound_loop(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {   
+    AudioSystem* audio = getAudioSystem(ctx);
+    if (audio == nullptr) return RValue_makeReal(-1.0);
+    
+    // Do not attempt to play "undefined" sounds
+    if (args[0].type == RVALUE_UNDEFINED)
+        return RValue_makeReal(-1.0);
+    
+    int32_t soundIndex = RValue_toInt32(args[0]);
+    int32_t instanceId = audio->vtable->playSound(audio, soundIndex, 10, true);
+    return RValue_makeReal((GMLReal) instanceId);
+}
+
+static RValue builtin_sound_volume(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {   
+    AudioSystem* audio = getAudioSystem(ctx);
+    if (audio == nullptr) return RValue_makeUndefined();
+    
+    int32_t soundIndex = RValue_toInt32(args[0]);
+    float volume = (float) RValue_toReal(args[1]);
+
+    // Set timeMs to 0 for immediate change
+    audio->vtable->setSoundGain(audio, soundIndex, volume, 0);
+    
+    return RValue_makeUndefined();
 }
 
 static RValue builtin_audio_play_sound(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -4841,6 +4887,32 @@ static RValue builtin_file_exists(VMContext* ctx, RValue* args, int32_t argCount
     Runner* runner = ctx->runner;
     FileSystem* fs = runner->fileSystem;
     return RValue_makeBool(fs->vtable->fileExists(fs, path));
+}
+
+static RValue builtin_directory_exists(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeBool(false);
+    const char* path = (args[0].type == RVALUE_STRING ? args[0].string : "");
+    Runner* runner = (Runner*) ctx->runner;
+    FileSystem* fs = runner->fileSystem;
+    return RValue_makeBool(fs->vtable->directoryExists(fs, path));
+}
+
+static RValue builtin_directory_create(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    const char* path = (args[0].type == RVALUE_STRING ? args[0].string : "");
+    Runner* runner = (Runner*) ctx->runner;
+    FileSystem* fs = runner->fileSystem;
+    fs->vtable->createDirectory(fs, path);
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_directory_destroy(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeUndefined();
+    const char* path = (args[0].type == RVALUE_STRING ? args[0].string : "");
+    Runner* runner = (Runner*) ctx->runner;
+    FileSystem* fs = runner->fileSystem;
+    fs->vtable->deleteDirectory(fs, path);
+    return RValue_makeUndefined();
 }
 
 static RValue builtin_file_text_open_read(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -6378,7 +6450,74 @@ static RValue builtin_buffer_save(MAYBE_UNUSED VMContext* ctx, RValue* args, MAY
     return RValue_makeUndefined();
 }
 
-STUB_RETURN_ZERO(buffer_base64_encode)
+static RValue builtin_buffer_save_ext(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    FileSystem* fs = runner->fileSystem;
+    int32_t id = RValue_toInt32(args[0]);
+    char* filename = RValue_toString(args[1]);
+    int32_t offset = RValue_toInt32(args[2]);
+    size_t size = RValue_toInt32(args[3]);
+    GmlBuffer* buf = gmlBufferGet(runner, id);
+
+    if (buf != nullptr && size > 0 && offset >= 0) {
+        int32_t maxBoundary = (buf->type == GML_BUFFER_GROW) ? buf->usedSize : buf->size;
+
+        if (offset < maxBoundary) {
+            if (offset + size > maxBoundary) {
+                size = maxBoundary - offset;
+            }
+
+            fs->vtable->writeFileBinary(fs, filename, buf->data + offset, size);
+        }
+    }
+
+    free(filename);
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_buffer_base64_encode(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    if (3 > argCount) return RValue_makeOwnedString(safeStrdup(""));
+
+    int32_t id = RValue_toInt32(args[0]);
+    GmlBuffer* buf = gmlBufferGet(runner, id);
+    if (buf == nullptr) return RValue_makeOwnedString(safeStrdup(""));
+
+    int32_t offset = RValue_toInt32(args[1]);
+    size_t size = RValue_toInt32(args[2]);
+
+    int32_t maxBoundary = (buf->type == GML_BUFFER_GROW) ? buf->usedSize : buf->size;
+
+    if (offset < 0 || offset >= maxBoundary || size <= 0) {
+        return RValue_makeOwnedString(safeStrdup(""));
+    }
+
+    if (offset + size > (size_t)maxBoundary) {
+        size = (size_t)(maxBoundary - offset);
+    }
+
+    char* out = safeMalloc(BASE64_ENCODE_OUT_SIZE(size));
+    base64_encode((const unsigned char*) buf->data + offset, size, out);
+    return RValue_makeOwnedString(out);
+}
+
+static RValue builtin_buffer_base64_decode(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    if (2 > argCount) return RValue_makeOwnedString(safeStrdup(""));
+    char* input = RValue_toString(args[1]);
+    unsigned int inLen = (unsigned int) strlen(input);
+    size_t outLen = BASE64_DECODE_OUT_SIZE(inLen);
+    char* out = safeMalloc(outLen);
+    base64_decode((const unsigned char*) input, inLen, out);
+    free(input);
+    int32_t id = gmlBufferCreate(runner, outLen, GML_BUFFER_GROW, 1);
+    GmlBuffer* buf = gmlBufferGet(runner, id);
+    free(buf->data);
+    buf->data = out;
+    buf->size = outLen;
+    buf->usedSize = outLen;
+    return RValue_makeReal((GMLReal) id);
+}
 
 static RValue builtin_base64_encode(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
@@ -7167,6 +7306,21 @@ static RValue builtin_draw_line(VMContext* ctx, RValue* args, MAYBE_UNUSED int32
         float x2 = (float) RValue_toReal(args[2]);
         float y2 = (float) RValue_toReal(args[3]);
         runner->renderer->vtable->drawLine(runner->renderer, x1, y1, x2, y2, 1.0f, runner->renderer->drawColor, runner->renderer->drawAlpha);
+    }
+    return RValue_makeUndefined();
+}
+
+// draw_line_colour(x1, y1, x2, y2, col1, col2)
+static RValue builtin_draw_line_colour(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    if (runner->renderer != nullptr) {
+        float x1 = (float) RValue_toReal(args[0]);
+        float y1 = (float) RValue_toReal(args[1]);
+        float x2 = (float) RValue_toReal(args[2]);
+        float y2 = (float) RValue_toReal(args[3]);
+        float col1 = (float) RValue_toReal(args[4]);
+        float col2 = (float) RValue_toReal(args[5]);
+        runner->renderer->vtable->drawLineColor(runner->renderer, x1, y1, x2, y2, 1.0f, col1, col2, runner->renderer->drawAlpha);
     }
     return RValue_makeUndefined();
 }
@@ -11217,6 +11371,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "action_end_sound", builtin_audio_stop_sound);
         VM_registerBuiltin(ctx, "action_if_sound", builtin_audio_is_playing);
         VM_registerBuiltin(ctx, "sound_play", builtin_sound_play);
+        VM_registerBuiltin(ctx, "sound_loop", builtin_sound_loop);
+        VM_registerBuiltin(ctx, "sound_volume", builtin_sound_volume);
         VM_registerBuiltin(ctx, "sound_exists", builtin_audio_exists); // Replaced with audio_exists in GMS2
         VM_registerBuiltin(ctx, "sound_fade", builtin_audio_sound_gain);
         VM_registerBuiltin(ctx, "sound_global_volume", builtin_audio_master_gain);
@@ -11256,6 +11412,11 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "ini_read_string", builtin_ini_read_string);
     VM_registerBuiltin(ctx, "ini_read_real", builtin_ini_read_real);
     VM_registerBuiltin(ctx, "ini_section_exists", builtin_ini_section_exists);
+
+    // Directory
+    VM_registerBuiltin(ctx, "directory_exists", builtin_directory_exists);
+    VM_registerBuiltin(ctx, "directory_create", builtin_directory_create);
+    VM_registerBuiltin(ctx, "directory_destroy", builtin_directory_destroy);
 
     // File
     VM_registerBuiltin(ctx, "file_exists", builtin_file_exists);
@@ -11368,7 +11529,9 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "buffer_get_size", builtin_buffer_get_size);
     VM_registerBuiltin(ctx, "buffer_load", builtin_buffer_load);
     VM_registerBuiltin(ctx, "buffer_save", builtin_buffer_save);
+    VM_registerBuiltin(ctx, "buffer_save_ext", builtin_buffer_save_ext);
     VM_registerBuiltin(ctx, "buffer_base64_encode", builtin_buffer_base64_encode);
+    VM_registerBuiltin(ctx, "buffer_base64_decode", builtin_buffer_base64_decode);
     VM_registerBuiltin(ctx, "base64_encode", builtin_base64_encode);
     VM_registerBuiltin(ctx, "base64_decode", builtin_base64_decode);
     VM_registerBuiltin(ctx, "buffer_md5", builtin_buffer_md5);
@@ -11437,6 +11600,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     }
     VM_registerBuiltin(ctx, "draw_self", builtin_draw_self);
     VM_registerBuiltin(ctx, "draw_line", builtin_draw_line);
+    VM_registerBuiltin(ctx, "draw_line_colour", builtin_draw_line_colour);
+    VM_registerBuiltin(ctx, "draw_line_color", builtin_draw_line_colour); // alt-spelling (used in Undertale)
     VM_registerBuiltin(ctx, "draw_line_width", builtin_draw_line_width);
     VM_registerBuiltin(ctx, "draw_line_width_colour", builtin_draw_line_width_colour);
     VM_registerBuiltin(ctx, "draw_line_width_color", builtin_draw_line_width_colour);
