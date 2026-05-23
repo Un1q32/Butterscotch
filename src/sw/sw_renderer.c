@@ -580,7 +580,7 @@ FORCE_INLINE void swrPlotPixel(Renderer* renderer, int x, int y, uintpixel_t col
 	alphaBlend(&swr->fb[y * swr->fbPitch + x], color, alpha);
 }
 
-static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, int alpha)
+static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
 	SWRenderer *swr = (SWRenderer*) renderer;
 	
@@ -590,12 +590,48 @@ static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixe
 	if (dx + dw >= swr->width) dw = swr->width - dx;
 	if (dw <= 0) return;
 	
-	uintpixel_t *line = &swr->fb[dy * swr->fbPitch + dx];
-	for (int i = 0; i < dw; i++)
-		alphaBlend(&line[i], color, alpha);
+#if PIXEL_SIZE == 32
+	if (color == color2)
+#endif
+	{
+		uintpixel_t *line = &swr->fb[dy * swr->fbPitch + dx];
+		for (int i = 0; i < dw; i++)
+			alphaBlend(&line[i], color, alpha);
+	}
+#if PIXEL_SIZE == 32
+	else
+	{
+		Pixel32ARGB clr1, clr2;
+		clr1.l = color;
+		clr2.l = color2;
+		
+		uint32_t rinit = clr1.p.r << 20;
+		uint32_t ginit = clr1.p.g << 20;
+		uint32_t binit = clr1.p.b << 20;
+		int32_t rstep = ((int)clr2.p.r - clr1.p.r) << 20;
+		int32_t gstep = ((int)clr2.p.g - clr1.p.g) << 20;
+		int32_t bstep = ((int)clr2.p.b - clr1.p.b) << 20;
+		rstep /= dw;
+		gstep /= dw;
+		bstep /= dw;
+		
+		uintpixel_t *line = &swr->fb[dy * swr->fbPitch + dx];
+		for (int i = 0; i < dw; i++)
+		{
+			Pixel32ARGB resultPixel;
+			resultPixel.p.r = rinit >> 20;
+			resultPixel.p.g = ginit >> 20;
+			resultPixel.p.b = binit >> 20;
+			rinit += rstep;
+			ginit += gstep;
+			binit += bstep;
+			alphaBlend(&line[i], resultPixel.l, alpha);
+		}
+	}
+#endif
 }
 
-static void swrDrawHLine(Renderer* renderer, float dx, float dy, float dw, uintpixel_t color, float alpha)
+static void swrDrawHLine(Renderer* renderer, float dx, float dy, float dw, uintpixel_t color, uintpixel_t color2, float alpha)
 {
 	SWRenderer *swr = (SWRenderer*) renderer;
 	float thickness = 1;
@@ -604,10 +640,10 @@ static void swrDrawHLine(Renderer* renderer, float dx, float dy, float dw, uintp
 	swrTransformSizeIfNeeded(swr, &dw, &thickness);
 
 	// TODO: use thickness
-	swrDrawHLineInt(renderer, swrFloor(dx), swrFloor(dy), swrCeiling(dw), color, swrIntAlpha(alpha));
+	swrDrawHLineInt(renderer, swrFloor(dx), swrFloor(dy), swrCeiling(dw), color, color2, swrIntAlpha(alpha));
 }
 
-static void swrDrawVLineInt(Renderer* renderer, int dx, int dy, int dh, uintpixel_t color, int alpha)
+static void swrDrawVLineInt(Renderer* renderer, int dx, int dy, int dh, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
 	SWRenderer *swr = (SWRenderer*) renderer;
 	
@@ -617,14 +653,50 @@ static void swrDrawVLineInt(Renderer* renderer, int dx, int dy, int dh, uintpixe
 	if (dy + dh >= swr->height) dh = swr->height - dy;
 	if (dh <= 0) return;
 	
-	for (int i = 0; i < dh; i++)
+#if PIXEL_SIZE == 32
+	if (color == color2)
+#endif
 	{
-		uintpixel_t *line = &swr->fb[(dy + i) * swr->fbPitch + dx];
-		alphaBlend(&line[0], color, alpha);
+		for (int i = 0; i < dh; i++)
+		{
+			uintpixel_t *line = &swr->fb[(dy + i) * swr->fbPitch + dx];
+			alphaBlend(&line[0], color, alpha);
+		}
 	}
+#if PIXEL_SIZE == 32
+	else
+	{
+		Pixel32ARGB clr1, clr2;
+		clr1.l = color;
+		clr2.l = color2;
+		
+		uint32_t rinit = clr1.p.r << 20;
+		uint32_t ginit = clr1.p.g << 20;
+		uint32_t binit = clr1.p.b << 20;
+		int32_t rstep = ((int)clr2.p.r - clr1.p.r) << 20;
+		int32_t gstep = ((int)clr2.p.g - clr1.p.g) << 20;
+		int32_t bstep = ((int)clr2.p.b - clr1.p.b) << 20;
+		rstep /= dh;
+		gstep /= dh;
+		bstep /= dh;
+		
+		for (int i = 0; i < dh; i++)
+		{
+			uintpixel_t *line = &swr->fb[(dy + i) * swr->fbPitch + dx];
+			Pixel32ARGB resultPixel;
+			resultPixel.p.r = rinit >> 20;
+			resultPixel.p.g = ginit >> 20;
+			resultPixel.p.b = binit >> 20;
+			rinit += rstep;
+			ginit += gstep;
+			binit += bstep;
+			alphaBlend(&line[0], resultPixel.l, alpha);
+		}
+	}
+#endif
 }
 
-static void swrDrawVLine(Renderer* renderer, float dx, float dy, float dh, uintpixel_t color, float alpha)
+static void swrDrawVLine(Renderer* renderer, float dx, float dy, float dh, uintpixel_t color, uintpixel_t color2, float alpha)
 {
 	SWRenderer *swr = (SWRenderer*) renderer;
 	float thickness = 1;
@@ -633,33 +705,55 @@ static void swrDrawVLine(Renderer* renderer, float dx, float dy, float dh, uintp
 	swrTransformSizeIfNeeded(swr, &thickness, &dh);
 	
 	// TODO: use thickness
-	swrDrawVLineInt(renderer, swrFloor(dx), swrFloor(dy), swrCeiling(dh), color, swrIntAlpha(alpha));
+	swrDrawVLineInt(renderer, swrFloor(dx), swrFloor(dy), swrCeiling(dh), color, color2, swrIntAlpha(alpha));
 }
 
 static void swrDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t color, float alpha)
 {
-	swrDrawHLine(renderer, x1, y1, (x2 - x1) + 1, color, alpha);
-	swrDrawHLine(renderer, x1, y2, (x2 - x1) + 1, color, alpha);
-	swrDrawVLine(renderer, x1, y1, (y2 - y1) + 1, color, alpha);
-	swrDrawVLine(renderer, x2, y1, (y2 - y1) + 1, color, alpha);
+	swrDrawHLine(renderer, x1, y1, (x2 - x1) + 1, color, color, alpha);
+	swrDrawHLine(renderer, x1, y2, (x2 - x1) + 1, color, color, alpha);
+	swrDrawVLine(renderer, x1, y1, (y2 - y1) + 1, color, color, alpha);
+	swrDrawVLine(renderer, x2, y1, (y2 - y1) + 1, color, color, alpha);
 }
 
-static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, int width, uintpixel_t color, int alpha)
+static void swrDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t color1, uintpixel_t color2, uintpixel_t color3, uintpixel_t color4, float alpha)
+{
+	swrDrawHLine(renderer, x1, y1, (x2 - x1) + 1, color1, color2, alpha);
+	swrDrawHLine(renderer, x1, y2, (x2 - x1) + 1, color3, color4, alpha);
+	swrDrawVLine(renderer, x1, y1, (y2 - y1) + 1, color1, color3, alpha);
+	swrDrawVLine(renderer, x2, y1, (y2 - y1) + 1, color2, color4, alpha);
+}
+
+static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, int width, uintpixel_t color1, uintpixel_t color2, int alpha)
 {
 	if (x1 == x2)
 	{
-		swrDrawVLineInt(renderer, x1, swrMin(y1, y2), swrAbs(y1 - y2), color, alpha);
+		swrDrawVLineInt(renderer, x1, swrMin(y1, y2), swrAbs(y1 - y2), color1, color2, alpha);
 		return;
 	}
 	if (y1 == y2)
 	{
-		swrDrawHLineInt(renderer, swrMin(x1, x2), y1, swrAbs(x1 - x2), color, alpha);
+		swrDrawHLineInt(renderer, swrMin(x1, x2), y1, swrAbs(x1 - x2), color1, color2, alpha);
 		return;
 	}
 	
 	int dx = x2 - x1, dy = y2 - y1;
 	int dx1 = swrAbs(dx), dy1 = swrAbs(dy), xe, ye, x, y;
 	int px = 2 * dy1 - dx1, py = 2 * dx1 - dy1;
+	
+	uintpixel_t color = color1;
+#if PIXEL_SIZE == 32
+	Pixel32ARGB clr1, clr2;
+	clr1.l = color1;
+	clr2.l = color2;
+	
+	uint32_t rinit = clr1.p.r << 20;
+	uint32_t ginit = clr1.p.g << 20;
+	uint32_t binit = clr1.p.b << 20;
+	int32_t rstep = ((int)clr2.p.r - clr1.p.r) << 20;
+	int32_t gstep = ((int)clr2.p.g - clr1.p.g) << 20;
+	int32_t bstep = ((int)clr2.p.b - clr1.p.b) << 20;
+#endif
 	
 	if (dy1 <= dx1)
 	{
@@ -671,6 +765,16 @@ static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, i
 		{
 			x = x2, y = y2, xe = x1;
 		}
+		
+#if PIXEL_SIZE == 32
+		if (dx1 > 0) {
+			rstep /= dx1;
+			gstep /= dx1;
+			bstep /= dx1;
+		} else {
+			rstep = gstep = bstep = 0;
+		}
+#endif
 		
 		swrPlotPixel(renderer, x, y, color, alpha);
 		
@@ -687,6 +791,17 @@ static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, i
 				px += 2 * (dy1 - dx1);
 			}
 			
+#if PIXEL_SIZE == 32
+			Pixel32ARGB resultPixel;
+			resultPixel.p.r = rinit >> 20;
+			resultPixel.p.g = ginit >> 20;
+			resultPixel.p.b = binit >> 20;
+			rinit += rstep;
+			ginit += gstep;
+			binit += bstep;
+			color = resultPixel.l;
+#endif
+			
 			swrPlotPixel(renderer, x, y, color, alpha);
 		}
 	}
@@ -700,6 +815,16 @@ static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, i
 		{
 			x = x2, y = y2, ye = y1;
 		}
+		
+#if PIXEL_SIZE == 32
+		if (dy1 > 0) {
+			rstep /= dy1;
+			gstep /= dy1;
+			bstep /= dy1;
+		} else {
+			rstep = gstep = bstep = 0;
+		}
+#endif
 		
 		swrPlotPixel(renderer, x, y, color, alpha);
 		
@@ -716,18 +841,29 @@ static void swrDrawLineInt(Renderer* renderer, int x1, int y1, int x2, int y2, i
 				py += 2 * (dx1 - dy1);
 			}
 			
+#if PIXEL_SIZE == 32
+			Pixel32ARGB resultPixel;
+			resultPixel.p.r = rinit >> 20;
+			resultPixel.p.g = ginit >> 20;
+			resultPixel.p.b = binit >> 20;
+			rinit += rstep;
+			ginit += gstep;
+			binit += bstep;
+			color = resultPixel.l;
+#endif
+			
 			swrPlotPixel(renderer, x, y, color, alpha);
 		}
 	}
 }
 
-static void swrDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uintpixel_t color, float alpha)
+static void swrDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uintpixel_t color, uintpixel_t color2, float alpha)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
 	swrTransformPosIfNeeded(swr, &x1, &y1);
 	swrTransformPosIfNeeded(swr, &x2, &y2);
 	swrTransformSizeIfNeeded(swr, &width, NULL);
-	swrDrawLineInt(renderer, swrFloor(x1), swrFloor(y1), swrCeiling(x2), swrCeiling(y2), swrCeiling(width), color, swrIntAlpha(alpha));
+	swrDrawLineInt(renderer, swrFloor(x1), swrFloor(y1), swrCeiling(x2), swrCeiling(y2), swrCeiling(width), color, color2, swrIntAlpha(alpha));
 }
 
 static void swrDrawSpriteInternal(
@@ -1149,7 +1285,7 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
 		if (xd <= 0 || yd <= 0) return;
 		
 		for (int y = 0; y <= yd; y++) {
-			swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor, alphaInt);
+			swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor, pxcolor, alphaInt);
 		}
 	}
 }
@@ -1158,9 +1294,33 @@ static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1
 										  uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4,
 										  float alpha, bool outline)
 {
-	(void)renderer; (void)x1; (void)y1; (void)x2; (void)y2;
-	(void)color1; (void)color2; (void)color3; (void)color4; (void)alpha; (void)outline;
-	UNIMP();
+	uintpixel_t pxcolor1 = swrConvertPixel(color1);
+	uintpixel_t pxcolor2 = swrConvertPixel(color2);
+	uintpixel_t pxcolor3 = swrConvertPixel(color3);
+	uintpixel_t pxcolor4 = swrConvertPixel(color4);
+	
+	SWRenderer* swr = (SWRenderer*) renderer;
+	
+	if (outline)
+	{
+		swrDrawRectangleColor(renderer, x1, y1, x2, y2, pxcolor1, pxcolor2, pxcolor3, pxcolor4, alpha);
+	}
+	else
+	{
+		swrTransformPosIfNeeded(swr, &x1, &y1);
+		swrTransformPosIfNeeded(swr, &x2, &y2);
+
+		int alphaInt = swrIntAlpha(alpha);
+		int x1i = swrFloor(x1), x2i = swrCeiling(x2), y1i = swrFloor(y1), y2i = swrCeiling(y2);
+		int xd = x2i - x1i;
+		int yd = y2i - y1i;
+		if (xd <= 0 || yd <= 0) return;
+		
+		// TODO: blending vertically
+		for (int y = 0; y <= yd; y++) {
+			swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor1, pxcolor2, alphaInt);
+		}
+	}
 }
 
 static void SWRenderer_drawLine(Renderer* renderer, float x1, float y1, float x2, float y2,
@@ -1169,7 +1329,8 @@ static void SWRenderer_drawLine(Renderer* renderer, float x1, float y1, float x2
 	(void)renderer; (void)x1; (void)y1; (void)x2; (void)y2;
 	(void)width; (void)color; (void)alpha;
 	
-	swrDrawLine(renderer, x1, y1, x2, y2, width, swrConvertPixel(color), alpha);
+	uintpixel_t colorCvt = swrConvertPixel(color);
+	swrDrawLine(renderer, x1, y1, x2, y2, width, colorCvt, colorCvt, alpha);
 }
 
 static void SWRenderer_drawTriangle(Renderer* renderer, float x1, float y1, float x2, float y2,
@@ -1180,17 +1341,15 @@ static void SWRenderer_drawTriangle(Renderer* renderer, float x1, float y1, floa
 	uintpixel_t drawColorCvt = swrConvertPixel(renderer->drawColor);
 	
 	// TODO: draw triangle properly.
-	swrDrawLine(renderer, x1, y1, x2, y2, 1, drawColorCvt, renderer->drawAlpha);
-	swrDrawLine(renderer, x1, y1, x3, y3, 1, drawColorCvt, renderer->drawAlpha);
-	swrDrawLine(renderer, x2, y2, x3, y3, 1, drawColorCvt, renderer->drawAlpha);
+	swrDrawLine(renderer, x1, y1, x2, y2, 1, drawColorCvt, drawColorCvt, renderer->drawAlpha);
+	swrDrawLine(renderer, x1, y1, x3, y3, 1, drawColorCvt, drawColorCvt, renderer->drawAlpha);
+	swrDrawLine(renderer, x2, y2, x3, y3, 1, drawColorCvt, drawColorCvt, renderer->drawAlpha);
 }
 
 static void SWRenderer_drawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2,
 									 float width, uint32_t color1, uint32_t color2, float alpha)
 {
-	// TODO: implement gradient properly
-	uintpixel_t actualColor = tint(swrConvertPixel(color1), swrConvertPixel(color2));
-	swrDrawLine(renderer, x1, y1, x2, y2, width, actualColor, alpha);
+	swrDrawLine(renderer, x1, y1, x2, y2, width, swrConvertPixel(color1), swrConvertPixel(color2), alpha);
 }
 
 typedef struct
@@ -1420,6 +1579,12 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
 									 float lineSeparation)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
+	
+	// TODO: allow c2, c3, c4
+	(void) c2;
+	(void) c3;
+	(void) c4;
+	
 	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha, lineSeparation);
 }
 
