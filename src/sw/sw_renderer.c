@@ -1276,7 +1276,7 @@ static bool swrResolveGlyph(
 	return true;
 }
 
-static void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xscale, float yscale, UNUSED float angleDeg, int32_t color, UNUSED float alpha)
+static void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t color, float alpha, float lineSeparation)
 {
 	Renderer* renderer = &swr->base;
 	DataWin* dwin = renderer->dataWin;
@@ -1301,7 +1301,7 @@ static void swrDrawText(SWRenderer* swr, const char* text, float x, float y, flo
 	
 	int textLen = (int) strlen(text);
 	int lineCount = TextUtils_countLines(text, textLen);
-	float lineStride = TextUtils_lineStride(font);
+    float lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font) : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
 
 	// Vertical alignment offset
 	float totalHeight = (float) lineCount * lineStride;
@@ -1406,18 +1406,19 @@ static void swrDrawText(SWRenderer* swr, const char* text, float x, float y, flo
 }
 
 static void SWRenderer_drawText(Renderer* renderer, const char* text, float x, float y,
-								float xscale, float yscale, float angleDeg)
+								float xscale, float yscale, float angleDeg, float lineSeparation)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
-	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha);
+	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha, lineSeparation);
 }
 
 static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float x, float y,
 									 float xscale, float yscale, float angleDeg,
-									 int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha)
+									 int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
+									 float lineSeparation)
 {
 	SWRenderer* swr = (SWRenderer*) renderer;
-	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha);
+	swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha, lineSeparation);
 }
 
 static void SWRenderer_drawTiled(Renderer* renderer, int32_t tpagIndex,
