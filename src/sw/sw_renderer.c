@@ -996,7 +996,7 @@ static void swrDrawSpriteRotated(
 	SWRenderer* swr = (SWRenderer*) renderer;
 	
 	swrTransformPosIfNeeded(swr, &dx, &dy);
-	swrTransformPosIfNeeded(swr, &pivotX, &pivotY);
+	swrTransformSizeIfNeeded(swr, &pivotX, &pivotY);
 	swrTransformSizeIfNeeded(swr, &dw, &dh);
 	
 	swrDrawSpriteRotatedInternal(
