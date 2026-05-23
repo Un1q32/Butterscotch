@@ -2197,6 +2197,7 @@ static void dispatchCollisionEvents(Runner* runner) {
                 // TODO: This is a STUPID HACKY HACK to fix phasing through the pillar in the long corridor section in Undertale
                 //  I DO NOT THINK THAT THIS IS CORRECT, and this CAN and WILL cause iteration order issues in the future
                 //  But at the same time I couldn't figure out HOW the YoYo collision iteration order works to NOT have this issue
+                //  (The stupid hack is iterating in reverse order)
                 for (int32_t snapIdx = snapEnd - 1; snapIdx >= snapBase; snapIdx--) {
                     Instance* other = runner->instanceSnapshots[snapIdx];
                     if (!other->active) continue;
