@@ -540,6 +540,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     NSTimeInterval _lastTickTime;
     double _stepAccumulator;   // seconds of unstepped logic time
     int _logicFrameCount;
+    int32_t _lastRoomIndex;    // detect room transitions for proactive atlas eviction
     UIInterfaceOrientation _savedOrientation;
 }
 - (id)initWithGame:(BSGameEntry*)game;
@@ -742,7 +743,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     opts.parsePath = true;
     opts.parseScpt = true;
     opts.parseGlob = true;
-    opts.parseShdr = true;
+    opts.parseShdr = false;  // GLES1 has no shader pipeline; skip to save RAM.
     opts.parseFont = true;
     opts.parseTmln = true;
     opts.parseObjt = true;
@@ -809,6 +810,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     _runtimeReady = YES;
     _lastTickTime = [NSDate timeIntervalSinceReferenceDate];
     _stepAccumulator = 0.0;
+    _lastRoomIndex = -1;
     [self setStatus:[NSString stringWithFormat:@"Ready. Bytecode v%u, %ux%u",
                       (unsigned) _dataWin->gen8.bytecodeVersion,
                       (unsigned) _dataWin->gen8.defaultWindowWidth,
@@ -854,6 +856,24 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
         _logicFrameCount += 1;
         stepsThisTick++;
         if (stepsThisTick >= 4) break;
+    }
+
+    // Detect room transitions and proactively evict atlases that the
+    // *old* room used but the *new* room doesn't.  Without this an
+    // iPod Touch 2G runs out of memory entering a new room because the
+    // GL atlas budget plus the per-room sprite atlases briefly
+    // double-counts (old room's sprites are still resident the moment
+    // the new room starts loading its own).  We piggyback on the
+    // existing handleMemoryWarning path which keeps only the atlases
+    // used during the most recently rendered frame.
+    if (_renderer != NULL && _runner != NULL) {
+        int32_t roomIdx = _runner->currentRoomIndex;
+        if (_lastRoomIndex >= 0 && roomIdx != _lastRoomIndex) {
+            NSLog(@"[Butterscotch] room change %d->%d - purging unused atlases",
+                  _lastRoomIndex, roomIdx);
+            GLES1Renderer_handleMemoryWarning(_renderer);
+        }
+        _lastRoomIndex = roomIdx;
     }
     // If no logic step happened this tick (display ran faster than game),
     // skip drawing too — re-presenting the same frame just burns power.

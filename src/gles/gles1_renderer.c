@@ -129,13 +129,13 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
 
     g->frameTick = 0;
     g->residentBytes = 0;
-    // ~6 MB texture budget for MBX Lite.  We were on 12 MB briefly but
-    // that combined with PNG decode buffers + GMS instance state + the
-    // OS overhead pushed an iPod Touch 2G (128 MB total, ~80 MB usable)
-    // into jetsam kills when room transitions briefly held both the old
-    // and new atlas sets resident.  6 MB leaves enough headroom for a
-    // double-buffered transition without exhausting the device.
-    g->residentBudget = 6u * 1024u * 1024u;
+    // ~10 MB GPU atlas budget.  Atlases are uploaded as RGBA4 (2 bytes
+    // per pixel), so a full 1024x1024 atlas is only 2 MB resident; this
+    // budget therefore comfortably holds ~5 of them at once before
+    // eviction kicks in.  We deliberately keep ~70 MB of headroom on a
+    // 128 MB iPod Touch 2G for data.win metadata + the PNG decode peak
+    // (stb_image emits 8888 even though we then convert to 4444).
+    g->residentBudget = 10u * 1024u * 1024u;
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
@@ -326,8 +326,12 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         if (rowEnd > h) rowEnd = h;
         int32_t thisBandH = rowEnd - rowStart;
         if (thisBandH <= 0) { numBands = b; break; }
-        
-        uint32_t bandBytes = (uint32_t)(w * bandH * 4);
+
+        // GL storage is GL_UNSIGNED_SHORT_4_4_4_4 = 2 bytes per pixel,
+        // half the size of the source 8888.  PowerVR MBX Lite stores
+        // textures internally as 16-bit anyway, so we're not losing
+        // anything by uploading at the format the GPU is going to use.
+        uint32_t bandBytes = (uint32_t)(w * bandH * 2);
         if (g->residentBytes + totalBytes + bandBytes > g->residentBudget) {
             gles1_evictLRU(g, totalBytes + bandBytes);
         }
@@ -346,21 +350,40 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        
-        if (thisBandH == bandH) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                         pixels + (size_t) rowStart * w * 4);
-        } else {
-            // Memory safe padded short-band
-            uint8_t* padded = (uint8_t*) calloc((size_t) w * bandH * 4, 1);
-            if (padded != NULL) {
-                memcpy(padded, pixels + (size_t) rowStart * w * 4, (size_t) w * thisBandH * 4);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE, padded);
-                free(padded);
-            } else {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+        // Convert this band from RGBA8888 -> RGBA4444 directly into the
+        // upload buffer. Size = w * bandH * 2 bytes (half of the source
+        // band's 8888 footprint).  We always allocate a full bandH-sized
+        // upload buffer (padded with zeroes for the trailing short
+        // band) so the GL storage is a consistent power-of-two-ish
+        // height for MBX Lite, which prefers it.
+        uint16_t* up = (uint16_t*) calloc((size_t) w * (size_t) bandH, sizeof(uint16_t));
+        if (up == NULL) {
+            glDeleteTextures(1, &handle);
+            for (int32_t bb = 0; bb < b; bb++) {
+                glDeleteTextures(1, &slot->glHandles[bb]);
+                slot->glHandles[bb] = 0;
+            }
+            stbi_image_free(pixels);
+            return false;
+        }
+        const uint8_t* src = pixels + (size_t) rowStart * w * 4;
+        for (int32_t y = 0; y < thisBandH; y++) {
+            const uint8_t* srow = src + (size_t) y * w * 4;
+            uint16_t* drow = up + (size_t) y * w;
+            for (int32_t x = 0; x < w; x++) {
+                uint8_t r = srow[x * 4 + 0];
+                uint8_t gC = srow[x * 4 + 1];
+                uint8_t bC = srow[x * 4 + 2];
+                uint8_t a = srow[x * 4 + 3];
+                drow[x] = (uint16_t) ((((uint16_t)(r >> 4)) << 12) |
+                                      (((uint16_t)(gC >> 4)) << 8) |
+                                      (((uint16_t)(bC >> 4)) << 4) |
+                                       ((uint16_t)(a >> 4)));
             }
         }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, up);
+        free(up);
         
         GLenum glErr = glGetError();
         if (glErr != GL_NO_ERROR) {
