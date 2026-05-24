@@ -4431,18 +4431,27 @@ static RValue builtin_audio_group_is_loaded(VMContext* ctx, RValue* args, MAYBE_
 }
 
 static RValue builtin_audio_play_music(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->dataWin->gen8.bytecodeVersion >= 14) {
+        fprintf(stderr, "VM: [%s] audio_play_music is no-op in bytecode version 14+!\n", ctx->currentCodeName);
+        return RValue_makeUndefined();
+    }
+
     AudioSystem* audio = getAudioSystem(ctx);
     if (audio == nullptr) return RValue_makeReal(-1.0);
     int32_t soundIndex = RValue_toInt32(args[0]);
-    int32_t priority = RValue_toInt32(args[1]);
-    bool loop = RValue_toBool(args[2]);
+    bool loop = RValue_toBool(args[1]);
     Runner* runner = ctx->runner;
-    int32_t instanceId = audio->vtable->playSound(audio, soundIndex, priority, loop);
+    int32_t instanceId = audio->vtable->playSound(audio, soundIndex, 10, loop);
     runner->lastMusicInstance = instanceId;
     return RValue_makeReal((GMLReal) instanceId);
 }
 
 static RValue builtin_audio_stop_music(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->dataWin->gen8.bytecodeVersion >= 14) {
+        fprintf(stderr, "VM: [%s] audio_stop_music is no-op in bytecode version 14+!\n", ctx->currentCodeName);
+        return RValue_makeUndefined();
+    }
+
     AudioSystem* audio = getAudioSystem(ctx);
     if (audio == nullptr) return RValue_makeUndefined();
     Runner* runner = ctx->runner;
@@ -11163,6 +11172,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     requireMessage(!ctx->registeredBuiltinFunctions, "Attempting to register all VMBuiltins, but it was already registered!");
     ctx->registeredBuiltinFunctions = true;
 
+    const bool isBC13 = ctx->dataWin->gen8.bytecodeVersion;
     const bool isGMS2 = DataWin_isVersionAtLeast(ctx->dataWin, 2, 0, 0, 0);
 
     // Core output
@@ -11388,6 +11398,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "audio_sound_set_track_position", builtin_audio_sound_set_track_position);
     VM_registerBuiltin(ctx, "audio_create_stream", builtin_audio_create_stream);
     VM_registerBuiltin(ctx, "audio_destroy_stream", builtin_audio_destroy_stream);
+
     if (!isGMS2) {
         VM_registerBuiltin(ctx, "action_sound",builtin_action_sound);
         VM_registerBuiltin(ctx, "action_end_sound", builtin_audio_stop_sound);
