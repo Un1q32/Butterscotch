@@ -64,6 +64,12 @@ typedef struct {
     uint32_t residentBudget;
     uint32_t logBudget;         // diagnostic prints we still owe; decremented as we log
     int32_t maxTextureSize;     // GL_MAX_TEXTURE_SIZE (1024 on MBX Lite, 2048/4096 on later iOS)
+    // Cached frame geometry: set by beginFrame, used by beginView / beginGUI
+    // to translate game-space port rects into framebuffer pixel rects.
+    int32_t frameGameW;
+    int32_t frameGameH;
+    int32_t frameWindowW;
+    int32_t frameWindowH;
 } GLES1Renderer;
 
 static inline GLES1Renderer* asGLES1(Renderer* r) {
@@ -324,8 +330,14 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         glGenTextures(1, &handle);
         glBindTexture(GL_TEXTURE_2D, handle);
         
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // GL_NEAREST gives chunky pixel-art look (Paint-style zoom) that
+        // matches Undertale's intended aesthetic.  We were on GL_LINEAR
+        // briefly to mask scanline artifacts caused by the broken
+        // 320x480 → 480x320 renderbuffer in v0.6.1–0.6.6; once the layer
+        // / renderbuffer plumbing was fixed in v0.6.7, the GL_LINEAR
+        // softening was no longer needed and just made text mushy.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         
@@ -584,11 +596,39 @@ static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
 // We make this short so the user can quickly see whether the pipeline is OK.
 #define BS_DIAG_PATTERN_FRAMES 240
 
+// Map a port rect (in game-screen coordinates, 0..gameW × 0..gameH) into
+// physical framebuffer pixels (0..windowW × 0..windowH). Game-screen Y
+// runs top-down (origin top-left) but GL viewport Y runs bottom-up, so
+// we flip the y axis.
+static void gles1_portToViewport(GLES1Renderer* g,
+                                 int32_t portX, int32_t portY, int32_t portW, int32_t portH,
+                                 GLint* vx, GLint* vy, GLsizei* vw, GLsizei* vh) {
+    int32_t gameW = g->frameGameW > 0 ? g->frameGameW : g->frameWindowW;
+    int32_t gameH = g->frameGameH > 0 ? g->frameGameH : g->frameWindowH;
+    if (gameW <= 0) gameW = 1;
+    if (gameH <= 0) gameH = 1;
+    float sx = (float) g->frameWindowW / (float) gameW;
+    float sy = (float) g->frameWindowH / (float) gameH;
+    int32_t pxX = (int32_t) (portX * sx + 0.5f);
+    int32_t pxY = (int32_t) (portY * sy + 0.5f);
+    int32_t pxW = (int32_t) (portW * sx + 0.5f);
+    int32_t pxH = (int32_t) (portH * sy + 0.5f);
+    // Flip Y: game-screen top-left origin → GL bottom-left origin.
+    *vx = (GLint) pxX;
+    *vy = (GLint) (g->frameWindowH - (pxY + pxH));
+    *vw = (GLsizei) pxW;
+    *vh = (GLsizei) pxH;
+}
+
 static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
     GLES1Renderer* g = asGLES1(r);
     g->frameTick++;
     if (gameW <= 0) gameW = windowW;
     if (gameH <= 0) gameH = windowH;
+    g->frameGameW = gameW;
+    g->frameGameH = gameH;
+    g->frameWindowW = windowW;
+    g->frameWindowH = windowH;
 
     if (g->frameTick <= 4 || g->frameTick == 60 || g->frameTick == 180) {
         fprintf(stderr, "[gles1] beginFrame tick=%u game=%dx%d window=%dx%d\n",
@@ -609,46 +649,63 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
 }
 
 static void gles1_endFrame(Renderer* r) {
-    GLES1Renderer* g = asGLES1(r);
-    // First N frames after startup we replace the rendered scene with a
-    // 4-colour quadrant pattern (top-left red, top-right green,
-    // bottom-left blue, bottom-right yellow). If the user reports that the
-    // pattern shows up correctly (one set of four quadrants filling the
-    // screen), the iOS GL pipeline is fine and the 4x tiling we've been
-    // chasing is coming from the game's own multi-instance / multi-view
-    // setup. If they see FOUR copies of the pattern, the tiling is in the
-    // GL/iOS layer path.
-    if (g->frameTick > 0 && g->frameTick <= BS_DIAG_PATTERN_FRAMES) {
-        GLint vp[4] = { 0 };
-        glGetIntegerv(GL_VIEWPORT, vp);
-        int32_t windowW = vp[2];
-        int32_t windowH = vp[3];
-        if (windowW > 0 && windowH > 0) {
-            gles1_drawDiagnosticTestPattern(windowW, windowH);
-        }
-        if (g->frameTick == BS_DIAG_PATTERN_FRAMES) {
-            fprintf(stderr, "[gles1] diagnostic test pattern done, resuming normal render\n");
-        }
-    }
+    (void) r;
     glFlush();
 }
 
+// view = rect in room coordinates the game wants to display
+// port = rect in game-screen coordinates (0..gameW, 0..gameH) where the
+//        view should land
+// We translate the port rect into physical framebuffer pixels and set up
+// the projection so that drawing in view coords lands in the port rect.
 static void gles1_beginView(Renderer* r, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH,
                             int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle) {
     GLES1Renderer* g = asGLES1(r);
     (void) viewAngle;
+    if (viewW <= 0 || viewH <= 0 || portW <= 0 || portH <= 0) return;
+
+    GLint vx, vy; GLsizei vw, vh;
+    gles1_portToViewport(g, portX, portY, portW, portH, &vx, &vy, &vw, &vh);
+
     if (g->frameTick <= 2 || g->frameTick == 60) {
-        fprintf(stderr, "[gles1] beginView tick=%u view=(%d,%d %dx%d) port=(%d,%d %dx%d)\n",
-                g->frameTick, viewX, viewY, viewW, viewH, portX, portY, portW, portH);
+        fprintf(stderr, "[gles1] beginView tick=%u view=(%d,%d %dx%d) port=(%d,%d %dx%d) -> vp=(%d,%d %dx%d)\n",
+                g->frameTick, viewX, viewY, viewW, viewH, portX, portY, portW, portH,
+                (int) vx, (int) vy, (int) vw, (int) vh);
     }
+
+    glViewport(vx, vy, vw, vh);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrthof((GLfloat) viewX, (GLfloat) (viewX + viewW),
+             (GLfloat) (viewY + viewH), (GLfloat) viewY,
+             -1.0f, 1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
 }
+
 static void gles1_endView(Renderer* r) { (void) r; }
+
+// GUI is drawn in (0..guiW, 0..guiH) coordinates and landed in the given
+// port rect on screen.
 static void gles1_beginGUI(Renderer* r, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) {
     GLES1Renderer* g = asGLES1(r);
+    if (guiW <= 0 || guiH <= 0 || portW <= 0 || portH <= 0) return;
+
+    GLint vx, vy; GLsizei vw, vh;
+    gles1_portToViewport(g, portX, portY, portW, portH, &vx, &vy, &vw, &vh);
+
     if (g->frameTick <= 2 || g->frameTick == 60) {
-        fprintf(stderr, "[gles1] beginGUI tick=%u gui=%dx%d port=(%d,%d %dx%d)\n",
-                g->frameTick, guiW, guiH, portX, portY, portW, portH);
+        fprintf(stderr, "[gles1] beginGUI tick=%u gui=%dx%d port=(%d,%d %dx%d) -> vp=(%d,%d %dx%d)\n",
+                g->frameTick, guiW, guiH, portX, portY, portW, portH,
+                (int) vx, (int) vy, (int) vw, (int) vh);
     }
+
+    glViewport(vx, vy, vw, vh);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrthof(0.0f, (GLfloat) guiW, (GLfloat) guiH, 0.0f, -1.0f, 1.0f);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
 }
 static void gles1_endGUI(Renderer* r) { (void) r; }
 

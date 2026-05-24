@@ -832,17 +832,6 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     if (_audio != NULL) _audio->vtable->update(_audio, dt);
     _logicFrameCount += 1;
 
-    // Clear the pressed/released edges AFTER the runner consumed them
-    // this frame. Other platforms (ps2, ps3, glfw, web) all do this — the
-    // iOS port was missing it, which meant the GML pressed/released
-    // flags accumulated across frames and games stopped seeing fresh
-    // key transitions after the first press. Pressed edges from touches
-    // that arrived between vsync ticks land before this clear, so they
-    // are visible to the next Runner_step.
-    if (_runner != NULL && _runner->keyboard != NULL) {
-        RunnerKeyboard_beginFrame(_runner->keyboard);
-    }
-
     int32_t gameW = (int32_t) _dataWin->gen8.defaultWindowWidth;
     int32_t gameH = (int32_t) _dataWin->gen8.defaultWindowHeight;
     if (gameW <= 0) gameW = w;
@@ -867,6 +856,18 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     Runner_drawViews(_runner, gameW, gameH, scaleX, scaleY, false);
 
     _renderer->vtable->endFrame(_renderer);
+
+    // Clear the pressed/released edges AFTER BOTH step and draw have
+    // consumed them. This is what the PS2 port does, and the comment in
+    // its main.c spells out exactly why this matters here too:
+    // "MUST be after Runner_draw because games CAN handle input in Draw
+    //  events (e.g. Undertale's naming screen)".
+    // Up through v0.6.7 the iOS port was clearing edges right after step
+    // and before drawViews, which destroyed the D-pad presses before the
+    // name-entry screen's Draw event could read them.
+    if (_runner != NULL && _runner->keyboard != NULL) {
+        RunnerKeyboard_beginFrame(_runner->keyboard);
+    }
 
     Runner_handlePendingRoomChange(_runner);
 
