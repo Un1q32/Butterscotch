@@ -788,7 +788,28 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     }
 
     const char* dataWinDir = [_game->directory UTF8String];
-    OverlayFileSystem* overlay = OverlayFileSystem_create(dataWinDir, dataWinDir);
+
+    // Saves can't go next to data.win on iOS 3 — the seatbelt sandbox
+    // blocks writes to /private/var/mobile/Documents/Butterscotch/...
+    // even when iFile shows the directory as user-writable (the syslog
+    // explicitly logs "FS_WRITE SBF /.../undertale.ini (seatbelt)").
+    // Redirect them to the app's own ~/Documents/Saves/<gameName>/
+    // which the sandbox always permits.  The game still reads its
+    // bundled assets from dataWinDir; only writes go to saveDir.
+    NSArray* docsPaths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString* docsRoot = ([docsPaths count] > 0) ? [docsPaths objectAtIndex:0] : NSTemporaryDirectory();
+    NSString* saveDir = [docsRoot stringByAppendingPathComponent:
+                          [NSString stringWithFormat:@"Saves/%@", _game->name]];
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSError* mkErr = nil;
+    [fm createDirectoryAtPath:saveDir withIntermediateDirectories:YES attributes:nil error:&mkErr];
+    if (mkErr != nil) {
+        NSLog(@"[Butterscotch] WARN: createDirectoryAtPath '%@' failed: %@", saveDir, mkErr);
+    }
+    NSLog(@"[Butterscotch] save directory: %@", saveDir);
+    const char* saveDirC = [saveDir fileSystemRepresentation];
+
+    OverlayFileSystem* overlay = OverlayFileSystem_create(dataWinDir, saveDirC);
     _fileSystem = (FileSystem*) overlay;
 
     _audio = (AudioSystem*) NoopAudioSystem_create();

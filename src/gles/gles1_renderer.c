@@ -351,12 +351,22 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-        // Convert this band from RGBA8888 -> RGBA4444 directly into the
-        // upload buffer. Size = w * bandH * 2 bytes (half of the source
-        // band's 8888 footprint).  We always allocate a full bandH-sized
-        // upload buffer (padded with zeroes for the trailing short
-        // band) so the GL storage is a consistent power-of-two-ish
-        // height for MBX Lite, which prefers it.
+        // Convert this band from RGBA8888 -> RGBA5551 directly into the
+        // upload buffer.  RGBA5551 packs 5 bits per colour channel + 1
+        // bit alpha into 16 bits, which is half the source 8888 size
+        // (same memory as 4444) but with 32 shades per colour channel
+        // instead of 16 — a much closer match to the original 8888 art
+        // for pixel-art games like Undertale.  Undertale's sprites are
+        // either fully opaque or fully transparent (no AA), so 1-bit
+        // alpha is sufficient.  PowerVR MBX Lite stores textures in 16
+        // bits internally anyway, so this matches the GPU's native
+        // texel layout and avoids the visible banding the RGBA4 path
+        // produced on dialog text and small UI sprites.
+        //
+        // We always allocate a full bandH-sized upload buffer (padded
+        // with zeroes for the trailing short band) so the GL storage
+        // is a consistent power-of-two-ish height for MBX Lite, which
+        // prefers it.
         uint16_t* up = (uint16_t*) calloc((size_t) w * (size_t) bandH, sizeof(uint16_t));
         if (up == NULL) {
             glDeleteTextures(1, &handle);
@@ -376,13 +386,17 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
                 uint8_t gC = srow[x * 4 + 1];
                 uint8_t bC = srow[x * 4 + 2];
                 uint8_t a = srow[x * 4 + 3];
-                drow[x] = (uint16_t) ((((uint16_t)(r >> 4)) << 12) |
-                                      (((uint16_t)(gC >> 4)) << 8) |
-                                      (((uint16_t)(bC >> 4)) << 4) |
-                                       ((uint16_t)(a >> 4)));
+                // 1-bit alpha threshold: 0..127 -> 0 (transparent),
+                // 128..255 -> 1 (opaque).  Edge anti-aliased pixels in
+                // Undertale are rare; this binary cutoff matches what
+                // the GPU does internally anyway when sampling 5551.
+                drow[x] = (uint16_t) ((((uint16_t)(r  >> 3)) << 11) |
+                                      (((uint16_t)(gC >> 3)) <<  6) |
+                                      (((uint16_t)(bC >> 3)) <<  1) |
+                                       ((uint16_t)(a >= 128 ? 1 : 0)));
             }
         }
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, up);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, up);
         free(up);
         
         GLenum glErr = glGetError();
