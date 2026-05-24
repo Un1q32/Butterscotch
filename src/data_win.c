@@ -278,11 +278,16 @@ static void parseGEN8(BinaryReader* reader, DataWin* dw) {
     g->info = BinaryReader_readUint32(reader);
     g->licenseCRC32 = BinaryReader_readUint32(reader);
     BinaryReader_readBytes(reader, g->licenseMD5, 16);
-    if (10 >= g->wadVersion) {
+    if (11 >= g->wadVersion) {
         int32_t ts = BinaryReader_readInt32(reader); // int32 timestamp (FILETIME-derived)
         g->timestamp = (uint64_t) (int64_t) ts;
         BinaryReader_skip(reader, 4); // unread padding at body+0x60
         g->displayName = readStringPtr(reader, dw);
+        if (g->wadVersion >= 11) {
+            g->activeTargets = BinaryReader_readUint64(reader);
+        } else {
+            g->activeTargets = 0;
+        }
         g->roomOrderCount = BinaryReader_readUint32(reader);
         if (g->roomOrderCount > 0) {
             g->roomOrder = safeMalloc(g->roomOrderCount * sizeof(int32_t));
@@ -292,7 +297,6 @@ static void parseGEN8(BinaryReader* reader, DataWin* dw) {
         } else {
             g->roomOrder = nullptr;
         }
-        g->activeTargets = 0;
         g->functionClassifications = 0;
         g->steamAppID = 0;
         g->debuggerPort = 0;
@@ -548,7 +552,7 @@ static void parseSOND(BinaryReader* reader, DataWin* dw) {
         snd->file = readStringPtr(reader, dw);
         snd->effects = BinaryReader_readUint32(reader);
         snd->volume = BinaryReader_readFloat32(reader);
-        if (10 >= dw->gen8.wadVersion) {
+        if (11 >= dw->gen8.wadVersion) {
             snd->pan = BinaryReader_readFloat32(reader);
 
             bool embedded = BinaryReader_readBool32(reader);
@@ -783,8 +787,8 @@ static void parsePATH(BinaryReader* reader, DataWin* dw) {
         path->internalPointCount = 0;
         path->length = 0.0;
         path->name = readStringPtr(reader, dw);
-        if (10 >= dw->gen8.wadVersion) {
-            // BC10: closed at +4, smooth at +8 (swapped vs later versions)
+        if (11 >= dw->gen8.wadVersion) {
+            // Before WAD Version 11: closed at +4, smooth at +8 (swapped vs later versions)
             path->isClosed = BinaryReader_readBool32(reader);
             path->isSmooth = BinaryReader_readBool32(reader);
         } else {
