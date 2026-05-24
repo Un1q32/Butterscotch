@@ -129,7 +129,13 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
 
     g->frameTick = 0;
     g->residentBytes = 0;
-    g->residentBudget = 12u * 1024u * 1024u; // ~12 MB VRAM budget for MBX Lite
+    // ~6 MB texture budget for MBX Lite.  We were on 12 MB briefly but
+    // that combined with PNG decode buffers + GMS instance state + the
+    // OS overhead pushed an iPod Touch 2G (128 MB total, ~80 MB usable)
+    // into jetsam kills when room transitions briefly held both the old
+    // and new atlas sets resident.  6 MB leaves enough headroom for a
+    // double-buffered transition without exhausting the device.
+    g->residentBudget = 6u * 1024u * 1024u;
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
@@ -597,9 +603,15 @@ static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
 #define BS_DIAG_PATTERN_FRAMES 240
 
 // Map a port rect (in game-screen coordinates, 0..gameW × 0..gameH) into
-// physical framebuffer pixels (0..windowW × 0..windowH). Game-screen Y
-// runs top-down (origin top-left) but GL viewport Y runs bottom-up, so
-// we flip the y axis.
+// physical framebuffer pixels (0..windowW × 0..windowH). Uses a uniform
+// scale = min(sx, sy) so the game's aspect ratio is preserved, with
+// letterboxing centered on the framebuffer (black bars on the longer
+// axis). Game-screen Y runs top-down (origin top-left) but GL viewport
+// Y runs bottom-up, so we flip the y axis.
+//
+// For Undertale on an iPod Touch 2G: game = 640x480 (4:3), window =
+// 480x320 (3:2). Uniform scale = min(480/640, 320/480) = 0.6667. Game
+// fits as 426x320 centered with ~27px black bars on the left and right.
 static void gles1_portToViewport(GLES1Renderer* g,
                                  int32_t portX, int32_t portY, int32_t portW, int32_t portH,
                                  GLint* vx, GLint* vy, GLsizei* vw, GLsizei* vh) {
@@ -607,12 +619,17 @@ static void gles1_portToViewport(GLES1Renderer* g,
     int32_t gameH = g->frameGameH > 0 ? g->frameGameH : g->frameWindowH;
     if (gameW <= 0) gameW = 1;
     if (gameH <= 0) gameH = 1;
-    float sx = (float) g->frameWindowW / (float) gameW;
-    float sy = (float) g->frameWindowH / (float) gameH;
-    int32_t pxX = (int32_t) (portX * sx + 0.5f);
-    int32_t pxY = (int32_t) (portY * sy + 0.5f);
-    int32_t pxW = (int32_t) (portW * sx + 0.5f);
-    int32_t pxH = (int32_t) (portH * sy + 0.5f);
+    float sxFull = (float) g->frameWindowW / (float) gameW;
+    float syFull = (float) g->frameWindowH / (float) gameH;
+    float s = sxFull < syFull ? sxFull : syFull;
+    float fitW = (float) gameW * s;
+    float fitH = (float) gameH * s;
+    float offX = ((float) g->frameWindowW - fitW) * 0.5f;
+    float offY = ((float) g->frameWindowH - fitH) * 0.5f;
+    int32_t pxX = (int32_t) (offX + (float) portX * s + 0.5f);
+    int32_t pxY = (int32_t) (offY + (float) portY * s + 0.5f);
+    int32_t pxW = (int32_t) ((float) portW * s + 0.5f);
+    int32_t pxH = (int32_t) ((float) portH * s + 0.5f);
     // Flip Y: game-screen top-left origin → GL bottom-left origin.
     *vx = (GLint) pxX;
     *vy = (GLint) (g->frameWindowH - (pxY + pxH));
@@ -1164,4 +1181,28 @@ void GLES1Renderer_setDataWinPath(Renderer* r, const char* path) {
     if (g->dataWinPath != NULL) {
         memcpy(g->dataWinPath, path, n + 1);
     }
+}
+
+void GLES1Renderer_handleMemoryWarning(Renderer* r) {
+    if (r == NULL) return;
+    GLES1Renderer* g = asGLES1(r);
+    if (g->slots == NULL) return;
+    uint32_t freedSlots = 0;
+    uint32_t freedBytes = 0;
+    for (uint32_t i = 0; i < g->slotCount; i++) {
+        BSTexCacheSlot* s = &g->slots[i];
+        if (!gles1_slotIsResident(s)) continue;
+        // Keep atlases that were used this frame — they're almost
+        // certainly going to be sampled again next frame.
+        if (s->lastUsedTick == g->frameTick) continue;
+        uint32_t bytes = s->bytesUploaded;
+        gles1_freeSlotGL(s);
+        if (g->residentBytes >= bytes) g->residentBytes -= bytes;
+        else g->residentBytes = 0;
+        freedSlots++;
+        freedBytes += bytes;
+    }
+    fprintf(stderr, "[gles1] memory warning: evicted %u atlases (%u bytes), now resident=%u/%u\n",
+            (unsigned) freedSlots, (unsigned) freedBytes,
+            (unsigned) g->residentBytes, (unsigned) g->residentBudget);
 }

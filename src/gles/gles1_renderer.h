@@ -35,6 +35,13 @@ Renderer* GLES1Renderer_create(void);
 // Runner_create / Renderer_init (the vtable init reads this path).
 void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
 
+// Hint to the renderer that the host OS is under memory pressure
+// (e.g. iOS UIApplication didReceiveMemoryWarning, Android onTrimMemory).
+// The renderer aggressively evicts every resident atlas that wasn't
+// touched during the current frame to give the OS pages back.  Safe
+// to call from any thread that has the GL context current.
+void GLES1Renderer_handleMemoryWarning(Renderer* r);
+
 #ifdef __cplusplus
 }
 #endif

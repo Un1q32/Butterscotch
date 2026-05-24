@@ -538,6 +538,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     BOOL _runtimeFailed;
     NSString* _lastError;
     NSTimeInterval _lastTickTime;
+    double _stepAccumulator;   // seconds of unstepped logic time
     int _logicFrameCount;
     UIInterfaceOrientation _savedOrientation;
 }
@@ -807,6 +808,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
     _runtimeReady = YES;
     _lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    _stepAccumulator = 0.0;
     [self setStatus:[NSString stringWithFormat:@"Ready. Bytecode v%u, %ux%u",
                       (unsigned) _dataWin->gen8.bytecodeVersion,
                       (unsigned) _dataWin->gen8.defaultWindowWidth,
@@ -823,14 +825,41 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     }
 
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-    float dt = (float) (now - _lastTickTime);
-    if (dt < 0.0f) dt = 0.0f;
-    if (dt > 0.1f) dt = 0.1f;
+    double dt = now - _lastTickTime;
+    if (dt < 0.0) dt = 0.0;
+    if (dt > 0.1) dt = 0.1;   // clamp huge stalls (eg debugger pause)
     _lastTickTime = now;
 
-    Runner_step(_runner);
-    if (_audio != NULL) _audio->vtable->update(_audio, dt);
-    _logicFrameCount += 1;
+    // Fixed-timestep accumulator: step the game at currentRoom->speed Hz
+    // regardless of how often the CADisplayLink fires.  On iPod Touch 2G
+    // the display link runs at 60 Hz but Undertale's room_speed is 30 Hz
+    // — calling Runner_step every display tick made the game run at 2x.
+    // We accumulate real time and drain the accumulator in fixed slices.
+    uint32_t roomSpeed = 30;
+    if (_runner != NULL && _runner->currentRoom != NULL && _runner->currentRoom->speed > 0) {
+        roomSpeed = _runner->currentRoom->speed;
+    }
+    double stepDt = 1.0 / (double) roomSpeed;
+    _stepAccumulator += dt;
+    // Guard against runaway accumulators (e.g. after a long stall): never
+    // try to catch up more than 4 steps in one tick.
+    if (_stepAccumulator > 4.0 * stepDt) _stepAccumulator = 4.0 * stepDt;
+
+    int stepsThisTick = 0;
+    while (_stepAccumulator >= stepDt) {
+        Runner_step(_runner);
+        if (_audio != NULL) _audio->vtable->update(_audio, (float) stepDt);
+        Runner_handlePendingRoomChange(_runner);
+        _stepAccumulator -= stepDt;
+        _logicFrameCount += 1;
+        stepsThisTick++;
+        if (stepsThisTick >= 4) break;
+    }
+    // If no logic step happened this tick (display ran faster than game),
+    // skip drawing too — re-presenting the same frame just burns power.
+    if (stepsThisTick == 0) {
+        return;
+    }
 
     int32_t gameW = (int32_t) _dataWin->gen8.defaultWindowWidth;
     int32_t gameH = (int32_t) _dataWin->gen8.defaultWindowHeight;
@@ -862,19 +891,28 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     // its main.c spells out exactly why this matters here too:
     // "MUST be after Runner_draw because games CAN handle input in Draw
     //  events (e.g. Undertale's naming screen)".
-    // Up through v0.6.7 the iOS port was clearing edges right after step
-    // and before drawViews, which destroyed the D-pad presses before the
-    // name-entry screen's Draw event could read them.
     if (_runner != NULL && _runner->keyboard != NULL) {
         RunnerKeyboard_beginFrame(_runner->keyboard);
     }
 
-    Runner_handlePendingRoomChange(_runner);
-
     if (_logicFrameCount % 60 == 0) {
-        NSLog(@"[Butterscotch] frame %d (game %dx%d, fb %dx%d, dt=%.3fms)",
-              _logicFrameCount, gameW, gameH, w, h, dt * 1000.0f);
+        NSLog(@"[Butterscotch] frame %d (game %dx%d, fb %dx%d, dt=%.3fms rs=%u steps=%d)",
+              _logicFrameCount, gameW, gameH, w, h, dt * 1000.0,
+              (unsigned) roomSpeed, stepsThisTick);
     }
+}
+
+// Called by UIKit when the process is approaching its jetsam threshold.
+// On a 128 MB iPod Touch 2G this is the only warning we get before the
+// kernel SIGKILLs us, so we aggressively dump every GL atlas that
+// wasn't sampled this frame and let the runtime re-stream them on
+// demand.
+- (void)didReceiveMemoryWarning {
+    NSLog(@"[Butterscotch] didReceiveMemoryWarning — purging non-current atlases");
+    if (_renderer != NULL) {
+        GLES1Renderer_handleMemoryWarning(_renderer);
+    }
+    [super didReceiveMemoryWarning];
 }
 
 @end
