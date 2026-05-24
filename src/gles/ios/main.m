@@ -148,6 +148,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 - (void)presentDrawable;
 - (void)makeContextCurrent;
 - (void)resizeRenderbuffer;
+- (void)recreateRenderbuffer;
 - (void)startRunLoop;
 - (void)stopRunLoop;
 @end
@@ -171,6 +172,9 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
         [NSNumber numberWithBool:NO], kEAGLDrawablePropertyRetainedBacking,
         kEAGLColorFormatRGBA8, kEAGLDrawablePropertyColorFormat,
         nil];
+    NSLog(@"[Butterscotch] BSGLView initWithFrame: frame=%.0fx%.0f layer.bounds=%.0fx%.0f",
+          frame.size.width, frame.size.height,
+          eaglLayer.bounds.size.width, eaglLayer.bounds.size.height);
 
     _ctx = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES1];
     if (_ctx == nil || ![EAGLContext setCurrentContext:_ctx]) {
@@ -191,7 +195,7 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     if (glCheckFramebufferStatusOES(GL_FRAMEBUFFER_OES) != GL_FRAMEBUFFER_COMPLETE_OES) {
         NSLog(@"[Butterscotch] FATAL: framebuffer incomplete (%dx%d)", (int) _backingWidth, (int) _backingHeight);
     } else {
-        NSLog(@"[Butterscotch] GLES1 context: framebuffer %dx%d", (int) _backingWidth, (int) _backingHeight);
+        NSLog(@"[Butterscotch] GLES1 context: initial framebuffer %dx%d", (int) _backingWidth, (int) _backingHeight);
     }
 
     glViewport(0, 0, _backingWidth, _backingHeight);
@@ -218,22 +222,69 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 
 - (void)resizeRenderbuffer {
     [EAGLContext setCurrentContext:_ctx];
+    CGSize layerSize = self.layer.bounds.size;
+    NSLog(@"[Butterscotch] resizeRenderbuffer pre: view.frame=%.0fx%.0f layer.bounds=%.0fx%.0f backing=%dx%d",
+          self.frame.size.width, self.frame.size.height,
+          layerSize.width, layerSize.height,
+          (int) _backingWidth, (int) _backingHeight);
+
+    // Rebind the framebuffer + renderbuffer before re-allocating storage so
+    // we don't accidentally re-storage a different (stale) renderbuffer.
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, _framebuffer);
     glBindRenderbufferOES(GL_RENDERBUFFER_OES, _renderbuffer);
+    // Force a fresh allocation against the layer's current drawable.
     [_ctx renderbufferStorage:GL_RENDERBUFFER_OES fromDrawable:(CAEAGLLayer*) self.layer];
+    // Reattach to be safe.
+    glFramebufferRenderbufferOES(GL_FRAMEBUFFER_OES, GL_COLOR_ATTACHMENT0_OES, GL_RENDERBUFFER_OES, _renderbuffer);
     glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &_backingWidth);
     glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &_backingHeight);
-    NSLog(@"[Butterscotch] renderbuffer resized to %dx%d", (int) _backingWidth, (int) _backingHeight);
+    NSLog(@"[Butterscotch] resizeRenderbuffer post: backing=%dx%d",
+          (int) _backingWidth, (int) _backingHeight);
+}
+
+// Delete the existing renderbuffer object and create a fresh one bound to
+// the current layer. Used after a major bounds change (eg landscape
+// rotation in viewWillAppear) where -renderbufferStorage:fromDrawable: on
+// the existing buffer may keep the original dimensions on iOS 3.
+- (void)recreateRenderbuffer {
+    [EAGLContext setCurrentContext:_ctx];
+    CGSize layerSize = self.layer.bounds.size;
+    NSLog(@"[Butterscotch] recreateRenderbuffer pre: view.frame=%.0fx%.0f layer.bounds=%.0fx%.0f backing=%dx%d",
+          self.frame.size.width, self.frame.size.height,
+          layerSize.width, layerSize.height,
+          (int) _backingWidth, (int) _backingHeight);
+    if (_renderbuffer != 0) {
+        glDeleteRenderbuffersOES(1, &_renderbuffer);
+        _renderbuffer = 0;
+    }
+    glGenRenderbuffersOES(1, &_renderbuffer);
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, _framebuffer);
+    glBindRenderbufferOES(GL_RENDERBUFFER_OES, _renderbuffer);
+    [_ctx renderbufferStorage:GL_RENDERBUFFER_OES fromDrawable:(CAEAGLLayer*) self.layer];
+    glFramebufferRenderbufferOES(GL_FRAMEBUFFER_OES, GL_COLOR_ATTACHMENT0_OES, GL_RENDERBUFFER_OES, _renderbuffer);
+    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_WIDTH_OES, &_backingWidth);
+    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES, GL_RENDERBUFFER_HEIGHT_OES, &_backingHeight);
+    GLenum status = glCheckFramebufferStatusOES(GL_FRAMEBUFFER_OES);
+    NSLog(@"[Butterscotch] recreateRenderbuffer post: backing=%dx%d status=0x%x",
+          (int) _backingWidth, (int) _backingHeight, (unsigned) status);
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    // The layer's bounds may have changed (e.g. after a rotation); we
-    // need to reallocate the renderbuffer storage to match. Skip if we
-    // haven't created the renderbuffer yet (initWithFrame: -> -bindDrawable
-    // path), and skip on iOS layout passes where the layer is empty.
-    if (_renderbuffer == 0) return;
     CGSize sz = self.layer.bounds.size;
+    NSLog(@"[Butterscotch] BSGLView layoutSubviews: frame=%.0fx%.0f layer.bounds=%.0fx%.0f rb=%u",
+          self.frame.size.width, self.frame.size.height, sz.width, sz.height,
+          (unsigned) _renderbuffer);
+    if (_renderbuffer == 0) return;
     if (sz.width <= 0 || sz.height <= 0) return;
+    // Only resize when dimensions actually changed — avoid thrashing the
+    // drawable when iOS sends spurious layout passes with the same bounds.
+    int newW = (int) sz.width;
+    int newH = (int) sz.height;
+    if (newW == _backingWidth && newH == _backingHeight) {
+        NSLog(@"[Butterscotch] layoutSubviews: bounds unchanged, no resize");
+        return;
+    }
     [self resizeRenderbuffer];
 }
 
@@ -556,6 +607,15 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    // After iOS has finished window placement, recreate the renderbuffer
+    // one more time in case the layer's drawable shifted between
+    // viewWillAppear and now.
+    NSLog(@"[Butterscotch] viewDidAppear pre: self.view.bounds=%.0fx%.0f _glView.frame=%.0fx%.0f _glView.layer.bounds=%.0fx%.0f backing=%dx%d",
+          self.view.bounds.size.width, self.view.bounds.size.height,
+          _glView.frame.size.width, _glView.frame.size.height,
+          _glView.layer.bounds.size.width, _glView.layer.bounds.size.height,
+          (int) _glView.backingWidth, (int) _glView.backingHeight);
+    [_glView recreateRenderbuffer];
     [_glView startRunLoop];
     if (!_runtimeReady && !_runtimeFailed) {
         [self performSelector:@selector(loadRuntime) withObject:nil afterDelay:0.05];
@@ -585,10 +645,29 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     CGRect screen = [[UIScreen mainScreen] bounds];
     CGFloat screenW = screen.size.width;
     CGFloat screenH = screen.size.height;
+    NSLog(@"[Butterscotch] viewWillAppear pre: self.view.bounds=%.0fx%.0f _glView.frame=%.0fx%.0f screen=%.0fx%.0f",
+          self.view.bounds.size.width, self.view.bounds.size.height,
+          _glView.frame.size.width, _glView.frame.size.height,
+          screenW, screenH);
     self.view.transform = CGAffineTransformIdentity;
     self.view.bounds = CGRectMake(0, 0, screenH, screenW);
     self.view.center = CGPointMake(screenW / 2.0f, screenH / 2.0f);
     self.view.transform = CGAffineTransformMakeRotation((CGFloat) (M_PI / 2.0));
+
+    // Don't trust autoresize to push the new bounds into _glView's frame:
+    // explicitly set it, set the overlay's frame too, and force a fresh
+    // renderbuffer allocation against the (now landscape) layer.
+    CGRect landscape = CGRectMake(0, 0, screenH, screenW);
+    _glView.frame = landscape;
+    _overlay.frame = landscape;
+    [_overlay layoutForSize:landscape.size];
+    NSLog(@"[Butterscotch] viewWillAppear mid: self.view.bounds=%.0fx%.0f _glView.frame=%.0fx%.0f _glView.layer.bounds=%.0fx%.0f",
+          self.view.bounds.size.width, self.view.bounds.size.height,
+          _glView.frame.size.width, _glView.frame.size.height,
+          _glView.layer.bounds.size.width, _glView.layer.bounds.size.height);
+    [_glView recreateRenderbuffer];
+    NSLog(@"[Butterscotch] viewWillAppear post: _glView.backing=%dx%d",
+          (int) _glView.backingWidth, (int) _glView.backingHeight);
 }
 
 - (void)viewWillDisappear:(BOOL)animated {

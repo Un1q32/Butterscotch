@@ -503,16 +503,32 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
 // Renderer vtable: frame + view + GUI passes
 // ============================================================================
 
-// Test pattern: draws a coloured grid directly into the visible framebuffer.
-// Bypasses the game projection so we can verify what the GL pipeline really
-// produces. If the resulting screenshot shows ONE pattern, the GL/iOS layer
-// path is good and any 4x tiling is coming from the game itself. If it shows
-// FOUR copies of the pattern, the tiling lives in the GL/iOS layer.
+// Test pattern: draws four coloured quads + a white border directly into the
+// visible framebuffer.  Bypasses everything in the game / projection pipeline
+// so we can see what the GL/iOS layer presents.
+//
+// Layout (in NDC, ortho top-left = (0,0)):
+//   TL = red    (0,0)..(0.5,0.5)
+//   TR = green  (0.5,0)..(1,0.5)
+//   BL = blue   (0,0.5)..(0.5,1)
+//   BR = yellow (0.5,0.5)..(1,1)
+// Plus a 4-NDC-pixel-wide WHITE border around the whole frame so we can see
+// the actual edges of the renderbuffer as displayed by iOS.  And a CYAN
+// horizontal line at y=0.25 and y=0.75 to detect horizontal tiling/wrap.
+static void gles1_drawColoredQuad(float x0, float y0, float x1, float y1,
+                                  float r, float g, float b) {
+    GLfloat v[8] = { x0, y0,  x1, y0,  x0, y1,  x1, y1 };
+    glVertexPointer(2, GL_FLOAT, 0, v);
+    glColor4f(r, g, b, 1.0f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
 static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_COLOR_ARRAY);
 
@@ -523,35 +539,41 @@ static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    static const GLfloat verts[8] = {
-        0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f,  1.0f, 1.0f
-    };
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, verts);
+    // Black clear first so any region NOT covered by quads stays black.
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-    // Four quadrants, each a different colour. Drawn one at a time via
-    // glScissor so the colours don't blend or overdraw.
-    glEnable(GL_SCISSOR_TEST);
-    int32_t halfW = windowW / 2;
-    int32_t halfH = windowH / 2;
-    // GL scissor uses bottom-left origin.
-    // TL = red
-    glScissor(0, halfH, halfW, windowH - halfH);
-    glColor4f(1.0f, 0.0f, 0.0f, 1.0f);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    // TR = green
-    glScissor(halfW, halfH, windowW - halfW, windowH - halfH);
-    glColor4f(0.0f, 1.0f, 0.0f, 1.0f);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    // BL = blue
-    glScissor(0, 0, halfW, halfH);
-    glColor4f(0.0f, 0.0f, 1.0f, 1.0f);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    // BR = yellow
-    glScissor(halfW, 0, windowW - halfW, halfH);
-    glColor4f(1.0f, 1.0f, 0.0f, 1.0f);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_SCISSOR_TEST);
+    glEnableClientState(GL_VERTEX_ARRAY);
+
+    // Four quadrant colour blocks, drawn as separate quads (no scissor).
+    gles1_drawColoredQuad(0.00f, 0.00f, 0.50f, 0.50f, 1.0f, 0.0f, 0.0f); // TL red
+    gles1_drawColoredQuad(0.50f, 0.00f, 1.00f, 0.50f, 0.0f, 1.0f, 0.0f); // TR green
+    gles1_drawColoredQuad(0.00f, 0.50f, 0.50f, 1.00f, 0.0f, 0.0f, 1.0f); // BL blue
+    gles1_drawColoredQuad(0.50f, 0.50f, 1.00f, 1.00f, 1.0f, 1.0f, 0.0f); // BR yellow
+
+    // Vertical CYAN markers at NDC x = 0.25, 0.5, 0.75 (full height).
+    // Each ~1.5 pixels wide.  These let us detect horizontal tiling: if
+    // the screen shows 4 copies of the pattern, we'll see 4 cyan stripes
+    // each per quadrant instead of just one between quadrants.
+    float vMarker = 1.5f / (float) (windowW > 0 ? windowW : 1);
+    gles1_drawColoredQuad(0.25f - vMarker, 0.0f, 0.25f + vMarker, 1.0f, 0.0f, 1.0f, 1.0f);
+    gles1_drawColoredQuad(0.50f - vMarker, 0.0f, 0.50f + vMarker, 1.0f, 1.0f, 1.0f, 1.0f);
+    gles1_drawColoredQuad(0.75f - vMarker, 0.0f, 0.75f + vMarker, 1.0f, 0.0f, 1.0f, 1.0f);
+
+    // Horizontal MAGENTA markers at NDC y = 0.25, 0.75 (full width). For
+    // detecting vertical tiling.
+    float hMarker = 1.5f / (float) (windowH > 0 ? windowH : 1);
+    gles1_drawColoredQuad(0.0f, 0.25f - hMarker, 1.0f, 0.25f + hMarker, 1.0f, 0.0f, 1.0f);
+    gles1_drawColoredQuad(0.0f, 0.75f - hMarker, 1.0f, 0.75f + hMarker, 1.0f, 0.0f, 1.0f);
+
+    // WHITE outer border, 4 NDC pixels thick — shows the actual visible
+    // edge of the renderbuffer.
+    float bx = 4.0f / (float) (windowW > 0 ? windowW : 1);
+    float by = 4.0f / (float) (windowH > 0 ? windowH : 1);
+    gles1_drawColoredQuad(0.0f, 0.0f, 1.0f, by, 1.0f, 1.0f, 1.0f);    // top
+    gles1_drawColoredQuad(0.0f, 1.0f - by, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f); // bottom
+    gles1_drawColoredQuad(0.0f, 0.0f, bx, 1.0f, 1.0f, 1.0f, 1.0f);    // left
+    gles1_drawColoredQuad(1.0f - bx, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f); // right
 
     glDisableClientState(GL_VERTEX_ARRAY);
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
@@ -560,7 +582,7 @@ static void gles1_drawDiagnosticTestPattern(int32_t windowW, int32_t windowH) {
 // Frames over which the diagnostic test pattern overrides the normal game
 // render. After this many frames the renderer reverts to drawing the game.
 // We make this short so the user can quickly see whether the pipeline is OK.
-#define BS_DIAG_PATTERN_FRAMES 180
+#define BS_DIAG_PATTERN_FRAMES 240
 
 static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
     GLES1Renderer* g = asGLES1(r);
