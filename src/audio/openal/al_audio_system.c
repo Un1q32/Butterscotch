@@ -444,6 +444,15 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         slot->decodeScratch = safeMalloc(AL_STREAM_BUFFER_SAMPLES * info.channels * sizeof(int16_t));
 
         alGenSources(1, &slot->alSource);
+        if (alGetError() != AL_NO_ERROR || slot->alSource == 0) {
+            fprintf(stderr, "Audio: alGenSources failed for stream %d\n", soundIndex);
+            stb_vorbis_close(v);
+            free(slot->decodeScratch);
+            slot->streaming = false;
+            slot->vorbis = nullptr;
+            slot->decodeScratch = nullptr;
+            return -1;
+        }
         alGenBuffers(AL_STREAM_BUFFER_COUNT, slot->streamBuffers);
 
         int primed = 0;
@@ -471,6 +480,10 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         if (cachedSlot >= 0) {
             BufferCacheEntry* ce = &ma->bufferCache[cachedSlot];
             alGenSources(1, &slot->alSource);
+            if (alGetError() != AL_NO_ERROR || slot->alSource == 0) {
+                fprintf(stderr, "Audio: alGenSources failed for cached sound %d\n", soundIndex);
+                return -1;
+            }
             alSourcei(slot->alSource, AL_BUFFER, (ALint) ce->alBuffer);
             slot->alBuffer = ce->alBuffer;
             slot->bufferCached = true;
@@ -481,7 +494,16 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         }
 
         alGenSources(1, &slot->alSource);
+        if (alGetError() != AL_NO_ERROR || slot->alSource == 0) {
+            fprintf(stderr, "Audio: alGenSources failed for sound %d\n", soundIndex);
+            return -1;
+        }
         alGenBuffers(1, &slot->alBuffer);
+        if (alGetError() != AL_NO_ERROR || slot->alBuffer == 0) {
+            fprintf(stderr, "Audio: alGenBuffers failed for sound %d\n", soundIndex);
+            alDeleteSources(1, &slot->alSource);
+            return -1;
+        }
         bool isEmbedded = (sound->flags & 0x01) != 0;
 
         // GMS sound flags are ambiguous between "embedded WAV" and
