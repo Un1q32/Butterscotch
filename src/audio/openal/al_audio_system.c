@@ -151,12 +151,28 @@ static int32_t cacheEvictLRU(AlAudioSystem* ma) {
     return best;
 }
 
+// Maximum PCM size for a single buffer to be eligible for caching.
+// Sounds larger than this are unlikely to repeat rapidly and would
+// bloat the cache — let them use private (non-shared) buffers.
+#ifndef AL_BUFFER_CACHE_MAX_ENTRY
+#define AL_BUFFER_CACHE_MAX_ENTRY (128u * 1024u)
+#endif
+
 // Insert a buffer into the cache. Evicts LRU entries if over budget.
-// Returns slot index, or -1 on failure (no evictable slot).
+// Returns slot index, or -1 on failure (entry too large, over budget
+// with nothing evictable, or no free slot).
 static int32_t cacheInsert(AlAudioSystem* ma, int32_t soundIndex, ALuint buffer, uint32_t pcmBytes) {
+    // Refuse to cache large sounds — they bloat the budget and rarely
+    // benefit from sharing (long/music-like sounds).
+    if (pcmBytes > AL_BUFFER_CACHE_MAX_ENTRY) return -1;
+
     // Make room if over budget
     while (ma->cacheResidentBytes + pcmBytes > AL_BUFFER_CACHE_BUDGET) {
-        if (cacheEvictLRU(ma) < 0) break; // nothing evictable
+        if (cacheEvictLRU(ma) < 0) {
+            // Cannot evict anything (all entries have active refs).
+            // Hard-enforce the budget: refuse to cache this sound.
+            return -1;
+        }
     }
 
     // Find a free slot
@@ -1193,35 +1209,38 @@ static AudioSystemVtable AlAudioSystemVtable = {
 void AlAudioSystem_handleMemoryWarning(AlAudioSystem* ma) {
     if (ma == NULL) return;
 
+    uint32_t stoppedInstances = 0;
     uint32_t evicted = 0;
     uint32_t freedBytes = 0;
 
-    // Evict all cached buffers that have no active sources referencing them.
-    repeat(AL_BUFFER_CACHE_SIZE, i) {
-        BufferCacheEntry* ce = &ma->bufferCache[i];
-        if (!ce->inUse) continue;
-        if (ce->refCount > 0) continue;
-        alDeleteBuffers(1, &ce->alBuffer);
-        freedBytes += ce->pcmBytes;
-        ma->cacheResidentBytes -= ce->pcmBytes;
-        ce->inUse = false;
-        evicted++;
-    }
-
-    // Additionally stop any non-streaming, non-looping sounds that
-    // have already finished playing to free their sources.
+    // Phase 1: Force-stop ALL non-streaming sound instances.
+    // On the iPod Touch 2G this is the last chance before jetsam kills
+    // us, so we sacrifice SFX to stay alive. Streaming music survives
+    // (it uses tiny ring buffers, not large cached PCM).
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
         if (!inst->active) continue;
         if (inst->streaming) continue;
-        if (alSourceHasStopped(inst->alSource)) {
-            releaseInstanceEx(ma, inst);
-        }
+        releaseInstanceEx(ma, inst);
+        stoppedInstances++;
     }
 
-    fprintf(stderr, "[audio] memory warning: evicted %u cached buffers (%u bytes), "
-            "cache now %u/%u bytes\n",
-            evicted, freedBytes, ma->cacheResidentBytes, (uint32_t) AL_BUFFER_CACHE_BUDGET);
+    // Phase 2: Now that all non-streaming refs are gone, nuke the
+    // entire buffer cache.  Every entry should have refCount==0 after
+    // phase 1 (streaming instances don't use the cache).
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        BufferCacheEntry* ce = &ma->bufferCache[i];
+        if (!ce->inUse) continue;
+        alDeleteBuffers(1, &ce->alBuffer);
+        freedBytes += ce->pcmBytes;
+        ce->inUse = false;
+        evicted++;
+    }
+    ma->cacheResidentBytes = 0;
+
+    fprintf(stderr, "[audio] memory warning: stopped %u instances, evicted %u cached buffers "
+            "(%u bytes freed)\n",
+            stoppedInstances, evicted, freedBytes);
 }
 
 // ===[ Lifecycle ]===

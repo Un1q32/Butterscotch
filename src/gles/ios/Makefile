@@ -116,6 +116,7 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -DAL_STREAM_BUFFER_SAMPLES=2048 \
                        -DAL_BUFFER_CACHE_SIZE=32 \
                        -DAL_BUFFER_CACHE_BUDGET='(2u * 1024u * 1024u)' \
+                       -DAL_BUFFER_CACHE_MAX_ENTRY='(64u * 1024u)' \
                        -I$(THEOS_PROJECT_DIR)/../../ \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/ds \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/image \
