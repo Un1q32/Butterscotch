@@ -713,7 +713,7 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         }
     }
 
-apply_props:
+apply_props:;
     // Apply properties
     float volume = isStream ? 1.0f : sound->volume;
     float pitch = isStream ? 1.0f : sound->pitch;
