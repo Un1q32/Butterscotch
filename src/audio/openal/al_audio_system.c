@@ -455,16 +455,74 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         }
 
         if (isEmbedded && isWAV) {
-            WAVFile wav = WAV_ParseFileData(embeddedBytes);
-            uint32_t format;
-            if (wav.header.number_of_channels == 1) {
-                format = (wav.header.bits_per_sample == 8) ? AL_FORMAT_MONO8 : AL_FORMAT_MONO16;
-            } else {
-                format = (wav.header.bits_per_sample == 8) ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16;
+            // Inline RIFF/WAVE parser: WAV_ParseFileData() in
+            // src/audio/openal/wave.c assumes a fixed layout (fmt size
+            // == 16, no extra chunks, data follows immediately), but
+            // Undertale's embedded SFX are produced by GameMaker with
+            // arbitrary chunk orderings and 18-byte / 40-byte fmt
+            // headers — feeding those through the rigid parser
+            // mis-measures the PCM length and gives OpenAL a buffer
+            // pointing past the heap, which is the EXC_BAD_ACCESS the
+            // user is hitting in alBufferData on iPod Touch 2G.
+            // Walk the chunks properly instead.
+            int parseErr = 0;
+            uint16_t fmtAudioFormat = 0;
+            uint16_t fmtChannels = 0;
+            uint32_t fmtSampleRate = 0;
+            uint16_t fmtBitsPerSample = 0;
+            const uint8_t* pcmData = nullptr;
+            uint32_t pcmSize = 0;
+            uint32_t cursor = 12; // skip RIFF + size + WAVE
+            while (cursor + 8 <= embeddedSize) {
+                const uint8_t* h = embeddedBytes + cursor;
+                uint32_t chunkSize = (uint32_t)h[4]
+                                   | ((uint32_t)h[5] << 8)
+                                   | ((uint32_t)h[6] << 16)
+                                   | ((uint32_t)h[7] << 24);
+                if (cursor + 8 + chunkSize > embeddedSize) { parseErr = 1; break; }
+                if (memcmp(h, "fmt ", 4) == 0 && chunkSize >= 16) {
+                    fmtAudioFormat   = (uint16_t)(h[8]  | (h[9]  << 8));
+                    fmtChannels      = (uint16_t)(h[10] | (h[11] << 8));
+                    fmtSampleRate    = (uint32_t)h[12] | ((uint32_t)h[13] << 8)
+                                     | ((uint32_t)h[14] << 16) | ((uint32_t)h[15] << 24);
+                    fmtBitsPerSample = (uint16_t)(h[22] | (h[23] << 8));
+                } else if (memcmp(h, "data", 4) == 0) {
+                    pcmData = h + 8;
+                    pcmSize = chunkSize;
+                    break;
+                }
+                // chunks are word-aligned; size is rounded up to even
+                uint32_t advance = 8 + chunkSize + (chunkSize & 1u);
+                cursor += advance;
             }
-            alBufferData(slot->alBuffer, format, wav.data, wav.data_length, wav.header.sample_rate);
+
+            if (parseErr || pcmData == nullptr || pcmSize == 0
+                || fmtChannels == 0 || fmtSampleRate == 0
+                || (fmtBitsPerSample != 8 && fmtBitsPerSample != 16)) {
+                fprintf(stderr, "Audio: '%s' WAV parse failed (fmtCh=%u sr=%u bps=%u dataSz=%u)\n",
+                        sound->name, fmtChannels, (unsigned) fmtSampleRate,
+                        fmtBitsPerSample, (unsigned) pcmSize);
+                if (embeddedOwned != nullptr) free(embeddedOwned);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+            // GameMaker WAVs are always PCM; refuse anything else.
+            if (fmtAudioFormat != 1) {
+                fprintf(stderr, "Audio: '%s' WAV audio_format=%u (not PCM), skipping\n",
+                        sound->name, fmtAudioFormat);
+                if (embeddedOwned != nullptr) free(embeddedOwned);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+
+            ALenum format = (fmtChannels == 1)
+                ? (fmtBitsPerSample == 8 ? AL_FORMAT_MONO8   : AL_FORMAT_MONO16)
+                : (fmtBitsPerSample == 8 ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16);
+            alBufferData(slot->alBuffer, format, pcmData,
+                         (ALsizei) pcmSize, (ALsizei) fmtSampleRate);
             alSourcei(slot->alSource, AL_BUFFER, slot->alBuffer);
-            if (wav.data != NULL) free(wav.data);
             loadedOk = true;
         } else if (isEmbedded && isOGG) {
             int channels = 0, sample_rate = 0;
