@@ -70,6 +70,17 @@ typedef struct {
     int32_t frameGameH;
     int32_t frameWindowW;
     int32_t frameWindowH;
+    // FBO for pixel-perfect rendering: game draws at native resolution
+    // (e.g. 640x480), then the FBO texture is blitted to the physical
+    // screen (e.g. 480x320) with GL_LINEAR for smooth downscaling.
+    GLuint fboHandle;
+    GLuint fboTexture;
+    int32_t fboWidth;           // allocated FBO texture width
+    int32_t fboHeight;          // allocated FBO texture height
+    GLint  fboOriginalFB;       // framebuffer to restore in endFrame
+    int32_t fboPhysicalW;       // actual physical screen width (for blit)
+    int32_t fboPhysicalH;       // actual physical screen height (for blit)
+    bool fboActive;             // true while rendering into FBO this frame
 } GLES1Renderer;
 
 static inline GLES1Renderer* asGLES1(Renderer* r) {
@@ -159,6 +170,68 @@ static void gles1_init(Renderer* r, DataWin* dataWin) {
             version ? (const char*) version : "(null)");
 }
 
+// --------------------------------------------------------------------
+// FBO (pixel-perfect rendering)
+// Creates an offscreen framebuffer at gameW×gameH so the game renders
+// pixel-perfectly.  The texture is then blitted to the physical screen
+// in endFrame with GL_LINEAR, giving smooth downscaling without tile
+// seam artifacts.
+// --------------------------------------------------------------------
+static bool gles1_initFBO(GLES1Renderer* g, int32_t w, int32_t h) {
+    if (g->fboHandle != 0) return true; // already created
+
+    // Ensure dimensions don't exceed hardware max
+    if (w > g->maxTextureSize || h > g->maxTextureSize) {
+        fprintf(stderr, "[gles1] FBO: %dx%d exceeds max texture size %d, disabled\n",
+                w, h, g->maxTextureSize);
+        return false;
+    }
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // RGBA4444 = 2 bytes/pixel → 640×480 = 614 KB
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, NULL);
+    if (glGetError() != GL_NO_ERROR) {
+        fprintf(stderr, "[gles1] FBO: glTexImage2D %dx%d failed\n", w, h);
+        glDeleteTextures(1, &tex);
+        return false;
+    }
+
+    GLuint fbo = 0;
+    glGenFramebuffersOES(1, &fbo);
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, fbo);
+    glFramebufferTexture2DOES(GL_FRAMEBUFFER_OES, GL_COLOR_ATTACHMENT0_OES,
+                              GL_TEXTURE_2D, tex, 0);
+
+    GLenum status = glCheckFramebufferStatusOES(GL_FRAMEBUFFER_OES);
+    if (status != GL_FRAMEBUFFER_COMPLETE_OES) {
+        fprintf(stderr, "[gles1] FBO: incomplete (status=0x%04x), falling back to direct\n",
+                (unsigned) status);
+        glBindFramebufferOES(GL_FRAMEBUFFER_OES, 0);
+        glDeleteFramebuffersOES(1, &fbo);
+        glDeleteTextures(1, &tex);
+        return false;
+    }
+
+    // Restore whatever framebuffer was bound before
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, 0);
+
+    g->fboHandle = fbo;
+    g->fboTexture = tex;
+    g->fboWidth = w;
+    g->fboHeight = h;
+    g->fboActive = false;
+    fprintf(stderr, "[gles1] FBO: created %dx%d (RGBA4444, %u KB)\n",
+            w, h, (unsigned)(w * h * 2 / 1024));
+    return true;
+}
+
 static bool gles1_downsampleRGBA(stbi_uc** pPixels, int* pW, int* pH, int factorX, int factorY) {
     if (factorX < 1 || factorY < 1) return false;
     if (factorX == 1 && factorY == 1) return true;
@@ -216,6 +289,14 @@ static void gles1_destroy(Renderer* r) {
         }
         free(g->slots);
         g->slots = NULL;
+    }
+    if (g->fboHandle != 0) {
+        glDeleteFramebuffersOES(1, &g->fboHandle);
+        g->fboHandle = 0;
+    }
+    if (g->fboTexture != 0) {
+        glDeleteTextures(1, &g->fboTexture);
+        g->fboTexture = 0;
     }
     if (g->ownsFile && g->dataWinFile != NULL) {
         fclose(g->dataWinFile);
@@ -731,15 +812,36 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
     if (gameH <= 0) gameH = windowH;
     g->frameGameW = gameW;
     g->frameGameH = gameH;
-    g->frameWindowW = windowW;
-    g->frameWindowH = windowH;
 
-    if (g->frameTick <= 4 || g->frameTick == 60 || g->frameTick == 180) {
-        fprintf(stderr, "[gles1] beginFrame tick=%u game=%dx%d window=%dx%d\n",
-                g->frameTick, gameW, gameH, windowW, windowH);
+    // Try to set up FBO on first frame (lazy init — we need gameW/gameH)
+    if (g->fboHandle == 0 && g->frameTick <= 2) {
+        gles1_initFBO(g, gameW, gameH);
     }
 
-    glViewport(0, 0, windowW, windowH);
+    // If FBO is available, render into it at native game resolution.
+    // portToViewport will map 1:1 since frameWindowW/H == gameW/H.
+    if (g->fboHandle != 0) {
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING_OES, &g->fboOriginalFB);
+        glBindFramebufferOES(GL_FRAMEBUFFER_OES, g->fboHandle);
+        g->fboPhysicalW = windowW;
+        g->fboPhysicalH = windowH;
+        g->frameWindowW = gameW;   // 1:1 mapping inside FBO
+        g->frameWindowH = gameH;
+        g->fboActive = true;
+        glViewport(0, 0, gameW, gameH);
+    } else {
+        g->frameWindowW = windowW;
+        g->frameWindowH = windowH;
+        g->fboActive = false;
+        glViewport(0, 0, windowW, windowH);
+    }
+
+    if (g->frameTick <= 4 || g->frameTick == 60 || g->frameTick == 180) {
+        fprintf(stderr, "[gles1] beginFrame tick=%u game=%dx%d window=%dx%d fbo=%s\n",
+                g->frameTick, gameW, gameH, windowW, windowH,
+                g->fboActive ? "yes" : "no");
+    }
+
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrthof(0.0f, (GLfloat) gameW, (GLfloat) gameH, 0.0f, -1.0f, 1.0f);
@@ -753,7 +855,45 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
 }
 
 static void gles1_endFrame(Renderer* r) {
-    (void) r;
+    GLES1Renderer* g = asGLES1(r);
+
+    if (g->fboActive) {
+        // Switch back to the EAGL layer's framebuffer and blit the FBO
+        // texture to the physical screen with GL_LINEAR filtering.
+        glBindFramebufferOES(GL_FRAMEBUFFER_OES, (GLuint) g->fboOriginalFB);
+        glViewport(0, 0, g->fboPhysicalW, g->fboPhysicalH);
+
+        // Set up an identity orthographic projection for the fullscreen blit
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrthof(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+
+        // Draw a fullscreen quad textured with the FBO texture
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, g->fboTexture);
+
+        // Disable blending for the blit — we want the FBO contents as-is
+        glDisable(GL_BLEND);
+
+        GLfloat verts[] = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f,  1.0f, 1.0f };
+        GLfloat uvs[]   = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f,  1.0f, 1.0f };
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(2, GL_FLOAT, 0, verts);
+        glTexCoordPointer(2, GL_FLOAT, 0, uvs);
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+
+        g->fboActive = false;
+    }
+
     glFlush();
 }
 
