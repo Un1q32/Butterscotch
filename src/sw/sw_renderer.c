@@ -1337,20 +1337,16 @@ static void swrDrawTriangleInternal(SWRenderer* swr, int xup, int yup, int xleft
 {
 	// Figure out the maximum Y extent of the triangle.
 	// (Note that we know yup is the minimum.)
-	int xmid, ymid, xmid2, xmax, ymax;
+	int xmid, ymid, xmid2 = xup, xmax, ymax;
 	if (yleft < yright) {
 		xmax = xright, ymax = yright;
 		xmid = xleft, ymid = yleft;
-		if (yright == yup)
-			xmid2 = xup;
-		else
+		if (yright != yup)
 			xmid2 = xup + (xright - xup) * (ymid - yup) / (yright - yup);
 	} else {
 		xmax = xleft, ymax = yleft;
 		xmid = xright, ymid = yright;
-		if (yleft == yup)
-			xmid2 = xup;
-		else
+		if (yleft != yup)
 			xmid2 = xup + (xleft - xup) * (ymid - yup) / (yleft - yup);
 	}
 	
@@ -1360,23 +1356,23 @@ static void swrDrawTriangleInternal(SWRenderer* swr, int xup, int yup, int xleft
 		if (y >= swr->height) break;
 		
 		int x1 = xup, x2 = xup;
-		if (y < ymid)
+		if (y <= ymid)
 		{
 			// Lines: between up and mid, and between up and max
 			if (ymid != yup)
-				x1 = xup + (xmid - xup + 1) * (y - yup) / (ymid - yup);
+				x1 = xup + (xmid - xup) * (y - yup) / (ymid - yup);
 			
 			if (ymid != yup)
-				x2 = xup + (xmid2 - xup + 1) * (y - yup) / (ymid - yup);
+				x2 = xup + (xmid2 - xup) * (y - yup) / (ymid - yup);
 		}
 		else
 		{
 			// Lines: between mid and max, and between up and max
 			if (ymax != yup)
-				x1 = xup + (xmax - xup + 1) * (y - yup) / (ymax - yup);
+				x1 = xup + (xmax - xup) * (y - yup) / (ymax - yup);
 			
 			if (ymax != ymid)
-				x2 = xmid + (xmax - xmid + 1) * (y - ymid) / (ymax - ymid);
+				x2 = xmid + (xmax - xmid) * (y - ymid) / (ymax - ymid);
 		}
 		
 		if (x1 >= x2) {
@@ -1386,10 +1382,10 @@ static void swrDrawTriangleInternal(SWRenderer* swr, int xup, int yup, int xleft
 		}
 		
 		if (x1 < 0) x1 = 0;
-		if (x1 >= swr->width) return;
-		if (x2 < 0) return;
+		if (x1 >= swr->width) continue;
+		if (x2 < 0) continue;
 		if (x2 >= swr->width) x2 = swr->width - 1;
-		if (x1 > x2) return;
+		if (x1 > x2) continue;
 		
 		uintpixel_t* line = &swr->fb[y * swr->width];
 		for (int x = x1; x <= x2; x++) {
