@@ -1077,20 +1077,16 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
         if (stepsThisTick >= 4) break;
     }
 
-    // Detect room transitions and proactively evict atlases that the
-    // *old* room used but the *new* room doesn't.  Without this an
-    // iPod Touch 2G runs out of memory entering a new room because the
-    // GL atlas budget plus the per-room sprite atlases briefly
-    // double-counts (old room's sprites are still resident the moment
-    // the new room starts loading its own).  We piggyback on the
-    // existing handleMemoryWarning path which keeps only the atlases
-    // used during the most recently rendered frame.
+    // Detect room transitions — we'll evict old atlases AFTER beginFrame()
+    // bumps frameTick so that the old room's textures (which have
+    // lastUsedTick == old frameTick) become eligible for LRU eviction.
+    BOOL roomChanged = NO;
     if (_renderer != NULL && _runner != NULL) {
         int32_t roomIdx = _runner->currentRoomIndex;
         if (_lastRoomIndex >= 0 && roomIdx != _lastRoomIndex) {
-            NSLog(@"[Butterscotch] room change %d->%d - purging unused atlases",
+            NSLog(@"[Butterscotch] room change %d->%d - will purge atlases after beginFrame",
                   _lastRoomIndex, roomIdx);
-            GLES1Renderer_handleMemoryWarning(_renderer);
+            roomChanged = YES;
         }
         _lastRoomIndex = roomIdx;
     }
@@ -1109,6 +1105,14 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     Runner_computeViewDisplayScale(_runner, gameW, gameH, &scaleX, &scaleY);
 
     _renderer->vtable->beginFrame(_renderer, gameW, gameH, w, h);
+
+    // NOW frameTick has been incremented — old room's atlases have
+    // lastUsedTick < frameTick and are eligible for LRU eviction.
+    // Purge them before we start drawing the new room (which will
+    // on-demand upload its own atlases into the freed budget).
+    if (roomChanged) {
+        GLES1Renderer_handleMemoryWarning(_renderer);
+    }
 
     if (_runner->drawBackgroundColor) {
         uint32_t c = _runner->backgroundColor;
