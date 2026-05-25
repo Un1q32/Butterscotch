@@ -1967,8 +1967,12 @@ static int32_t SWRenderer_createSpriteFromSurface(Renderer* renderer, int32_t su
 		
 		// in-bounds
 		for (; sx < swr->width && ix < w; sx++, ix++)
+#if PIXEL_SIZE == 8
+			dstline[ix] = srcline[ix];
+#else
 			dstline[ix] = srcline[ix] | TRANSPARENT_MASK;
-		
+#endif
+
 		// right edge
 		for (; ix < w; ix++)
 			dstline[ix] = 0;
