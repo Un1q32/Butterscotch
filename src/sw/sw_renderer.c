@@ -1219,10 +1219,6 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
 	
 	if (tpagIndex < 0 || (uint32_t) tpagIndex >= dwin->tpag.count) return;
 	
-	bool flipX = false, flipY = false;
-	if (xscale < 0) flipX = true, xscale = -xscale;
-	if (yscale < 0) flipY = true, yscale = -yscale;
-
 	TexturePageItem* tpag = &dwin->tpag.items[tpagIndex];
 	int16_t pageId = tpag->texturePageId;
 	if (0 > pageId || swr->totalTextureCount <= (uint32_t) pageId) return;
@@ -1237,8 +1233,6 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
 	float dy = y;
 	int dw = swrCeiling(xscale * sw);
 	int dh = swrCeiling(yscale * sh);
-	if (flipX) dx -= dw;
-	if (flipY) dy -= dh;
 	
 	SWTexture* texture = swr->textures[pageId];
 	
