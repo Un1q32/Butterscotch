@@ -1,6 +1,6 @@
 # Butterscotch iOS — Theos Makefile
 #
-# Targets iPod Touch 2G (armv6) running jailbroken iPhone OS 3.1.3+.
+# Targets iPod Touch 2G (armv6) running jailbroken iPhone OS 2.0+.
 # Build on Linux with the standard Theos Linux toolchain:
 #
 #   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
@@ -19,7 +19,7 @@
 # Toolchain target. Format: <platform>:<compiler>:<SDK ver>:<deployment ver>
 # armv6 is mandatory for iPod Touch 2G — armv7 binaries refuse to launch.
 # -----------------------------------------------------------------------------
-TARGET := iphone:clang:3.1.3:3.1.3
+TARGET := iphone:clang:3.1.3:2.0
 ARCHS  := armv6
 
 # -----------------------------------------------------------------------------
@@ -93,6 +93,9 @@ Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES Open
 # -----------------------------------------------------------------------------
 # Compiler flags
 #   - -fno-objc-arc: iOS 3 SDK is pre-ARC; we use manual retain/release.
+#   - -ffixed-r9: iOS 2.x ABI reserves R9 as a platform register. LLVM 10
+#     doesn't know this (fix only landed in LLVM 20, Oct 2025), so we
+#     manually tell the compiler to never use R9.  Harmless on iOS 3.x+.
 #   - -DBS_PLATFORM_IOS: marker for future src/*.c conditionals.
 #   - -DBS_GLES1=1: marker so gles1_renderer.c picks the iOS GLES1 path.
 #   - -Wno-deprecated-declarations: iOS 3.1.3 deployment is flagged
@@ -108,6 +111,7 @@ Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES Open
 # hold more than ~2 MB of decoded PCM across all cached sounds — this
 # prevents OOM during the boss fight's SFX burst.
 Butterscotch_CFLAGS  = -fno-objc-arc \
+                       -ffixed-r9 \
                        -DBS_PLATFORM_IOS=1 \
                        -DBS_GLES1=1 \
                        -DENABLE_BC16=1 \
