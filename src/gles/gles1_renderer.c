@@ -319,6 +319,36 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
     // 4x duplication or slanted striping. This forces contiguous reading.
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
+    // Per-atlas format selection.  RGBA5551 (5-bit colour, 1-bit alpha)
+    // gives sharper colour but turns every soft / antialiased edge into
+    // a binary on-or-off cutoff — which on Undertale's big sprites
+    // (Flowey, Toriel, the dialogue heart) shows up as sawtooth edges
+    // instead of the smooth fade the artwork was drawn with.  RGBA4444
+    // (4-bit colour, 4-bit alpha) preserves the alpha gradient at the
+    // cost of slightly coarser colour quantisation.  We pick per-atlas:
+    // scan the alpha channel, and if there are enough partially-opaque
+    // pixels (between 16 and 240) to be visible as fringe AA, upload
+    // the whole atlas as 4444; otherwise stick with 5551 for max
+    // colour fidelity on hard-edged pixel art.
+    int aaPixels = 0;
+    int alphaSamples = 0;
+    {
+        // Sample at most ~4 K pixels to keep the scan cheap on the iPod
+        // Touch 2G (~0.3 ms even for 1024×1024).  The histogram is
+        // representative as long as we sample uniformly.
+        int total = w * h;
+        int stride = total / 4096; if (stride < 1) stride = 1;
+        for (int i = 0; i < total; i += stride) {
+            uint8_t a = pixels[i * 4 + 3];
+            alphaSamples++;
+            if (a >= 16 && a <= 240) aaPixels++;
+        }
+    }
+    bool useRGBA4444 = (alphaSamples > 0)
+        && ((aaPixels * 100) / alphaSamples >= 5);
+    GLenum glPixelType = useRGBA4444 ? GL_UNSIGNED_SHORT_4_4_4_4
+                                     : GL_UNSIGNED_SHORT_5_5_5_1;
+
     uint32_t totalBytes = 0;
     for (int32_t b = 0; b < numBands; b++) {
         int32_t rowStart = b * bandH;
@@ -351,17 +381,11 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-        // Convert this band from RGBA8888 -> RGBA5551 directly into the
-        // upload buffer.  RGBA5551 packs 5 bits per colour channel + 1
-        // bit alpha into 16 bits, which is half the source 8888 size
-        // (same memory as 4444) but with 32 shades per colour channel
-        // instead of 16 — a much closer match to the original 8888 art
-        // for pixel-art games like Undertale.  Undertale's sprites are
-        // either fully opaque or fully transparent (no AA), so 1-bit
-        // alpha is sufficient.  PowerVR MBX Lite stores textures in 16
-        // bits internally anyway, so this matches the GPU's native
-        // texel layout and avoids the visible banding the RGBA4 path
-        // produced on dialog text and small UI sprites.
+        // Convert this band from RGBA8888 to the per-atlas 16-bit format
+        // chosen above (RGBA5551 for hard-edged pixel art, RGBA4444 for
+        // sprites with AA fringes).  Both layouts are 2 bytes per pixel
+        // so the resident-memory budget stays identical; the only
+        // difference is the colour/alpha bit allocation.
         //
         // We always allocate a full bandH-sized upload buffer (padded
         // with zeroes for the trailing short band) so the GL storage
@@ -378,25 +402,40 @@ static bool gles1_decodeAndUploadSlot(GLES1Renderer* g, int32_t txtrIndex, BSTex
             return false;
         }
         const uint8_t* src = pixels + (size_t) rowStart * w * 4;
-        for (int32_t y = 0; y < thisBandH; y++) {
-            const uint8_t* srow = src + (size_t) y * w * 4;
-            uint16_t* drow = up + (size_t) y * w;
-            for (int32_t x = 0; x < w; x++) {
-                uint8_t r = srow[x * 4 + 0];
-                uint8_t gC = srow[x * 4 + 1];
-                uint8_t bC = srow[x * 4 + 2];
-                uint8_t a = srow[x * 4 + 3];
-                // 1-bit alpha threshold: 0..127 -> 0 (transparent),
-                // 128..255 -> 1 (opaque).  Edge anti-aliased pixels in
-                // Undertale are rare; this binary cutoff matches what
-                // the GPU does internally anyway when sampling 5551.
-                drow[x] = (uint16_t) ((((uint16_t)(r  >> 3)) << 11) |
-                                      (((uint16_t)(gC >> 3)) <<  6) |
-                                      (((uint16_t)(bC >> 3)) <<  1) |
-                                       ((uint16_t)(a >= 128 ? 1 : 0)));
+        if (useRGBA4444) {
+            for (int32_t y = 0; y < thisBandH; y++) {
+                const uint8_t* srow = src + (size_t) y * w * 4;
+                uint16_t* drow = up + (size_t) y * w;
+                for (int32_t x = 0; x < w; x++) {
+                    uint8_t r = srow[x * 4 + 0];
+                    uint8_t gC = srow[x * 4 + 1];
+                    uint8_t bC = srow[x * 4 + 2];
+                    uint8_t a = srow[x * 4 + 3];
+                    drow[x] = (uint16_t) ((((uint16_t)(r  >> 4)) << 12) |
+                                          (((uint16_t)(gC >> 4)) <<  8) |
+                                          (((uint16_t)(bC >> 4)) <<  4) |
+                                           ((uint16_t)(a  >> 4)));
+                }
+            }
+        } else {
+            for (int32_t y = 0; y < thisBandH; y++) {
+                const uint8_t* srow = src + (size_t) y * w * 4;
+                uint16_t* drow = up + (size_t) y * w;
+                for (int32_t x = 0; x < w; x++) {
+                    uint8_t r = srow[x * 4 + 0];
+                    uint8_t gC = srow[x * 4 + 1];
+                    uint8_t bC = srow[x * 4 + 2];
+                    uint8_t a = srow[x * 4 + 3];
+                    // 1-bit alpha threshold: 0..127 -> 0 (transparent),
+                    // 128..255 -> 1 (opaque).
+                    drow[x] = (uint16_t) ((((uint16_t)(r  >> 3)) << 11) |
+                                          (((uint16_t)(gC >> 3)) <<  6) |
+                                          (((uint16_t)(bC >> 3)) <<  1) |
+                                           ((uint16_t)(a >= 128 ? 1 : 0)));
+                }
             }
         }
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, up);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, bandH, 0, GL_RGBA, glPixelType, up);
         free(up);
         
         GLenum glErr = glGetError();

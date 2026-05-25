@@ -67,6 +67,14 @@ BS_RUNTIME_FILES = \
     ../../vm_builtins.c \
     ../../../vendor/md5/md5.c
 
+# OpenAL-based audio system, used in place of NoopAudioSystem on iOS.
+# OpenAL is built into iOS as a system framework since iOS 2.0 and gives
+# us multi-voice PCM mixing for free; stb_vorbis is bundled and is
+# textually included by al_audio_system.c so no separate compile entry.
+BS_AUDIO_FILES = \
+    ../../audio/openal/al_audio_system.c \
+    ../../audio/openal/wave.c
+
 BS_RENDERER_FILES = \
     ../gles1_renderer.c
 
@@ -74,12 +82,13 @@ Butterscotch_FILES = \
     main.m \
     stb_impl.c \
     $(BS_RENDERER_FILES) \
-    $(BS_RUNTIME_FILES)
+    $(BS_RUNTIME_FILES) \
+    $(BS_AUDIO_FILES)
 
 # -----------------------------------------------------------------------------
 # Frameworks
 # -----------------------------------------------------------------------------
-Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES
+Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES OpenAL AudioToolbox
 
 # -----------------------------------------------------------------------------
 # Compiler flags
@@ -89,16 +98,26 @@ Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES
 #   - -Wno-deprecated-declarations: iOS 3.1.3 deployment is flagged
 #     deprecated by clang; that's fine, we know.
 # -----------------------------------------------------------------------------
+# MAX_SOUND_INSTANCES/AL_STREAM_BUFFER_SAMPLES are dialed down from the
+# upstream defaults (128 / 4096) because the iPod Touch 2G has 128 MB
+# total RAM and the iOS OpenAL driver caps practical source count well
+# below 128.  32 simultaneous voices is plenty for Undertale (worst case
+# is ~8 SFX + 1 music track) and the 2048-sample decode chunk halves
+# the OGG streaming buffer footprint without causing audible underruns.
 Butterscotch_CFLAGS  = -fno-objc-arc \
                        -DBS_PLATFORM_IOS=1 \
                        -DBS_GLES1=1 \
                        -DENABLE_BC16=1 \
+                       -DMAX_SOUND_INSTANCES=32 \
+                       -DMAX_AUDIO_STREAMS=8 \
+                       -DAL_STREAM_BUFFER_SAMPLES=2048 \
                        -I$(THEOS_PROJECT_DIR)/../../ \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/ds \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/image \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/vorbis \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/md5 \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/miniaudio \
+                       -I$(THEOS_PROJECT_DIR)/../../audio/openal \
                        -Wno-deprecated-declarations \
                        -Wno-unused-parameter \
                        -Wno-unused-variable \

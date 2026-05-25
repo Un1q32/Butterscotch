@@ -38,6 +38,7 @@
 #include "runner.h"
 #include "renderer.h"
 #include "audio_system.h"
+#include "al_audio_system.h"
 #include "file_system.h"
 #include "noop_audio_system.h"
 #include "overlay_file_system.h"
@@ -1002,7 +1003,14 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     OverlayFileSystem* overlay = OverlayFileSystem_create(dataWinDir, saveDirC);
     _fileSystem = (FileSystem*) overlay;
 
-    _audio = (AudioSystem*) NoopAudioSystem_create();
+    // OpenAL-backed audio: full multi-voice mixing, OGG streaming for
+    // music, embedded WAV for SFX.  Falls back to no-op silently if
+    // alcOpenDevice fails (e.g. ringer switch muted on iPod Touch 2G).
+    _audio = (AudioSystem*) AlAudioSystem_create();
+    if (_audio == NULL) {
+        NSLog(@"[Butterscotch] WARN: AlAudioSystem_create failed, falling back to silent audio");
+        _audio = (AudioSystem*) NoopAudioSystem_create();
+    }
 
     [_glView makeContextCurrent];
     [_glView bindDrawable];

@@ -4,20 +4,29 @@
 #include "audio_system.h"
 #ifdef __APPLE__
 #include <OpenAL/al.h>
-#include <AL/alc.h>
+#include <OpenAL/alc.h>
 #else
 #include <AL/al.h>
 #include <AL/alc.h>
 #endif
 
+// Allow platform builds to shrink these — iOS 3.1.3 on the iPod Touch 2G
+// only has 128 MB of RAM and the OpenAL driver tends to refuse to hand
+// out more than ~32 sources, so we keep these overridable.
+#ifndef MAX_SOUND_INSTANCES
 #define MAX_SOUND_INSTANCES 128
+#endif
 #define SOUND_INSTANCE_ID_BASE 100000
+#ifndef MAX_AUDIO_STREAMS
 #define MAX_AUDIO_STREAMS 32
+#endif
 // This is the index space that the native runner uses
 #define AUDIO_STREAM_INDEX_BASE 300000
 
 #define AL_STREAM_BUFFER_COUNT 4
+#ifndef AL_STREAM_BUFFER_SAMPLES
 #define AL_STREAM_BUFFER_SAMPLES 4096
+#endif
 
 struct stb_vorbis;
 
