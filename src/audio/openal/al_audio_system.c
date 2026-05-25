@@ -370,6 +370,7 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         // those are always .ogg in Undertale.
         const uint8_t* embeddedBytes = nullptr;
         uint32_t embeddedSize = 0;
+        uint8_t* embeddedOwned = nullptr; // freed at end of this block if non-null
         bool loadedOk = false;
         if (isEmbedded) {
             DataWin* group = nullptr;
@@ -393,10 +394,48 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
                 return -1;
             }
             AudioEntry* entry = &group->audo.entries[sound->audioFile];
-            embeddedBytes = (const uint8_t*) entry->data;
             embeddedSize = entry->dataSize;
+            if (entry->data != nullptr) {
+                embeddedBytes = (const uint8_t*) entry->data;
+            } else if (entry->dataOffset > 0 && entry->dataSize > 0
+                       && group->lazyLoadFile != nullptr) {
+                // The iOS port parses data.win with skipLoadingAudoBlobs=1
+                // to keep RAM usage low on the iPod Touch 2G (Undertale's
+                // AUDO is ~50 MB of WAV/OGG that would otherwise sit in
+                // memory forever).  Lazy-load this specific blob now via
+                // the lazy-load FILE* and free it after decoding.
+                embeddedOwned = (uint8_t*) malloc(entry->dataSize);
+                if (embeddedOwned == nullptr) {
+                    fprintf(stderr, "Audio: malloc %u bytes failed for '%s'\n",
+                            (unsigned) entry->dataSize, sound->name);
+                    alDeleteBuffers(1, &slot->alBuffer);
+                    alDeleteSources(1, &slot->alSource);
+                    return -1;
+                }
+                if (fseek(group->lazyLoadFile, (long) entry->dataOffset, SEEK_SET) != 0) {
+                    fprintf(stderr, "Audio: fseek to offset %u failed for '%s'\n",
+                            (unsigned) entry->dataOffset, sound->name);
+                    free(embeddedOwned);
+                    alDeleteBuffers(1, &slot->alBuffer);
+                    alDeleteSources(1, &slot->alSource);
+                    return -1;
+                }
+                size_t got = fread(embeddedOwned, 1, entry->dataSize, group->lazyLoadFile);
+                if (got != entry->dataSize) {
+                    fprintf(stderr, "Audio: short read %zu/%u for '%s'\n",
+                            got, (unsigned) entry->dataSize, sound->name);
+                    free(embeddedOwned);
+                    alDeleteBuffers(1, &slot->alBuffer);
+                    alDeleteSources(1, &slot->alSource);
+                    return -1;
+                }
+                embeddedBytes = embeddedOwned;
+            }
             if (embeddedBytes == nullptr || embeddedSize < 12) {
-                fprintf(stderr, "Audio: '%s' embedded blob missing or too small\n", sound->name);
+                fprintf(stderr, "Audio: '%s' embedded blob missing or too small (data=%p size=%u offset=%u lazyFile=%p)\n",
+                        sound->name, (void*) entry->data, (unsigned) entry->dataSize,
+                        (unsigned) entry->dataOffset, (void*) group->lazyLoadFile);
+                if (embeddedOwned != nullptr) free(embeddedOwned);
                 alDeleteBuffers(1, &slot->alBuffer);
                 alDeleteSources(1, &slot->alSource);
                 return -1;
@@ -434,6 +473,7 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             if (len <= 0 || data == NULL) {
                 fprintf(stderr, "Audio: stb_vorbis_decode_memory failed for '%s'\n", sound->name);
                 if (data != NULL) free(data);
+                if (embeddedOwned != nullptr) free(embeddedOwned);
                 alDeleteBuffers(1, &slot->alBuffer);
                 alDeleteSources(1, &slot->alSource);
                 return -1;
@@ -479,10 +519,16 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             fprintf(stderr, "Audio: '%s' embedded blob has unknown magic %02x %02x %02x %02x\n",
                     sound->name,
                     embeddedBytes[0], embeddedBytes[1], embeddedBytes[2], embeddedBytes[3]);
+            if (embeddedOwned != nullptr) free(embeddedOwned);
             alDeleteBuffers(1, &slot->alBuffer);
             alDeleteSources(1, &slot->alSource);
             return -1;
         }
+
+        // The decoded PCM is owned by OpenAL now (alBufferData copied
+        // it), so the raw WAV/OGG bytes we lazy-loaded are no longer
+        // needed.  Free the temporary lazy buffer if we allocated one.
+        if (embeddedOwned != nullptr) free(embeddedOwned);
 
         if (!loadedOk) {
             alDeleteBuffers(1, &slot->alBuffer);
