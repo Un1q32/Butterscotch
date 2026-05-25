@@ -28,14 +28,37 @@
 #define AL_STREAM_BUFFER_SAMPLES 4096
 #endif
 
+// Buffer cache: reuse decoded PCM across multiple sources playing the
+// same sound, avoiding redundant decode + OpenAL copies.  The cache
+// size is kept deliberately small for the iPod Touch 2G (128 MB RAM).
+#ifndef AL_BUFFER_CACHE_SIZE
+#define AL_BUFFER_CACHE_SIZE 48
+#endif
+// Total PCM bytes the cache is allowed to hold. Evict LRU entries
+// once this threshold is exceeded.
+#ifndef AL_BUFFER_CACHE_BUDGET
+#define AL_BUFFER_CACHE_BUDGET (4u * 1024u * 1024u)
+#endif
+
 struct stb_vorbis;
+
+typedef struct {
+    bool inUse;           // slot occupied
+    int32_t soundIndex;   // SOND index this buffer was decoded from
+    ALuint alBuffer;      // OpenAL buffer name (shared across sources)
+    uint32_t pcmBytes;    // uncompressed PCM size inside OpenAL
+    uint32_t refCount;    // number of active SoundInstances referencing this
+    uint32_t lastUsedFrame; // frame counter at last play (for LRU eviction)
+} BufferCacheEntry;
 
 typedef struct {
     bool active;
     int32_t soundIndex; // SOND resource that spawned this
     int32_t instanceId; // unique ID returned to GML
     ALuint alSource; // OpenAL source object
-    ALuint alBuffer; // OpenAL buffer object (only valid when streaming == false)
+    ALuint alBuffer; // OpenAL buffer object (only valid when streaming == false && !bufferCached)
+    bool bufferCached; // true when alBuffer belongs to the shared cache
+    int32_t cacheSlot;  // index into bufferCache[] when bufferCached==true
     float targetGain;
     float currentGain;
     float fadeTimeRemaining;
@@ -70,6 +93,15 @@ typedef struct {
     int32_t nextInstanceCounter;
     FileSystem* fileSystem;
     AudioStreamEntry streams[MAX_AUDIO_STREAMS];
+
+    // Shared buffer cache
+    BufferCacheEntry bufferCache[AL_BUFFER_CACHE_SIZE];
+    uint32_t cacheResidentBytes; // sum of pcmBytes across all inUse entries
+    uint32_t frameCounter;       // incremented each maUpdate() call
 } AlAudioSystem;
 
 AlAudioSystem* AlAudioSystem_create(void);
+
+// Call from the iOS memory-warning handler (or equivalent) to free
+// cached audio buffers that have no active sources referencing them.
+void AlAudioSystem_handleMemoryWarning(AlAudioSystem* ma);

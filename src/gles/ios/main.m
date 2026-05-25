@@ -1147,9 +1147,12 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 // wasn't sampled this frame and let the runtime re-stream them on
 // demand.
 - (void)didReceiveMemoryWarning {
-    NSLog(@"[Butterscotch] didReceiveMemoryWarning — purging non-current atlases");
+    NSLog(@"[Butterscotch] didReceiveMemoryWarning — purging non-current atlases + audio cache");
     if (_renderer != NULL) {
         GLES1Renderer_handleMemoryWarning(_renderer);
+    }
+    if (_audio != NULL) {
+        AlAudioSystem_handleMemoryWarning((AlAudioSystem*) _audio);
     }
     [super didReceiveMemoryWarning];
 }

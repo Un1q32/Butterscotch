@@ -104,6 +104,9 @@ Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES Open
 # below 128.  32 simultaneous voices is plenty for Undertale (worst case
 # is ~8 SFX + 1 music track) and the 2048-sample decode chunk halves
 # the OGG streaming buffer footprint without causing audible underruns.
+# AL_BUFFER_CACHE_SIZE/BUDGET caps the shared buffer cache so we never
+# hold more than ~2 MB of decoded PCM across all cached sounds — this
+# prevents OOM during the boss fight's SFX burst.
 Butterscotch_CFLAGS  = -fno-objc-arc \
                        -DBS_PLATFORM_IOS=1 \
                        -DBS_GLES1=1 \
@@ -111,6 +114,8 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -DMAX_SOUND_INSTANCES=32 \
                        -DMAX_AUDIO_STREAMS=8 \
                        -DAL_STREAM_BUFFER_SAMPLES=2048 \
+                       -DAL_BUFFER_CACHE_SIZE=32 \
+                       -DAL_BUFFER_CACHE_BUDGET='(2u * 1024u * 1024u)' \
                        -I$(THEOS_PROJECT_DIR)/../../ \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/ds \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/image \

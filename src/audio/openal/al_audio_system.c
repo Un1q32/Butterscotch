@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "stb_ds.h"
 
 // ===[ Helpers ]===
@@ -56,14 +57,14 @@ static void alGetSourceLengthSec(ALuint buffer, float* out) {
 }
 
 // Tears down whatever AL state is attached to a slot and marks it inactive.
-static void releaseInstance(SoundInstance* inst) {
+// Pass the owning AlAudioSystem so buffer-cache ref counts are updated.
+static void releaseInstanceEx(AlAudioSystem* ma, SoundInstance* inst) {
     if (!inst->active)
         return;
 
     alSourceStop(inst->alSource);
 
     if (inst->streaming) {
-        // Drain anything still queued so the buffer names are detachable.
         ALint queued = 0;
         alGetSourcei(inst->alSource, AL_BUFFERS_QUEUED, &queued);
         repeat(queued, i) {
@@ -80,10 +81,22 @@ static void releaseInstance(SoundInstance* inst) {
         inst->decodeScratch = nullptr;
         inst->streaming = false;
     } else {
+        alSourcei(inst->alSource, AL_BUFFER, 0); // detach buffer from source
         alDeleteSources(1, &inst->alSource);
-        alDeleteBuffers(1, &inst->alBuffer);
+        if (inst->bufferCached && ma != NULL) {
+            // Decrement ref count in the shared cache; buffer stays alive
+            // for future reuse until evicted by memory pressure or LRU.
+            if (inst->cacheSlot >= 0 && inst->cacheSlot < AL_BUFFER_CACHE_SIZE) {
+                BufferCacheEntry* ce = &ma->bufferCache[inst->cacheSlot];
+                if (ce->refCount > 0) ce->refCount--;
+            }
+        } else {
+            alDeleteBuffers(1, &inst->alBuffer);
+        }
     }
 
+    inst->bufferCached = false;
+    inst->cacheSlot = -1;
     inst->active = false;
 }
 
@@ -101,6 +114,71 @@ static bool streamFillBuffer(SoundInstance* inst, ALuint buf) {
     }
     alBufferData(buf, inst->streamFormat, inst->decodeScratch, samples * inst->streamChannels * (ALsizei) sizeof(int16_t), inst->streamSampleRate);
     return true;
+}
+
+// ===[ Buffer Cache Helpers ]===
+
+// Look up an existing cached buffer for a given sound index.
+static int32_t cacheLookup(AlAudioSystem* ma, int32_t soundIndex) {
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        if (ma->bufferCache[i].inUse && ma->bufferCache[i].soundIndex == soundIndex) {
+            return (int32_t) i;
+        }
+    }
+    return -1;
+}
+
+// Evict the least-recently-used cache entry that has refCount == 0.
+// Returns the slot index freed, or -1 if nothing could be evicted.
+static int32_t cacheEvictLRU(AlAudioSystem* ma) {
+    int32_t best = -1;
+    uint32_t bestFrame = UINT32_MAX;
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        BufferCacheEntry* ce = &ma->bufferCache[i];
+        if (!ce->inUse) continue;
+        if (ce->refCount > 0) continue;
+        if (ce->lastUsedFrame < bestFrame) {
+            bestFrame = ce->lastUsedFrame;
+            best = (int32_t) i;
+        }
+    }
+    if (best >= 0) {
+        BufferCacheEntry* ce = &ma->bufferCache[best];
+        alDeleteBuffers(1, &ce->alBuffer);
+        ma->cacheResidentBytes -= ce->pcmBytes;
+        ce->inUse = false;
+    }
+    return best;
+}
+
+// Insert a buffer into the cache. Evicts LRU entries if over budget.
+// Returns slot index, or -1 on failure (no evictable slot).
+static int32_t cacheInsert(AlAudioSystem* ma, int32_t soundIndex, ALuint buffer, uint32_t pcmBytes) {
+    // Make room if over budget
+    while (ma->cacheResidentBytes + pcmBytes > AL_BUFFER_CACHE_BUDGET) {
+        if (cacheEvictLRU(ma) < 0) break; // nothing evictable
+    }
+
+    // Find a free slot
+    int32_t slot = -1;
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        if (!ma->bufferCache[i].inUse) { slot = (int32_t) i; break; }
+    }
+    if (slot < 0) {
+        // All slots occupied — try one more eviction
+        slot = cacheEvictLRU(ma);
+    }
+    if (slot < 0) return -1;
+
+    BufferCacheEntry* ce = &ma->bufferCache[slot];
+    ce->inUse = true;
+    ce->soundIndex = soundIndex;
+    ce->alBuffer = buffer;
+    ce->pcmBytes = pcmBytes;
+    ce->refCount = 0;
+    ce->lastUsedFrame = ma->frameCounter;
+    ma->cacheResidentBytes += pcmBytes;
+    return slot;
 }
 
 static SoundInstance* findFreeSlot(AlAudioSystem* ma) {
@@ -127,7 +205,7 @@ static SoundInstance* findFreeSlot(AlAudioSystem* ma) {
     }
 
     if (best != nullptr) {
-        releaseInstance(best);
+        releaseInstanceEx(ma, best);
     }
 
     return best;
@@ -183,10 +261,20 @@ static void maInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem)
 static void maDestroy(AudioSystem* audio) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
-    // Uninit all active sound instances
+    // Uninit all active sound instances (uses releaseInstanceEx so
+    // ref counts are decremented before we nuke the cache).
     repeat(MAX_SOUND_INSTANCES, i) {
-        releaseInstance(&ma->instances[i]);
+        releaseInstanceEx(ma, &ma->instances[i]);
     }
+
+    // Destroy the buffer cache
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        if (ma->bufferCache[i].inUse) {
+            alDeleteBuffers(1, &ma->bufferCache[i].alBuffer);
+            ma->bufferCache[i].inUse = false;
+        }
+    }
+    ma->cacheResidentBytes = 0;
 
     // Free stream entries
     repeat(MAX_AUDIO_STREAMS, i) {
@@ -211,6 +299,7 @@ static void maDestroy(AudioSystem* audio) {
 
 static void maUpdate(AudioSystem* audio, float deltaTime) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
+    ma->frameCounter++;
 
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
@@ -259,7 +348,7 @@ static void maUpdate(AudioSystem* audio, float deltaTime) {
             ALint queued = 0;
             alGetSourcei(inst->alSource, AL_BUFFERS_QUEUED, &queued);
             if (inst->streamEnded && queued == 0) {
-                releaseInstance(inst);
+                releaseInstanceEx(ma, inst);
                 continue;
             }
 
@@ -271,9 +360,9 @@ static void maUpdate(AudioSystem* audio, float deltaTime) {
             continue;
         }
 
-        // Clean up ended non-looping sounds (ma_sound_at_end avoids reaping still-loading async sounds)
+        // Clean up ended non-looping sounds
         if (alSourceHasStopped(inst->alSource) && !alSourceIsLooping(inst->alSource)) {
-            releaseInstance(inst);
+            releaseInstanceEx(ma, inst);
         }
     }
 }
@@ -315,6 +404,8 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     slot->decodeScratch = nullptr;
     slot->streamEnded = false;
     slot->playedSamples = 0;
+    slot->bufferCached = false;
+    slot->cacheSlot = -1;
 
     if (isStream) {
         // Streaming path: open the decoder, queue a few small buffers, and let maUpdate() top them up.
@@ -358,6 +449,21 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             return -1;
         }
     } else {
+        // === Buffer cache fast path ===
+        // If we already decoded this sound, reuse the shared buffer.
+        int32_t cachedSlot = cacheLookup(ma, soundIndex);
+        if (cachedSlot >= 0) {
+            BufferCacheEntry* ce = &ma->bufferCache[cachedSlot];
+            alGenSources(1, &slot->alSource);
+            alSourcei(slot->alSource, AL_BUFFER, (ALint) ce->alBuffer);
+            slot->alBuffer = ce->alBuffer;
+            slot->bufferCached = true;
+            slot->cacheSlot = cachedSlot;
+            ce->refCount++;
+            ce->lastUsedFrame = ma->frameCounter;
+            goto apply_props;
+        }
+
         alGenSources(1, &slot->alSource);
         alGenBuffers(1, &slot->alBuffer);
         bool isEmbedded = (sound->flags & 0x01) != 0;
@@ -593,8 +699,21 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             alDeleteSources(1, &slot->alSource);
             return -1;
         }
+
+        // Insert the freshly-decoded buffer into the shared cache so
+        // future plays of the same sound reuse it instead of decoding
+        // again. Query OpenAL for the actual buffer size in bytes.
+        ALint bufSizeBytes = 0;
+        alGetBufferi(slot->alBuffer, AL_SIZE, &bufSizeBytes);
+        int32_t newCacheSlot = cacheInsert(ma, soundIndex, slot->alBuffer, (uint32_t) bufSizeBytes);
+        if (newCacheSlot >= 0) {
+            slot->bufferCached = true;
+            slot->cacheSlot = newCacheSlot;
+            ma->bufferCache[newCacheSlot].refCount++;
+        }
     }
 
+apply_props:
     // Apply properties
     float volume = isStream ? 1.0f : sound->volume;
     float pitch = isStream ? 1.0f : sound->pitch;
@@ -631,15 +750,13 @@ static void maStopSound(AudioSystem* audio, int32_t soundOrInstance) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
-        // Stop specific instance
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
-        if (inst != nullptr) releaseInstance(inst);
+        if (inst != nullptr) releaseInstanceEx(ma, inst);
     } else {
-        // Stop all instances of this sound resource
         repeat(MAX_SOUND_INSTANCES, i) {
             SoundInstance* inst = &ma->instances[i];
             if (inst->active && inst->soundIndex == soundOrInstance) {
-                releaseInstance(inst);
+                releaseInstanceEx(ma, inst);
             }
         }
     }
@@ -649,7 +766,7 @@ static void maStopAll(AudioSystem* audio) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
     repeat(MAX_SOUND_INSTANCES, i) {
-        releaseInstance(&ma->instances[i]);
+        releaseInstanceEx(ma, &ma->instances[i]);
     }
 }
 
@@ -1031,7 +1148,7 @@ static bool maDestroyStream(AudioSystem* audio, int32_t streamIndex) {
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
         if (inst->active && inst->soundIndex == streamIndex) {
-            releaseInstance(inst);
+            releaseInstanceEx(ma, inst);
         }
     }
 
@@ -1070,6 +1187,42 @@ static AudioSystemVtable AlAudioSystemVtable = {
     .createStream = maCreateStream,
     .destroyStream = maDestroyStream,
 };
+
+// ===[ Memory Pressure ]===
+
+void AlAudioSystem_handleMemoryWarning(AlAudioSystem* ma) {
+    if (ma == NULL) return;
+
+    uint32_t evicted = 0;
+    uint32_t freedBytes = 0;
+
+    // Evict all cached buffers that have no active sources referencing them.
+    repeat(AL_BUFFER_CACHE_SIZE, i) {
+        BufferCacheEntry* ce = &ma->bufferCache[i];
+        if (!ce->inUse) continue;
+        if (ce->refCount > 0) continue;
+        alDeleteBuffers(1, &ce->alBuffer);
+        freedBytes += ce->pcmBytes;
+        ma->cacheResidentBytes -= ce->pcmBytes;
+        ce->inUse = false;
+        evicted++;
+    }
+
+    // Additionally stop any non-streaming, non-looping sounds that
+    // have already finished playing to free their sources.
+    repeat(MAX_SOUND_INSTANCES, i) {
+        SoundInstance* inst = &ma->instances[i];
+        if (!inst->active) continue;
+        if (inst->streaming) continue;
+        if (alSourceHasStopped(inst->alSource)) {
+            releaseInstanceEx(ma, inst);
+        }
+    }
+
+    fprintf(stderr, "[audio] memory warning: evicted %u cached buffers (%u bytes), "
+            "cache now %u/%u bytes\n",
+            evicted, freedBytes, ma->cacheResidentBytes, (uint32_t) AL_BUFFER_CACHE_BUDGET);
+}
 
 // ===[ Lifecycle ]===
 
