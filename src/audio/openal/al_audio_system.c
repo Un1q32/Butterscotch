@@ -361,63 +361,133 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         alGenSources(1, &slot->alSource);
         alGenBuffers(1, &slot->alBuffer);
         bool isEmbedded = (sound->flags & 0x01) != 0;
-        bool isCompressed = (sound->flags & 0x02) != 0;
 
-        if (isEmbedded || isCompressed) {
-           // Embedded audio: decode from AUDO chunk memory
-            if (0 > sound->audioFile || (uint32_t) sound->audioFile >= ma->base.audioGroups[sound->audioGroup]->audo.count) {
-                fprintf(stderr, "Audio: Invalid audio file index %d for sound '%s'\n", sound->audioFile, sound->name);
+        // GMS sound flags are ambiguous between "embedded WAV" and
+        // "embedded OGG", and the AUDO blob can hold either. So we
+        // resolve the actual buffer first, then sniff the magic bytes
+        // and dispatch to the right decoder. External sounds (non-
+        // embedded) take the file path and feed it through stb_vorbis;
+        // those are always .ogg in Undertale.
+        const uint8_t* embeddedBytes = nullptr;
+        uint32_t embeddedSize = 0;
+        bool loadedOk = false;
+        if (isEmbedded) {
+            DataWin* group = nullptr;
+            if (sound->audioGroup >= 0
+                && (int32_t) arrlen(ma->base.audioGroups) > sound->audioGroup) {
+                group = ma->base.audioGroups[sound->audioGroup];
+            }
+            if (group == nullptr) {
+                fprintf(stderr, "Audio: audio group %d for '%s' not loaded\n",
+                        sound->audioGroup, sound->name);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
                 return -1;
             }
+            if (0 > sound->audioFile
+                || (uint32_t) sound->audioFile >= group->audo.count) {
+                fprintf(stderr, "Audio: invalid audio file %d for '%s'\n",
+                        sound->audioFile, sound->name);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+            AudioEntry* entry = &group->audo.entries[sound->audioFile];
+            embeddedBytes = (const uint8_t*) entry->data;
+            embeddedSize = entry->dataSize;
+            if (embeddedBytes == nullptr || embeddedSize < 12) {
+                fprintf(stderr, "Audio: '%s' embedded blob missing or too small\n", sound->name);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+        }
 
-            AudioEntry* entry = &ma->base.audioGroups[sound->audioGroup]->audo.entries[sound->audioFile];
-            WAVFile wav = WAV_ParseFileData(entry->data);
+        // Magic-byte sniff: RIFF/WAVE → uncompressed PCM, OggS → Ogg
+        // Vorbis. We accept both for embedded and for external, so
+        // Undertale's mix of embedded .wav SFX and external .ogg
+        // music both go through the right decoder.
+        bool isWAV = false;
+        bool isOGG = false;
+        if (isEmbedded) {
+            isWAV = (memcmp(embeddedBytes, "RIFF", 4) == 0)
+                 && (memcmp(embeddedBytes + 8, "WAVE", 4) == 0);
+            isOGG = (memcmp(embeddedBytes, "OggS", 4) == 0);
+        }
 
+        if (isEmbedded && isWAV) {
+            WAVFile wav = WAV_ParseFileData(embeddedBytes);
             uint32_t format;
-            if (wav.header.number_of_channels == 1)
-            {
-                if (wav.header.bits_per_sample == 8)
-                    format = AL_FORMAT_MONO8;
-                else 
-                    format = AL_FORMAT_MONO16;
+            if (wav.header.number_of_channels == 1) {
+                format = (wav.header.bits_per_sample == 8) ? AL_FORMAT_MONO8 : AL_FORMAT_MONO16;
+            } else {
+                format = (wav.header.bits_per_sample == 8) ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16;
             }
-            else {
-                if (wav.header.bits_per_sample == 8)
-                    format = AL_FORMAT_STEREO8;
-                else
-                    format = AL_FORMAT_STEREO16;
-            }
-            alBufferData(
-                slot->alBuffer, 
-                format, 
-                wav.data, 
-                wav.data_length, 
-                wav.header.sample_rate
-            );
+            alBufferData(slot->alBuffer, format, wav.data, wav.data_length, wav.header.sample_rate);
             alSourcei(slot->alSource, AL_BUFFER, slot->alBuffer);
-            if(wav.data != NULL) free(wav.data);
-        } else {
-            // External audio: load from file
+            if (wav.data != NULL) free(wav.data);
+            loadedOk = true;
+        } else if (isEmbedded && isOGG) {
+            int channels = 0, sample_rate = 0;
+            short* data = NULL;
+            int len = stb_vorbis_decode_memory(embeddedBytes, (int) embeddedSize, &channels, &sample_rate, &data);
+            if (len <= 0 || data == NULL) {
+                fprintf(stderr, "Audio: stb_vorbis_decode_memory failed for '%s'\n", sound->name);
+                if (data != NULL) free(data);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+            alBufferData(slot->alBuffer,
+                         (channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16,
+                         (void*) data,
+                         len * channels * (int) sizeof(int16_t),
+                         sample_rate);
+            alSourcei(slot->alSource, AL_BUFFER, slot->alBuffer);
+            free(data);
+            loadedOk = true;
+        } else if (!isEmbedded) {
+            // External audio file (always Ogg Vorbis in Undertale).
             char* path = resolveExternalPath(ma, sound);
             if (path == nullptr) {
-                fprintf(stderr, "Audio: Could not resolve path for sound '%s'\n", sound->name);
+                fprintf(stderr, "Audio: Could not resolve path for '%s'\n", sound->name);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
                 return -1;
             }
-
-            int channels;
-            int sample_rate;
+            int channels = 0, sample_rate = 0;
             short* data = NULL;
             int len = stb_vorbis_decode_filename(path, &channels, &sample_rate, &data);
-            alBufferData(
-                slot->alBuffer, 
-                (channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, 
-                (void*)data, 
-                len*channels*sizeof(uint16_t), 
-                sample_rate
-            );
+            if (len <= 0 || data == NULL) {
+                fprintf(stderr, "Audio: stb_vorbis_decode_filename failed for '%s' (path '%s')\n", sound->name, path);
+                free(path);
+                if (data != NULL) free(data);
+                alDeleteBuffers(1, &slot->alBuffer);
+                alDeleteSources(1, &slot->alSource);
+                return -1;
+            }
+            alBufferData(slot->alBuffer,
+                         (channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16,
+                         (void*) data,
+                         len * channels * (int) sizeof(int16_t),
+                         sample_rate);
             alSourcei(slot->alSource, AL_BUFFER, slot->alBuffer);
-            if(data != NULL) free(data);
+            free(data);
             free(path);
+            loadedOk = true;
+        } else {
+            fprintf(stderr, "Audio: '%s' embedded blob has unknown magic %02x %02x %02x %02x\n",
+                    sound->name,
+                    embeddedBytes[0], embeddedBytes[1], embeddedBytes[2], embeddedBytes[3]);
+            alDeleteBuffers(1, &slot->alBuffer);
+            alDeleteSources(1, &slot->alSource);
+            return -1;
+        }
+
+        if (!loadedOk) {
+            alDeleteBuffers(1, &slot->alBuffer);
+            alDeleteSources(1, &slot->alSource);
+            return -1;
         }
     }
 
@@ -773,16 +843,35 @@ static void maSetChannelCount(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int3
 }
 
 static void maGroupLoad(AudioSystem* audio, int32_t groupIndex) {
-    if (groupIndex > 0) {
-        int sz = snprintf(nullptr, 0, "audiogroup%d.dat", groupIndex);
-        char buf[sz + 1];
-        snprintf(buf, sizeof(buf), "audiogroup%d.dat", groupIndex);
-        DataWin *audioGroup = DataWin_parse(((AlAudioSystem*)audio)->fileSystem->vtable->resolvePath(((AlAudioSystem*)audio)->fileSystem, buf),
-        (DataWinParserOptions) {
-            .parseAudo = true,
-        });
-        arrput(audio->audioGroups, audioGroup);
+    if (groupIndex <= 0) return;
+    // Already loaded?  Don't append a duplicate entry — the play path
+    // indexes audioGroups by groupIndex directly, so a second arrput
+    // would shift everything and corrupt the lookups.
+    if ((int32_t) arrlen(audio->audioGroups) > groupIndex) return;
+
+    AlAudioSystem* ma = (AlAudioSystem*) audio;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "audiogroup%d.dat", groupIndex);
+
+    // DataWin_parse calls exit(1) on fopen failure, so refuse to call
+    // it if the file isn't present.  Pad with an empty group instead.
+    bool exists = ma->fileSystem->vtable->fileExists(ma->fileSystem, buf);
+    if (!exists) {
+        fprintf(stderr, "Audio: audiogroup%d.dat not found, registering empty placeholder\n", groupIndex);
+        DataWin* empty = (DataWin*) safeCalloc(1, sizeof(DataWin));
+        while ((int32_t) arrlen(audio->audioGroups) < groupIndex) {
+            arrput(audio->audioGroups, empty);
+        }
+        arrput(audio->audioGroups, empty);
+        return;
     }
+
+    char* path = ma->fileSystem->vtable->resolvePath(ma->fileSystem, buf);
+    DataWin* audioGroup = DataWin_parse(path, (DataWinParserOptions) {
+        .parseAudo = true,
+    });
+    free(path);
+    arrput(audio->audioGroups, audioGroup);
 }
 
 static bool maGroupIsLoaded(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t groupIndex) {
