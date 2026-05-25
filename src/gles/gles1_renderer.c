@@ -527,8 +527,19 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
         return;
     }
 
-    int32_t totalSrcH = srcH;
-    float dstStartY = dstY;
+    // BUG FIX (v0.7.2): the previous code shifted BOTH the anchor
+    // point (dstStartY += segH*yscale) AND the origin within the
+    // segment (segOriginY -= segStart - srcY) for every band after
+    // the first.  That is a double offset: each subsequent band gets
+    // drawn segH pixels lower than it should, which is exactly the
+    // "half the sprite flies off-screen" artifact users reported.
+    //
+    // The correct multi-band emission keeps a single anchor (the
+    // sprite's pivot position in world space) and lets each segment
+    // know where its local origin sits relative to the original
+    // pivot.  buildSpriteQuad then scales/rotates each band around
+    // the *same* pivot, so the bands re-assemble seamlessly even when
+    // xscale/yscale != 1 or angleDeg != 0.
     int32_t srcCursor = srcY;
     int32_t srcRemaining = srcH;
     float originY_adj = originY - ofsY;
@@ -541,17 +552,17 @@ static void gles1_drawTpagQuad(GLES1Renderer* g, int32_t tpagIndex,
         if (segH <= 0) continue;
         float v0 = (float)(segStart - bandTop) / (float) bandH;
         float v1 = (float)(segEnd   - bandTop) / (float) bandH;
+        // Origin Y, expressed in *this segment's* local frame:
+        // distance from the segment's top edge to the original pivot.
         float segOriginY = originY_adj - (float)(segStart - srcY);
         gles1_emitQuad(slot->glHandles[b],
-                       dstX, dstStartY, fullDstW, (float) segH,
+                       dstX, dstY, fullDstW, (float) segH,
                        originX - ofsX, segOriginY,
                        xscale, yscale, angleDeg,
                        u0, v0, u1, v1, rgba);
-        dstStartY += segH * yscale;
         srcCursor += segH;
         srcRemaining -= segH;
     }
-    (void) totalSrcH;
 }
 
 // ============================================================================

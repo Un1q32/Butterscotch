@@ -369,10 +369,32 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 - (void)touchOverlayBackTapped;
 @end
 
+// Internal record: which keys is a given finger currently holding?
+// Touches are tracked by pointer identity (UITouch* is unique for the
+// life of one finger contact).  Fixed cap, no NSDictionary because we
+// only ever have ≤ 11 simultaneous touches on this hardware.
+#define BS_MAX_TOUCHES 16
+#define BS_MAX_KEYS_PER_TOUCH 2
+typedef struct {
+    UITouch* ptr;       // non-retained — UIKit keeps it alive for us
+    int32_t keys[BS_MAX_KEYS_PER_TOUCH];
+    int      keyCount;
+} BSActiveTouch;
+
 @interface BSTouchOverlay : UIView {
     id<BSTouchOverlayDelegate> _delegate;
+    // 8 visual decoration buttons (NOT interactive — touch is handled
+    // by the overlay itself so fingers can slide between regions).
+    // Indices: 0=up, 1=down, 2=left, 3=right, 4=Z, 5=X, 6=C, 7=Shift.
     NSMutableArray* _buttons;
+    // Back button keeps UIButton tap semantics (instant, no drag).
     BSPadButton* _backButton;
+    // D-pad joystick zone — a square big enough to include diagonals.
+    CGRect _dpadZone;
+    CGFloat _dpadDeadzone;
+    // Per-finger key state.
+    BSActiveTouch _active[BS_MAX_TOUCHES];
+    int _activeCount;
 }
 @property (nonatomic, assign) id<BSTouchOverlayDelegate> delegate;
 - (id)initWithFrame:(CGRect)f delegate:(id<BSTouchOverlayDelegate>)delegate;
@@ -382,12 +404,13 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
 @implementation BSTouchOverlay
 @synthesize delegate = _delegate;
 
-// Build one translucent rounded square with white text. Wired up to
-// the same -keyDown:/-keyUp: handlers regardless of which key it
-// represents.
+// Build one translucent rounded square with white text — purely
+// decorative.  Touch handling is done at the overlay level so the
+// finger can slide between buttons (which a UIButton wouldn't allow).
 - (BSPadButton*)makePadButtonWithGmlKey:(int32_t)gmlKey label:(NSString*)label fontSize:(CGFloat)fontSize {
     BSPadButton* b = [BSPadButton buttonWithType:UIButtonTypeCustom];
     b.gmlKey = gmlKey;
+    b.userInteractionEnabled = NO;   // overlay handles touches itself
     [b setTitle:label forState:UIControlStateNormal];
     [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [b setTitleColor:[UIColor colorWithRed:0.6f green:0.85f blue:1.0f alpha:1.0f] forState:UIControlStateHighlighted];
@@ -396,11 +419,6 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     b.layer.cornerRadius = 8.0f;
     b.layer.borderColor = [[UIColor colorWithWhite:1.0f alpha:0.35f] CGColor];
     b.layer.borderWidth = 1.0f;
-    [b addTarget:self action:@selector(keyDown:) forControlEvents:UIControlEventTouchDown];
-    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchUpInside];
-    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchUpOutside];
-    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchCancel];
-    [b addTarget:self action:@selector(keyUp:) forControlEvents:UIControlEventTouchDragOutside];
     [self addSubview:b];
     [_buttons addObject:b];
     return b;
@@ -414,8 +432,10 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     self.opaque = NO;
     self.backgroundColor = [UIColor clearColor];
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.multipleTouchEnabled = YES;
+    _activeCount = 0;
 
-    // D-pad: 4 arrow buttons in a + cross. GML vk_left/right/up/down.
+    // D-pad: 4 arrow visual indicators arranged as a + cross.
     [self makePadButtonWithGmlKey:VK_UP    label:@"\u25B2" fontSize:22]; // ▲
     [self makePadButtonWithGmlKey:VK_DOWN  label:@"\u25BC" fontSize:22]; // ▼
     [self makePadButtonWithGmlKey:VK_LEFT  label:@"\u25C0" fontSize:22]; // ◀
@@ -427,8 +447,8 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     [self makePadButtonWithGmlKey:'C' label:@"C" fontSize:24];
     [self makePadButtonWithGmlKey:VK_SHIFT label:@"\u21E7" fontSize:22]; // ⇧
 
-    // Back button: top-left, mostly transparent so it doesn't disrupt
-    // the game graphics; tap returns to picker.
+    // Back button: tap-only, keeps UIButton semantics so a stray
+    // finger drag doesn't accidentally exit the game.
     _backButton = [BSPadButton buttonWithType:UIButtonTypeCustom];
     _backButton.gmlKey = -1;
     [_backButton setTitle:@"\u2715" forState:UIControlStateNormal]; // ✕
@@ -465,11 +485,12 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     if (w <= 0 || h <= 0) return;
 
     // ---- D-pad ----
-    // The arrows are sized + spaced so neighboring buttons have visible
-    // air between them (looks symmetric instead of clumped). The cross
-    // is anchored ~60 px from the bottom-left corner of the screen.
+    // 4 arrows in a + cross + a slightly larger square joystick zone
+    // that covers the diagonals.  Touches inside the zone are mapped
+    // to 1 or 2 directional keys depending on the angle from the
+    // centre — diagonal sectors press TWO keys (e.g. up+right).
     CGFloat ds = 40;       // arrow button edge
-    CGFloat dgap = 14;     // gap from the center to each arrow's inner edge
+    CGFloat dgap = 14;     // gap from the centre to each arrow's inner edge
     CGFloat dpadCx = 16 + ds + dgap;        // outer-left of LEFT arrow sits 16 px from screen edge
     CGFloat dpadCy = h - 16 - ds - dgap;    // outer-bottom of DOWN arrow sits 16 px from screen edge
 
@@ -478,6 +499,13 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     ((UIView*) [_buttons objectAtIndex:1]).frame = CGRectMake(dpadCx - ds/2,         dpadCy + dgap,         ds, ds); // down
     ((UIView*) [_buttons objectAtIndex:2]).frame = CGRectMake(dpadCx - ds - dgap,    dpadCy - ds/2,         ds, ds); // left
     ((UIView*) [_buttons objectAtIndex:3]).frame = CGRectMake(dpadCx + dgap,         dpadCy - ds/2,         ds, ds); // right
+
+    // Joystick hit-zone: extends ~6 px beyond the outer arrow edges so
+    // the diagonal corners are reachable. The deadzone is tiny — we
+    // want fast diagonal flicks to register immediately.
+    CGFloat halfZone = ds + dgap + 6;
+    _dpadZone = CGRectMake(dpadCx - halfZone, dpadCy - halfZone, halfZone * 2, halfZone * 2);
+    _dpadDeadzone = dgap * 0.5f;
 
     // ---- Action row: Z X C left-to-right (per user request) ----
     // Z = confirm/attack (GMS keycode 90), X = cancel/menu (88),
@@ -501,17 +529,179 @@ static NSInteger BSGameEntryCompare(id a, id b, void* ctx) {
     _backButton.frame = CGRectMake(w - 32, 6, 26, 26);
 }
 
-- (void)keyDown:(BSPadButton*)sender {
-    if (_delegate != nil) [_delegate touchOverlayKeyDown:sender.gmlKey];
-}
-
-- (void)keyUp:(BSPadButton*)sender {
-    if (_delegate != nil) [_delegate touchOverlayKeyUp:sender.gmlKey];
-}
-
 - (void)backTapped:(BSPadButton*)sender {
     (void) sender;
     if (_delegate != nil) [_delegate touchOverlayBackTapped];
+}
+
+// ---------------------------------------------------------------- input
+
+// Compute which 1-2 keys a touch position activates.
+// Returns the number of keys (0, 1, or 2) and writes them into outKeys.
+- (int)keysForPoint:(CGPoint)p outKeys:(int32_t*)outKeys {
+    // 1) D-pad joystick zone
+    if (CGRectContainsPoint(_dpadZone, p)) {
+        CGFloat cx = CGRectGetMidX(_dpadZone);
+        CGFloat cy = CGRectGetMidY(_dpadZone);
+        CGFloat dx = p.x - cx;
+        CGFloat dy = p.y - cy;
+        CGFloat r = sqrtf((float)(dx*dx + dy*dy));
+        if (r < _dpadDeadzone) return 0;
+        // atan2 returns -π..π; iOS Y grows downward so down = +y, up = -y.
+        // Normalize to 0..360 with 0 = +x (right), 90 = +y (down).
+        float angle = atan2f((float) dy, (float) dx) * (180.0f / 3.14159265f);
+        if (angle < 0) angle += 360.0f;
+        // 8 sectors of 45° each, centred on the cardinals.
+        // Diagonal sectors press two cardinal keys at once.
+        if (angle < 22.5f || angle >= 337.5f) { outKeys[0] = VK_RIGHT; return 1; }
+        if (angle <  67.5f) { outKeys[0] = VK_RIGHT; outKeys[1] = VK_DOWN;  return 2; }
+        if (angle < 112.5f) { outKeys[0] = VK_DOWN;                          return 1; }
+        if (angle < 157.5f) { outKeys[0] = VK_DOWN;  outKeys[1] = VK_LEFT;  return 2; }
+        if (angle < 202.5f) { outKeys[0] = VK_LEFT;                          return 1; }
+        if (angle < 247.5f) { outKeys[0] = VK_LEFT;  outKeys[1] = VK_UP;    return 2; }
+        if (angle < 292.5f) { outKeys[0] = VK_UP;                            return 1; }
+        outKeys[0] = VK_UP;   outKeys[1] = VK_RIGHT; return 2;
+    }
+    // 2) Action buttons: hit-test each individually.  Order matters:
+    //    Z/X/C/Shift first, then nothing.
+    for (NSUInteger i = 4; i < [_buttons count]; i++) {
+        BSPadButton* btn = (BSPadButton*) [_buttons objectAtIndex:i];
+        if (CGRectContainsPoint(btn.frame, p)) {
+            outKeys[0] = btn.gmlKey;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Is `key` currently held by any active touch other than `excludeIdx`?
+- (BOOL)keyStillHeld:(int32_t)key excludeIndex:(int)excludeIdx {
+    for (int i = 0; i < _activeCount; i++) {
+        if (i == excludeIdx) continue;
+        for (int k = 0; k < _active[i].keyCount; k++) {
+            if (_active[i].keys[k] == key) return YES;
+        }
+    }
+    return NO;
+}
+
+// Find or create the active-touch record for `t`. Returns -1 if the
+// table is full (we drop the touch in that case — won't happen in
+// practice on iPod Touch).
+- (int)indexOfActiveTouch:(UITouch*)t createIfMissing:(BOOL)create {
+    for (int i = 0; i < _activeCount; i++) {
+        if (_active[i].ptr == t) return i;
+    }
+    if (!create) return -1;
+    if (_activeCount >= BS_MAX_TOUCHES) return -1;
+    int idx = _activeCount++;
+    _active[idx].ptr = t;
+    _active[idx].keyCount = 0;
+    return idx;
+}
+
+- (void)removeActiveAtIndex:(int)idx {
+    if (idx < 0 || idx >= _activeCount) return;
+    for (int i = idx; i < _activeCount - 1; i++) _active[i] = _active[i + 1];
+    _activeCount--;
+}
+
+// Update the set of keys held by touch `t`. Emits keyDown/keyUp
+// callbacks to the delegate only for transitions, taking care to not
+// release a key that ANOTHER finger is still holding.
+- (void)applyKeys:(int32_t*)newKeys count:(int)newCount toTouch:(UITouch*)t {
+    int idx = [self indexOfActiveTouch:t createIfMissing:(newCount > 0)];
+    int32_t oldKeys[BS_MAX_KEYS_PER_TOUCH];
+    int oldCount = 0;
+    if (idx >= 0) {
+        oldCount = _active[idx].keyCount;
+        for (int i = 0; i < oldCount; i++) oldKeys[i] = _active[idx].keys[i];
+    }
+
+    // Release keys that were in old but not in new
+    for (int i = 0; i < oldCount; i++) {
+        int32_t k = oldKeys[i];
+        BOOL stillNew = NO;
+        for (int j = 0; j < newCount; j++) if (newKeys[j] == k) { stillNew = YES; break; }
+        if (stillNew) continue;
+        // Tentatively remove from this touch's set before checking
+        // whether some other touch still holds it.
+        if (idx >= 0) {
+            int wIdx = 0;
+            for (int j = 0; j < _active[idx].keyCount; j++) {
+                if (_active[idx].keys[j] != k) _active[idx].keys[wIdx++] = _active[idx].keys[j];
+            }
+            _active[idx].keyCount = wIdx;
+        }
+        if (![self keyStillHeld:k excludeIndex:idx]) {
+            if (_delegate != nil) [_delegate touchOverlayKeyUp:k];
+        }
+    }
+    // Press keys that are in new but not in old
+    for (int j = 0; j < newCount; j++) {
+        int32_t k = newKeys[j];
+        BOOL wasOld = NO;
+        for (int i = 0; i < oldCount; i++) if (oldKeys[i] == k) { wasOld = YES; break; }
+        if (wasOld) continue;
+        BOOL alreadyHeld = [self keyStillHeld:k excludeIndex:idx];
+        if (idx >= 0 && _active[idx].keyCount < BS_MAX_KEYS_PER_TOUCH) {
+            _active[idx].keys[_active[idx].keyCount++] = k;
+        }
+        if (!alreadyHeld) {
+            if (_delegate != nil) [_delegate touchOverlayKeyDown:k];
+        }
+    }
+
+    // Drop empty records to keep the table compact.
+    if (idx >= 0 && _active[idx].keyCount == 0) {
+        [self removeActiveAtIndex:idx];
+    }
+
+    [self updateVisualHighlights];
+}
+
+// Reflect the currently-held key set on the decoration buttons.
+- (void)updateVisualHighlights {
+    for (NSUInteger i = 0; i < [_buttons count]; i++) {
+        BSPadButton* btn = (BSPadButton*) [_buttons objectAtIndex:i];
+        BOOL on = [self keyStillHeld:btn.gmlKey excludeIndex:-1];
+        btn.highlighted = on;
+        btn.backgroundColor = on
+            ? [UIColor colorWithWhite:0.45f alpha:0.7f]
+            : [UIColor colorWithWhite:0.15f alpha:0.55f];
+    }
+}
+
+- (void)touchesBegan:(NSSet*)touches withEvent:(UIEvent*)event {
+    (void) event;
+    for (UITouch* t in touches) {
+        int32_t keys[BS_MAX_KEYS_PER_TOUCH];
+        int n = [self keysForPoint:[t locationInView:self] outKeys:keys];
+        [self applyKeys:keys count:n toTouch:t];
+    }
+}
+
+- (void)touchesMoved:(NSSet*)touches withEvent:(UIEvent*)event {
+    (void) event;
+    for (UITouch* t in touches) {
+        int32_t keys[BS_MAX_KEYS_PER_TOUCH];
+        int n = [self keysForPoint:[t locationInView:self] outKeys:keys];
+        [self applyKeys:keys count:n toTouch:t];
+    }
+}
+
+- (void)touchesEnded:(NSSet*)touches withEvent:(UIEvent*)event {
+    (void) event;
+    for (UITouch* t in touches) {
+        [self applyKeys:NULL count:0 toTouch:t];
+    }
+}
+
+- (void)touchesCancelled:(NSSet*)touches withEvent:(UIEvent*)event {
+    (void) event;
+    for (UITouch* t in touches) {
+        [self applyKeys:NULL count:0 toTouch:t];
+    }
 }
 
 @end
