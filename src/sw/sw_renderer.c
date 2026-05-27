@@ -943,7 +943,7 @@ static void swrDrawSpriteInternal(
 	
 	// tweak these if stuff doesn't look right
 	typedef int32_t fixedp_t;
-	const int fp_prec = 8;
+	const int fp_prec = 14;
 
 	fixedp_t ystep = (sh == dh) ? (1 << fp_prec) : ((fixedp_t) osh << fp_prec) / odh;
 	fixedp_t xstep = (sw == dw) ? (1 << fp_prec) : ((fixedp_t) osw << fp_prec) / odw;
