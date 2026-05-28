@@ -9344,41 +9344,39 @@ static RValue builtin_alarm_get(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE
     return RValue_makeReal(-1);
 }
 
+#define LEGACY_DND_CMP_EQ 0
+#define LEGACY_DND_CMP_LT 1
+#define LEGACY_DND_CMP_GT 2
+#define LEGACY_DND_CMP_LTE 3
+#define LEGACY_DND_CMP_GTE 4
+
+// action_if_variable(variable, value, op)
+// Compares the variable against value using op (LEGACY_DND_CMP_*).
+// String operands compare via strcmp; mismatched types compare unequal.
 static RValue builtin_action_if_variable(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    bool check;
-    switch (args[0].type) {
-        case RVALUE_REAL: {
-            check = args[0].real != 0.0;
-            break;
-        }
-        case RVALUE_INT32: {
-            check = args[0].int32 != 0;
-            break;
-        }
-#ifndef NO_RVALUE_INT64
-        case RVALUE_INT64: {
-            check = args[0].int64 != 0;
-            break;
-        }
-#endif
-        case RVALUE_BOOL: {
-            check = args[0].int32 != 0;
-            break;
-        }
-        case RVALUE_STRING: {
-            check = args[0].string != nullptr && args[0].string[0] != '\0';
-            break;
-        }
-        default: {
-            check = false;
-            break;
-        }
+    int32_t op = RValue_toInt32(args[2]);
+    double diff;
+
+    bool aIsString = args[0].type == RVALUE_STRING;
+    bool bIsString = args[1].type == RVALUE_STRING;
+    if (aIsString != bIsString) {
+        return RValue_makeBool(false);
+    }
+    if (aIsString) {
+        const char* sa = args[0].string != nullptr ? args[0].string : "";
+        const char* sb = args[1].string != nullptr ? args[1].string : "";
+        diff = (double) strcmp(sa, sb);
+    } else {
+        diff = (double) (RValue_toReal(args[0]) - RValue_toReal(args[1]));
     }
 
-    int32_t idx = check ? 1 : 2;
-    RValue result = args[idx];
-    args[idx].ownsReference = false; // Steal ownership to avoid double-free in handleCall
-    return result;
+    bool result;
+    if (op == LEGACY_DND_CMP_LT) result = diff < 0.0;
+    else if (op == LEGACY_DND_CMP_GT) result = diff > 0.0;
+    else if (op == LEGACY_DND_CMP_LTE) result = diff <= 0.0;
+    else if (op == LEGACY_DND_CMP_GTE) result = diff >= 0.0;
+    else result = diff == 0.0;
+    return RValue_makeBool(result);
 }
 
 static RValue builtin_action_if_dice(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -9392,9 +9390,6 @@ static RValue builtin_action_if_dice(VMContext* ctx, MAYBE_UNUSED RValue* args, 
     return RValue_makeBool((rand() % probability) == 0);
 }
 
-#define LEGACY_DND_CMP_EQ 0
-#define LEGACY_DND_CMP_LT 1
-#define LEGACY_DND_CMP_GT 2
 
 static RValue builtin_action_set_score(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
