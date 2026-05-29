@@ -57,16 +57,51 @@ void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
 // Canonical upstream repository (the official Butterscotch runner).
 #define BS_REPO_URL @"https://github.com/ButterscotchRunner/Butterscotch"
 
-// NSUserDefaults key for the user-configurable games folder.
-#define BS_GAMES_FOLDER_KEY @"BSGamesFolder"
+// NSUserDefaults keys for the user-configurable games folders.
+#define BS_GAMES_FOLDER_KEY  @"BSGamesFolder"    // legacy single-folder key (migrated)
+#define BS_GAMES_FOLDERS_KEY @"BSGamesFolders"   // array of folder paths
 
-// Return the user-specified games folder, or nil if unset/blank.
-static NSString* BSCustomGamesFolder(void) {
-    NSString* p = [[NSUserDefaults standardUserDefaults] stringForKey:BS_GAMES_FOLDER_KEY];
-    if (p == nil) return nil;
-    p = [p stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if ([p length] == 0) return nil;
-    return p;
+// Return the user-configured games folders (absolute paths), in order,
+// trimmed and de-duplicated. Migrates the legacy single-folder key on
+// first read. Always returns a (possibly empty) autoreleased array.
+static NSArray* BSUserGamesFolders(void) {
+    NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
+    NSArray* arr = [d arrayForKey:BS_GAMES_FOLDERS_KEY];
+    if (arr == nil) {
+        // One-time migration from the old single-folder setting.
+        NSString* legacy = [d stringForKey:BS_GAMES_FOLDER_KEY];
+        if (legacy != nil) {
+            legacy = [legacy stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([legacy length] > 0) {
+                arr = [NSArray arrayWithObject:legacy];
+                [d setObject:arr forKey:BS_GAMES_FOLDERS_KEY];
+            }
+            [d removeObjectForKey:BS_GAMES_FOLDER_KEY];
+            [d synchronize];
+        }
+    }
+    NSMutableArray* out = [NSMutableArray array];
+    NSEnumerator* it = [arr objectEnumerator];
+    id p;
+    while ((p = [it nextObject]) != nil) {
+        if (![p isKindOfClass:[NSString class]]) continue;
+        NSString* t = [(NSString*) p stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([t length] > 0 && ![out containsObject:t]) [out addObject:t];
+    }
+    return out;
+}
+
+// Persist the user's games folders (nil/empty clears the setting).
+static void BSSetUserGamesFolders(NSArray* folders) {
+    NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
+    if (folders == nil || [folders count] == 0) {
+        [d removeObjectForKey:BS_GAMES_FOLDERS_KEY];
+    } else {
+        [d setObject:folders forKey:BS_GAMES_FOLDERS_KEY];
+    }
+    [d synchronize];
 }
 
 // ============================================================================
@@ -90,12 +125,11 @@ static NSString* BSCustomGamesFolder(void) {
 }
 @end
 
-// Return paths to scan, in order. The first readable, non-empty
-// directory wins. A user-specified folder (Settings) takes priority.
+// Return paths to scan, in order. User-specified folders (Settings)
+// are scanned first, then the default locations.
 static NSArray* BSCandidateRootDirectories(void) {
     NSMutableArray* roots = [NSMutableArray array];
-    NSString* custom = BSCustomGamesFolder();
-    if (custom != nil) [roots addObject:custom];
+    [roots addObjectsFromArray:BSUserGamesFolders()];
     [roots addObject:@"/var/mobile/Documents/Butterscotch"];
     [roots addObject:@"/var/mobile/Media/Butterscotch"];
     NSArray* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -758,6 +792,7 @@ typedef struct {
     UIInterfaceOrientation _savedOrientation;
 }
 - (id)initWithGame:(BSGameEntry*)game;
+- (void)teardownRuntime;
 @end
 
 @implementation BSGameViewController
@@ -774,18 +809,15 @@ typedef struct {
 }
 
 - (void)dealloc {
+    // Free the runtime first (needs _glView's GL context for the
+    // renderer), then the views. teardownRuntime is idempotent, so this
+    // is just a safety net if -viewDidDisappear: didn't run.
+    [self teardownRuntime];
     [_game release];
     [_glView release];
     [_overlay release];
     [_hudLabel release];
     [_lastError release];
-
-    // We intentionally do NOT free the Butterscotch runtime here on
-    // teardown: there's no clean Runner_destroy / DataWin_free path
-    // currently that we trust on iOS 3 (and the user backing out to
-    // the picker is rare on a 128 MB device anyway — they'll just
-    // close the app). Letting iOS reclaim the process memory is the
-    // safer behaviour for now.
     [super dealloc];
 }
 
@@ -889,12 +921,52 @@ typedef struct {
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [_glView stopRunLoop];
+    // Silence audio immediately so the game goes quiet the moment the
+    // user taps the close (✕) button, before the dismiss animation.
+    if (_audio != NULL && _audio->vtable->stopAll != NULL) {
+        _audio->vtable->stopAll(_audio);
+    }
     // Restore picker's portrait orientation + status bar when we go back.
     UIApplication* app = [UIApplication sharedApplication];
     [app setStatusBarHidden:NO animated:NO];
     if (_savedOrientation != 0 && _savedOrientation != app.statusBarOrientation) {
         [app setStatusBarOrientation:_savedOrientation animated:NO];
     }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // We've been dismissed back to the picker — free the whole runtime so
+    // its (large) memory is reclaimed before the next game launches. This
+    // matters on a 128 MB device, where leaking a runner would OOM the
+    // second launch.
+    [self teardownRuntime];
+}
+
+// Free the Butterscotch runtime in the same order the desktop/web shells
+// use at exit. Safe to call multiple times (all pointers are NULLed).
+- (void)teardownRuntime {
+    [_glView stopRunLoop];
+    if (_audio != NULL) {
+        if (_audio->vtable->stopAll != NULL) _audio->vtable->stopAll(_audio);
+        _audio->vtable->destroy(_audio);
+        _audio = NULL;
+    }
+    if (_renderer != NULL) {
+        // The renderer owns GL objects tied to the EAGL context, so make
+        // it current before deleting them.
+        [_glView makeContextCurrent];
+        _renderer->vtable->destroy(_renderer);
+        _renderer = NULL;
+    }
+    if (_runner != NULL) { Runner_free(_runner); _runner = NULL; }
+    if (_fileSystem != NULL) {
+        OverlayFileSystem_destroy((OverlayFileSystem*) _fileSystem);
+        _fileSystem = NULL;
+    }
+    if (_vm != NULL) { VM_free(_vm); _vm = NULL; }
+    if (_dataWin != NULL) { DataWin_free(_dataWin); _dataWin = NULL; }
+    _runtimeReady = NO;
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
@@ -1188,11 +1260,130 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 @end
 
 // ============================================================================
-// SettingsViewController — games folder + about/version
+// FolderBrowserViewController — pick a directory from the filesystem
+// ============================================================================
+//
+// Starts at a given path (default /var/mobile), lists sub-directories,
+// and lets the user drill in. The "Choose" button selects the directory
+// currently being browsed as a games folder.
+
+@protocol BSFolderBrowserDelegate <NSObject>
+- (void)folderBrowserDidChooseFolder:(NSString*)path;
+@end
+
+@interface BSFolderBrowserViewController : UITableViewController {
+    NSString* _path;
+    NSArray* _dirs;
+    id<BSFolderBrowserDelegate> _browserDelegate;   // assign (not retained)
+}
+- (id)initWithPath:(NSString*)path delegate:(id<BSFolderBrowserDelegate>)delegate;
+@end
+
+@implementation BSFolderBrowserViewController
+
+- (id)initWithPath:(NSString*)path delegate:(id<BSFolderBrowserDelegate>)delegate {
+    self = [super initWithStyle:UITableViewStyleGrouped];
+    if (self == nil) return nil;
+    _path = [path copy];
+    _browserDelegate = delegate;
+    self.title = [_path lastPathComponent];
+    return self;
+}
+
+- (void)dealloc {
+    [_path release];
+    [_dirs release];
+    [super dealloc];
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
+    return o == UIInterfaceOrientationPortrait;
+}
+
+- (void)reloadDirs {
+    [_dirs release];
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSArray* children = [fm contentsOfDirectoryAtPath:_path error:NULL];
+    NSMutableArray* dirs = [NSMutableArray array];
+    NSEnumerator* it = [children objectEnumerator];
+    NSString* child;
+    while ((child = [it nextObject]) != nil) {
+        if ([child hasPrefix:@"."]) continue;
+        NSString* full = [_path stringByAppendingPathComponent:child];
+        BOOL isDir = NO;
+        if ([fm fileExistsAtPath:full isDirectory:&isDir] && isDir) {
+            [dirs addObject:child];
+        }
+    }
+    [dirs sortUsingSelector:@selector(caseInsensitiveCompare:)];
+    _dirs = [dirs retain];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    [self reloadDirs];
+    UIBarButtonItem* choose = [[UIBarButtonItem alloc] initWithTitle:@"Choose"
+                                                               style:UIBarButtonItemStyleDone
+                                                              target:self
+                                                              action:@selector(chooseThisFolder)];
+    self.navigationItem.rightBarButtonItem = choose;
+    [choose release];
+}
+
+- (void)chooseThisFolder {
+    [_browserDelegate folderBrowserDidChooseFolder:_path];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tv { return 1; }
+
+- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)s {
+    return [_dirs count];
+}
+
+- (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)s {
+    return _path;
+}
+
+- (NSString*)tableView:(UITableView*)tv titleForFooterInSection:(NSInteger)s {
+    if ([_dirs count] == 0) {
+        return @"No sub-folders here. Tap \"Choose\" to use this folder, "
+               @"or go back and pick another.";
+    }
+    return @"Tap a folder to open it, or tap \"Choose\" to use the folder "
+           @"shown above (where your game folders live).";
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tv cellForRowAtIndexPath:(NSIndexPath*)ip {
+    static NSString* kReuse = @"BSDirCell";
+    UITableViewCell* cell = [tv dequeueReusableCellWithIdentifier:kReuse];
+    if (cell == nil) {
+        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                       reuseIdentifier:kReuse] autorelease];
+    }
+    cell.textLabel.text = [_dirs objectAtIndex:ip.row];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (void)tableView:(UITableView*)tv didSelectRowAtIndexPath:(NSIndexPath*)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSString* sub = [_path stringByAppendingPathComponent:[_dirs objectAtIndex:ip.row]];
+    BSFolderBrowserViewController* next =
+        [[BSFolderBrowserViewController alloc] initWithPath:sub delegate:_browserDelegate];
+    [self.navigationController pushViewController:next animated:YES];
+    [next release];
+}
+
+@end
+
+// ============================================================================
+// SettingsViewController — game folders (add/remove) + about/version
 // ============================================================================
 
-@interface BSSettingsViewController : UITableViewController <UITextFieldDelegate> {
-    UITextField* _folderField;
+#define BS_FOLDER_BROWSER_ROOT @"/var/mobile"
+
+@interface BSSettingsViewController : UITableViewController <BSFolderBrowserDelegate> {
+    NSMutableArray* _folders;
 }
 @end
 
@@ -1202,11 +1393,12 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     self = [super initWithStyle:UITableViewStyleGrouped];
     if (self == nil) return nil;
     self.title = @"Settings";
+    _folders = [[NSMutableArray alloc] initWithArray:BSUserGamesFolders()];
     return self;
 }
 
 - (void)dealloc {
-    [_folderField release];
+    [_folders release];
     [super dealloc];
 }
 
@@ -1216,122 +1408,125 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
-    _folderField = [[UITextField alloc] initWithFrame:CGRectMake(12, 0, 280, 44)];
-    _folderField.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _folderField.placeholder = @"Default (auto-detect)";
-    _folderField.text = BSCustomGamesFolder() ? BSCustomGamesFolder() : @"";
-    _folderField.font = [UIFont systemFontOfSize:15];
-    _folderField.textColor = [UIColor colorWithRed:0.20f green:0.31f blue:0.52f alpha:1.0f];
-    _folderField.autocorrectionType = UITextAutocorrectionTypeNo;
-    _folderField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    _folderField.clearButtonMode = UITextFieldViewModeWhileEditing;
-    _folderField.returnKeyType = UIReturnKeyDone;
-    _folderField.delegate = self;
-
-    UIBarButtonItem* save = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
-                                                                          target:self
-                                                                          action:@selector(saveAndClose)];
-    self.navigationItem.rightBarButtonItem = save;
-    [save release];
+    self.navigationItem.rightBarButtonItem = self.editButtonItem;
 }
 
-- (void)persistFolder {
-    NSString* v = [_folderField.text stringByTrimmingCharactersInSet:
-                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
-    if ([v length] == 0) {
-        [d removeObjectForKey:BS_GAMES_FOLDER_KEY];
-    } else {
-        [d setObject:v forKey:BS_GAMES_FOLDER_KEY];
+- (void)persist {
+    BSSetUserGamesFolders(_folders);
+}
+
+- (BOOL)isAddRow:(NSIndexPath*)ip {
+    return ip.section == 0 && ip.row == (NSInteger)[_folders count];
+}
+
+// BSFolderBrowserDelegate — a folder was picked in the browser.
+- (void)folderBrowserDidChooseFolder:(NSString*)path {
+    if (path != nil && ![_folders containsObject:path]) {
+        [_folders addObject:path];
+        [self persist];
     }
-    [d synchronize];
+    [self.navigationController popToViewController:self animated:YES];
+    [self.tableView reloadData];
 }
 
-- (void)saveAndClose {
-    [_folderField resignFirstResponder];
-    [self persistFolder];
-    [self.navigationController popViewControllerAnimated:YES];
+- (void)addFolderTapped {
+    BSFolderBrowserViewController* b =
+        [[BSFolderBrowserViewController alloc] initWithPath:BS_FOLDER_BROWSER_ROOT delegate:self];
+    [self.navigationController pushViewController:b animated:YES];
+    [b release];
 }
-
-- (BOOL)textFieldShouldReturn:(UITextField*)tf {
-    [tf resignFirstResponder];
-    [self persistFolder];
-    return YES;
-}
-
-// ---- table data ----
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tv {
-    return 2; // 0 = games folder, 1 = about
+    return 2; // 0 = game folders, 1 = about
 }
 
 - (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 2; // folder field + reset
-    return 2;                   // version + source link
+    if (section == 0) return [_folders count] + 1; // folders + "Add Folder…"
+    return 2;                                       // version + source
 }
 
 - (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)section {
-    return (section == 0) ? @"Games Folder" : @"About";
+    return (section == 0) ? @"Game Folders" : @"About";
 }
 
 - (NSString*)tableView:(UITableView*)tv titleForFooterInSection:(NSInteger)section {
     if (section == 0) {
-        return @"Folder to scan for games. Each sub-folder containing a "
-               @"data.win shows up as one game. Leave blank to auto-detect "
-               @"the default locations.";
+        return @"Folders scanned for games — each sub-folder containing a "
+               @"data.win shows up as one game. If none are set, the default "
+               @"locations are used.";
     }
     return @"OpenGL ES 1.1 iOS port — runs on armv6 (iPod Touch 2G, "
            @"iPhone 3G) under iPhone OS 3.";
 }
 
 - (UITableViewCell*)tableView:(UITableView*)tv cellForRowAtIndexPath:(NSIndexPath*)ip {
-    if (ip.section == 0 && ip.row == 0) {
+    if (ip.section == 0) {
+        if ([self isAddRow:ip]) {
+            UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                            reuseIdentifier:@"BSAddCell"] autorelease];
+            cell.textLabel.text = @"Add Folder…";
+            cell.textLabel.textColor = [UIColor colorWithRed:0.20f green:0.31f blue:0.52f alpha:1.0f];
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            return cell;
+        }
         UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-                                                        reuseIdentifier:nil] autorelease];
+                                                        reuseIdentifier:@"BSFolderCell"] autorelease];
+        cell.textLabel.text = [_folders objectAtIndex:ip.row];
+        cell.textLabel.font = [UIFont systemFontOfSize:14];
+        cell.textLabel.lineBreakMode = UILineBreakModeMiddleTruncation;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        _folderField.frame = CGRectInset(cell.contentView.bounds, 12, 0);
-        [cell.contentView addSubview:_folderField];
         return cell;
     }
 
-    static NSString* kReuse = @"BSSettingsCell";
-    UITableViewCell* cell = [tv dequeueReusableCellWithIdentifier:kReuse];
-    if (cell == nil) {
-        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
-                                       reuseIdentifier:kReuse] autorelease];
-    }
-    cell.accessoryType = UITableViewCellAccessoryNone;
-    cell.detailTextLabel.text = nil;
-
-    if (ip.section == 0) {
-        // Reset row
-        cell.textLabel.text = @"Reset to default";
-        cell.textLabel.textColor = [UIColor colorWithRed:0.20f green:0.31f blue:0.52f alpha:1.0f];
-        cell.selectionStyle = UITableViewCellSelectionStyleBlue;
-    } else if (ip.row == 0) {
+    // About section
+    if (ip.row == 0) {
+        UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+                                                        reuseIdentifier:@"BSVerCell"] autorelease];
         cell.textLabel.text = @"Version";
-        cell.textLabel.textColor = [UIColor blackColor];
         cell.detailTextLabel.text = @BS_GIT_VERSION;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    } else {
-        cell.textLabel.text = @"Source code";
-        cell.textLabel.textColor = [UIColor blackColor];
-        cell.detailTextLabel.text = @"ButterscotchRunner/Butterscotch";
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+        return cell;
     }
+    // Source — Subtitle style so the full URL gets the whole cell width
+    // (fixes the truncation on the 320 px screen).
+    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                                    reuseIdentifier:@"BSSrcCell"] autorelease];
+    cell.textLabel.text = @"Source code";
+    cell.detailTextLabel.text = @"github.com/ButterscotchRunner/Butterscotch";
+    cell.detailTextLabel.font = [UIFont systemFontOfSize:12];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return cell;
+}
+
+// ---- editing: delete folders ----
+
+- (BOOL)tableView:(UITableView*)tv canEditRowAtIndexPath:(NSIndexPath*)ip {
+    return ip.section == 0 && ![self isAddRow:ip];
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView*)tv
+              editingStyleForRowAtIndexPath:(NSIndexPath*)ip {
+    return [self tableView:tv canEditRowAtIndexPath:ip]
+        ? UITableViewCellEditingStyleDelete : UITableViewCellEditingStyleNone;
+}
+
+- (void)tableView:(UITableView*)tv commitEditingStyle:(UITableViewCellEditingStyle)style
+                                  forRowAtIndexPath:(NSIndexPath*)ip {
+    if (style == UITableViewCellEditingStyleDelete && [self tableView:tv canEditRowAtIndexPath:ip]) {
+        [_folders removeObjectAtIndex:ip.row];
+        [self persist];
+        [tv deleteRowsAtIndexPaths:[NSArray arrayWithObject:ip]
+                  withRowAnimation:UITableViewRowAnimationFade];
+    }
 }
 
 - (void)tableView:(UITableView*)tv didSelectRowAtIndexPath:(NSIndexPath*)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    if (ip.section == 0 && ip.row == 1) {
-        // Reset to default
-        _folderField.text = @"";
-        [_folderField resignFirstResponder];
-        [self persistFolder];
-    } else if (ip.section == 1 && ip.row == 1) {
+    if (ip.section == 0) {
+        if ([self isAddRow:ip]) [self addFolderTapped];
+        return;
+    }
+    if (ip.row == 1) {
         [[UIApplication sharedApplication] openURL:[NSURL URLWithString:BS_REPO_URL]];
     }
 }
@@ -1377,16 +1572,24 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     [_searchedRoots release];
     _searchedRoots = [BSCandidateRootDirectories() retain];
 
+    // Aggregate games from every candidate root, de-duplicating by the
+    // absolute data.win path (so overlapping roots don't list twice).
+    NSMutableSet* seen = [NSMutableSet set];
     NSEnumerator* it = [_searchedRoots objectEnumerator];
     NSString* candidate;
     while ((candidate = [it nextObject]) != nil) {
         NSArray* found = BSScanGames(candidate);
-        if (found != nil && [found count] > 0) {
-            _activeRoot = [candidate retain];
-            [_games addObjectsFromArray:found];
-            break;
+        if (found == nil) continue;
+        NSEnumerator* git = [found objectEnumerator];
+        BSGameEntry* g;
+        while ((g = [git nextObject]) != nil) {
+            if ([seen containsObject:g->dataWinPath]) continue;
+            [seen addObject:g->dataWinPath];
+            [_games addObject:g];
+            if (_activeRoot == nil) _activeRoot = [candidate retain];
         }
     }
+    [_games sortUsingFunction:BSGameEntryCompare context:NULL];
     [self.tableView reloadData];
 }
 
@@ -1434,7 +1637,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 - (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)section {
     if ([_games count] == 0) return @"No games found — searched paths";
     if (section == 0) {
-        return [NSString stringWithFormat:@"Games in %@", _activeRoot ? _activeRoot : @"(none)"];
+        return [NSString stringWithFormat:@"Games (%u)", (unsigned)[_games count]];
     }
     return @"Searched paths";
 }
