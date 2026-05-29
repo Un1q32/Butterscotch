@@ -1069,11 +1069,9 @@ static float maGetSoundLength(AudioSystem* audio, int32_t soundOrInstance) {
 
     Sound* sound = &dw->sond.sounds[soundOrInstance];
 
-    bool isRegular = (sound->flags & AUDIO_ENTRY_FLAG_REGULAR) == AUDIO_ENTRY_FLAG_REGULAR;
-    bool isEmbedded = (sound->flags & AUDIO_ENTRY_FLAG_IS_EMBEDDED) != 0;
-    bool isCompressed = (sound->flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) != 0;
-    bool inAudo = !isRegular || isEmbedded || isCompressed;
-    if (inAudo) {
+    bool isEmbedded = (sound->flags & 0x01) != 0;
+    bool isCompressed = (sound->flags & 0x02) != 0;
+    if (isEmbedded || isCompressed) {
         if (0 > sound->audioFile || (uint32_t) sound->audioFile >= ma->base.audioGroups[sound->audioGroup]->audo.count) return 0.0f;
         AudioEntry* entry = &ma->base.audioGroups[sound->audioGroup]->audo.entries[sound->audioFile];
         WAVFile wav = WAV_ParseFileData(entry->data);
