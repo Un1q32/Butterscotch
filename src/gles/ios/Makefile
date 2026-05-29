@@ -65,7 +65,9 @@ BS_RUNTIME_FILES = \
     ../../string_builder.c \
     ../../vm.c \
     ../../vm_builtins.c \
-    ../../../vendor/md5/md5.c
+    ../../../vendor/md5/md5.c \
+    ../../../vendor/sha1/sha1.c \
+    ../../../vendor/base64/base64.c
 
 # OpenAL-based audio system, used in place of NoopAudioSystem on iOS.
 # OpenAL is built into iOS as a system framework since iOS 2.0 and gives
@@ -114,7 +116,7 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -ffixed-r9 \
                        -DBS_PLATFORM_IOS=1 \
                        -DBS_GLES1=1 \
-                       -DENABLE_BC16=1 \
+                       -DENABLE_WAD16=1 \
                        -DMAX_SOUND_INSTANCES=32 \
                        -DMAX_AUDIO_STREAMS=8 \
                        -DAL_STREAM_BUFFER_SAMPLES=2048 \
@@ -126,6 +128,8 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/image \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/vorbis \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/md5 \
+                       -I$(THEOS_PROJECT_DIR)/../../../vendor/sha1 \
+                       -I$(THEOS_PROJECT_DIR)/../../../vendor/base64 \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/miniaudio \
                        -I$(THEOS_PROJECT_DIR)/../../audio/openal \
                        -Wno-deprecated-declarations \

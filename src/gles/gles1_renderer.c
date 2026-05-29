@@ -854,7 +854,7 @@ static void gles1_beginFrame(Renderer* r, int32_t gameW, int32_t gameH, int32_t 
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 }
 
-static void gles1_endFrame(Renderer* r) {
+static void gles1_endFrameInit(Renderer* r) {
     GLES1Renderer* g = asGLES1(r);
 
     if (g->fboActive) {
@@ -895,6 +895,20 @@ static void gles1_endFrame(Renderer* r) {
     }
 
     glFlush();
+}
+
+// The iOS GLES1 port presents the whole frame (FBO blit-to-screen + flush)
+// in endFrameInit above. The upstream endFrame split exists so platforms can
+// draw post-processing/GUI between the two calls against the screen
+// framebuffer; this backend has nothing to do in the second half.
+static void gles1_endFrameEnd(Renderer* r) { (void) r; }
+
+// This backend renders into its own EAGL-backed FBO (see gles1_beginFrame)
+// and never uses the runner-managed application surface, so there is nothing
+// to allocate here. Return APPLICATION_SURFACE_ID to match the surface stubs.
+static int32_t gles1_ensureApplicationSurface(Renderer* r, int32_t width, int32_t height) {
+    (void) r; (void) width; (void) height;
+    return APPLICATION_SURFACE_ID;
 }
 
 // view = rect in room coordinates the game wants to display
@@ -1346,7 +1360,8 @@ static RendererVtable kGles1Vtable = {
     .init                     = gles1_init,
     .destroy                  = gles1_destroy,
     .beginFrame               = gles1_beginFrame,
-    .endFrame                 = gles1_endFrame,
+    .endFrameInit             = gles1_endFrameInit,
+    .endFrameEnd              = gles1_endFrameEnd,
     .beginView                = gles1_beginView,
     .endView                  = gles1_endView,
     .beginGUI                 = gles1_beginGUI,
@@ -1379,6 +1394,7 @@ static RendererVtable kGles1Vtable = {
     .createSurface            = gles1_createSurface,
     .surfaceExists            = gles1_surfaceExists,
     .setRenderTarget          = gles1_setRenderTarget,
+    .ensureApplicationSurface = gles1_ensureApplicationSurface,
     .getSurfaceWidth          = gles1_getSurfaceWidth,
     .getSurfaceHeight         = gles1_getSurfaceHeight,
     .drawSurface              = gles1_drawSurface,

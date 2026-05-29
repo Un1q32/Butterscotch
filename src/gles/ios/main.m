@@ -965,7 +965,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     }
     NSLog(@"[Butterscotch] data.win parsed: gen8.name=%s bytecodeVer=%u defaultW=%u defaultH=%u",
           _dataWin->gen8.name ? _dataWin->gen8.name : "(null)",
-          (unsigned) _dataWin->gen8.bytecodeVersion,
+          (unsigned) _dataWin->gen8.wadVersion,
           (unsigned) _dataWin->gen8.defaultWindowWidth,
           (unsigned) _dataWin->gen8.defaultWindowHeight);
 
@@ -1031,7 +1031,7 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
     _stepAccumulator = 0.0;
     _lastRoomIndex = -1;
     [self setStatus:[NSString stringWithFormat:@"Ready. Bytecode v%u, %ux%u",
-                      (unsigned) _dataWin->gen8.bytecodeVersion,
+                      (unsigned) _dataWin->gen8.wadVersion,
                       (unsigned) _dataWin->gen8.defaultWindowWidth,
                       (unsigned) _dataWin->gen8.defaultWindowHeight]];
 }
@@ -1127,7 +1127,8 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 
     Runner_drawViews(_runner, gameW, gameH, scaleX, scaleY, false);
 
-    _renderer->vtable->endFrame(_renderer);
+    _renderer->vtable->endFrameInit(_renderer);
+    _renderer->vtable->endFrameEnd(_renderer);
 
     // Clear the pressed/released edges AFTER BOTH step and draw have
     // consumed them. This is what the PS2 port does, and the comment in
