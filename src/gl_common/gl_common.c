@@ -8,30 +8,7 @@
 #include "utils.h"
 #include "renderer.h" // for bm_* constants
 
-// ===[ Main FBO ]===
-
-void GLCommon_resizeMainFBO(GLuint* fboTexture, GLuint fbo, int32_t* fboWidth, int32_t* fboHeight, int32_t width, int32_t height) {
-    if (*fboTexture != 0)
-        glDeleteTextures(1, fboTexture);
-
-    glGenTextures(1, fboTexture);
-    glBindTexture(GL_TEXTURE_2D, *fboTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *fboTexture, 0);
-
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "GL: Main FBO incomplete (status=0x%X)\n", status);
-    }
-
-    *fboWidth = width;
-    *fboHeight = height;
-    fprintf(stderr, "GL: FBO resized to %dx%d\n", width, height);
-}
+// ===[ Letterbox blit ]===
 
 void GLCommon_computeLetterbox(int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH, int32_t* outStartX, int32_t* outStartY, int32_t* outEndX, int32_t* outEndY) {
     int32_t effW, effH;
@@ -50,11 +27,14 @@ void GLCommon_computeLetterbox(int32_t gameW, int32_t gameH, int32_t windowW, in
     *outEndY = startY + effH;
 }
 
-void GLCommon_letterboxBlit(GLuint fbo, int32_t fboWidth, int32_t fboHeight, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
-    int32_t sx, sy, ex, ey;
-    GLCommon_computeLetterbox(gameW, gameH, windowW, windowH, &sx, &sy, &ex, &ey);
+void GLCommon_beginLetterboxBlit(GLuint fbo) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
+
+void GLCommon_endLetterboxBlit(int32_t fboWidth, int32_t fboHeight, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH) {
+    int32_t sx, sy, ex, ey;
+    GLCommon_computeLetterbox(gameW, gameH, windowW, windowH, &sx, &sy, &ex, &ey);
     glBlitFramebuffer(0, 0, fboWidth, fboHeight, sx, sy, ex, ey, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -80,15 +60,8 @@ uint32_t GLCommon_findOrAllocateSurfaceSlot(GLuint** surfaces, GLuint** surfaceT
     return newIndex;
 }
 
-// Resolves a surface ID to its FBO handle and dimensions. id == APPLICATION_SURFACE_ID picks the
-// main FBO. Returns false for out-of-range or freed surfaces.
-static bool resolveSurfaceFBO(GLuint mainFbo, int32_t mainFboWidth, int32_t mainFboHeight, GLuint* surfaces, int32_t* surfaceWidth, int32_t* surfaceHeight, uint32_t count, int32_t id, GLuint* outFbo, int32_t* outW, int32_t* outH) {
-    if (id == APPLICATION_SURFACE_ID) {
-        *outFbo = mainFbo;
-        *outW = mainFboWidth;
-        *outH = mainFboHeight;
-        return true;
-    }
+// Resolves a surface ID to its FBO handle and dimensions. Returns false for out-of-range or freed surfaces.
+static bool resolveSurfaceFBO(GLuint* surfaces, int32_t* surfaceWidth, int32_t* surfaceHeight, uint32_t count, int32_t id, GLuint* outFbo, int32_t* outW, int32_t* outH) {
     if (0 > id || (uint32_t) id >= count) return false;
     if (surfaces[id] == 0) return false;
     *outFbo = surfaces[id];
@@ -97,15 +70,15 @@ static bool resolveSurfaceFBO(GLuint mainFbo, int32_t mainFboWidth, int32_t main
     return true;
 }
 
-void GLCommon_surfaceBlit(GLuint mainFbo, int32_t mainFboWidth, int32_t mainFboHeight, GLuint* surfaces, int32_t* surfaceWidth, int32_t* surfaceHeight, uint32_t count, int32_t dstId, int32_t dstX, int32_t dstY, int32_t srcId, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH, bool part) {
+void GLCommon_surfaceBlit(GLuint* surfaces, int32_t* surfaceWidth, int32_t* surfaceHeight, uint32_t count, int32_t dstId, int32_t dstX, int32_t dstY, int32_t srcId, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH, bool part) {
     GLuint srcFbo, dstFbo;
     int32_t srcFboW, srcFboH;
     MAYBE_UNUSED int32_t dstFboW, dstFboH;
 
-    if (!resolveSurfaceFBO(mainFbo, mainFboWidth, mainFboHeight, surfaces, surfaceWidth, surfaceHeight, count, srcId, &srcFbo, &srcFboW, &srcFboH))
+    if (!resolveSurfaceFBO(surfaces, surfaceWidth, surfaceHeight, count, srcId, &srcFbo, &srcFboW, &srcFboH))
         return;
 
-    if (!resolveSurfaceFBO(mainFbo, mainFboWidth, mainFboHeight, surfaces, surfaceWidth, surfaceHeight, count, dstId, &dstFbo, &dstFboW, &dstFboH))
+    if (!resolveSurfaceFBO(surfaces, surfaceWidth, surfaceHeight, count, dstId, &dstFbo, &dstFboW, &dstFboH))
         return;
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);

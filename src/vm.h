@@ -89,7 +89,7 @@
 #define OP_CALL     0xD9
 #define OP_BREAK    0xFF
 
-// ===[ Extended BREAK Sub-Opcodes (bytecode version 17+) ]===
+// ===[ Extended BREAK Sub-Opcodes (WAD version 17+) ]===
 // Encoded in bits 0-15 of the BREAK instruction (instrInstanceType field, as int16_t)
 #define BREAK_CHKINDEX     (-1)  // Validate array index bounds
 #define BREAK_PUSHAF       (-2)  // Pop array ref + index, push element (final dimension)
@@ -100,6 +100,8 @@
 #define BREAK_SETSTATIC    (-7)  // Mark current function's static as initialized
 #define BREAK_SAVEAREF     (-8)  // Save top-of-stack array ref for compound assignment
 #define BREAK_RESTOREAREF  (-9)  // Push previously saved array ref
+#define BREAK_ISNULLISH    (-10) // Pop value, push bool: is the value nullish (undefined / pointer_null)?
+#define BREAK_PUSHREF      (-11) // Push an asset reference (or a script/function reference) encoded in the 32-bit operand
 
 // ===[ Variable Types for V17 Array Access ]===
 #define VARTYPE_ARRAYPUSHAF 0x10  // Push array reference (read context)
@@ -219,12 +221,17 @@ struct VMContext {
     struct { char* key; int32_t value; }* codeIndexByName;
     // codeName -> CodeLocals* hash map (stb_ds)
     struct { char* key; CodeLocals* value; }* codeLocalsMap;
-    // BC17+: A map of CODE indexes -> localVars slot lookup map
+    // BC13/BC14/BC17+: A map of CODE indexes -> localVars slot lookup map
     IntIntHashMap* codeLocalsSlotMaps;
+    // BC13/BC14 only: varIdx -> globalVars slot lookup
+    IntIntHashMap globalVarsSlotMap;
+    // Allocated capacity of ctx->globalVars, only used for BC13/BC14
+    uint32_t globalVarCapacity;
     // varName -> varID hash map for global variables (stb_ds)
     struct { char* key; int32_t value; }* globalVarNameMap;
     // varName -> varID hash map for self/instance-scoped variables (stb_ds).
     struct { char* key; int32_t value; }* selfVarNameMap;
+    int32_t nextDynamicSelfVarID;
     // "codeName\tfuncName" -> true, for deduplicating unknown function warnings
     StringBooleanEntry* loggedUnknownFuncs;
     // "codeName\tfuncName" -> true, for deduplicating stubbed function warnings
@@ -284,11 +291,19 @@ BuiltinFunc VM_findBuiltin(VMContext* ctx, const char* name);
 RValue VM_createArray(VMContext* ctx);
 void VM_arraySet(VMContext* ctx, RValue* arrayRef, int32_t index, RValue val);
 
-static const char* VM_getCallerName(VMContext* ctx) {
+// Set a named field on a freshly-built GML struct, handles built-in vars and self-vars.
+// Unknown variables are not written to the struct.
+// Takes ownership of "val" and frees it after copying into the struct.
+void VM_structSet(VMContext* ctx, Instance* structInst, const char* name, RValue val);
+
+// Look up the varID for a self-scoped variable name, allocating a fresh synthetic ID if absent.
+int32_t VM_getOrAllocateSelfVarID(VMContext* ctx, const char* name);
+
+static inline const char* VM_getCallerName(VMContext* ctx) {
     return ctx->currentCodeName != nullptr ? ctx->currentCodeName : "<unknown>";
 }
 
-static char* VM_createDedupKey(const char* callerName, const char* funcName) {
+static inline char* VM_createDedupKey(const char* callerName, const char* funcName) {
     // Build dedup key: "callerName\tfuncName"
     size_t keyLen = strlen(callerName) + 1 + strlen(funcName) + 1;
     char* dedupKey = safeMalloc(keyLen);
@@ -313,7 +328,7 @@ static char* VM_createDedupKey(const char* callerName, const char* funcName) {
  * @param varName The variable name being accessed (e.g. "x").
  * @return true if the access matches a trace filter and should be logged.
  */
-static bool VM_shouldTraceVariable(StringBooleanEntry* traceMap, const char* scopeName, const char* altScopeName, const char* varName) {
+static inline bool VM_shouldTraceVariable(StringBooleanEntry* traceMap, const char* scopeName, const char* altScopeName, const char* varName) {
     if (shlen(traceMap) == 0) return false;
     if (shgeti(traceMap, "*") != -1) return true;
     if (shgeti(traceMap, scopeName) != -1) return true;
@@ -329,7 +344,7 @@ static bool VM_shouldTraceVariable(StringBooleanEntry* traceMap, const char* sco
     return false;
 }
 
-static void VM_checkIfVariableShouldBeTracedAndLog(VMContext* ctx, const char* scopeName, const char* altScopeName, const char* name, RValue value, bool isWrite, int32_t arrayIndex, int32_t instanceId, const char* additional) {
+static inline void VM_checkIfVariableShouldBeTracedAndLog(VMContext* ctx, const char* scopeName, const char* altScopeName, const char* name, RValue value, bool isWrite, int32_t arrayIndex, int32_t instanceId, const char* additional) {
     StringBooleanEntry* varModificationsToBeTraced = isWrite ? ctx->varWritesToBeTraced : ctx->varReadsToBeTraced;
     if (!VM_shouldTraceVariable(varModificationsToBeTraced, scopeName, altScopeName, name))
         return;
@@ -339,7 +354,7 @@ static void VM_checkIfVariableShouldBeTracedAndLog(VMContext* ctx, const char* s
     const char* arrow = isWrite ? "=" : "->";
     char indexBuf[16] = "";
     if (arrayIndex >= 0) snprintf(indexBuf, sizeof(indexBuf), "[%d]", arrayIndex);
-    char instanceIdBuf[24] = "";
+    char instanceIdBuf[28] = "";
     if (instanceId >= 0) snprintf(instanceIdBuf, sizeof(instanceIdBuf), " (instanceId=%d)", instanceId);
     fprintf(stderr, "VM: [%s] %s %s.%s%s %s %s%s%s\n", ctx->currentCodeName, verb, scopeName, name, indexBuf, arrow, rvalueAsString, instanceIdBuf, additional);
     free(rvalueAsString);

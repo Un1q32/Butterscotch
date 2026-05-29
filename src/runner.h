@@ -43,14 +43,16 @@
 #define DRAW_POST      77
 
 // ===[ Other Sub-event Constants ]===
-#define OTHER_OUTSIDE_ROOM  0
-#define OTHER_GAME_START    2
-#define OTHER_ROOM_START    4
-#define OTHER_ROOM_END      5
-#define OTHER_ANIMATION_END 7
-#define OTHER_END_OF_PATH   8
-#define OTHER_USER0         10
-#define OTHER_ASYNC_SYSTEM  75
+#define OTHER_OUTSIDE_ROOM   0
+#define OTHER_GAME_START     2
+#define OTHER_ROOM_START     4
+#define OTHER_ROOM_END       5
+#define OTHER_NO_MORE_LIVES  6
+#define OTHER_ANIMATION_END  7
+#define OTHER_END_OF_PATH    8
+#define OTHER_NO_MORE_HEALTH 9
+#define OTHER_USER0          10
+#define OTHER_ASYNC_SYSTEM   75
 
 #define MAX_VIEWS 8
 #define MAX_SURFACES 16
@@ -204,7 +206,8 @@ typedef struct {
     union {
         Instance* instance;
         int32_t tileIndex;
-        RuntimeLayer* runtimeLayer;
+        // Stored as an ID (resolved via Runner_findRuntimeLayerById) instead of a pointer, because layer_create can call arrput on runner->runtimeLayers mid-draw and realloc the array, invalidating any cached pointers.
+        int32_t runtimeLayerId;
     };
 } Drawable;
 
@@ -219,6 +222,12 @@ typedef struct {
     RValue* items; // stb_ds dynamic array of RValues
     bool freed;    // true when the slot is destroyed and available for reuse by ds_list_create (matches native GMS)
 } DsList;
+
+// ds_queue: FIFO, items[0] is the head (next to dequeue), last item is the tail.
+typedef struct {
+    RValue* items; // stb_ds dynamic array of RValues
+    bool freed;    // true when the slot is destroyed and available for reuse by ds_queue_create
+} DsQueue;
 
 // ===[ GML Buffer System ]===
 
@@ -281,6 +290,13 @@ typedef struct {
     bool isWriteMode;
     bool isOpen;
 } OpenTextFile;
+
+// Open binary file handle for GML file_bin_* functions.
+#define MAX_OPEN_BINARY_FILES 32
+typedef struct {
+    void* handle; // FileSystem-owned; passed to binaryRead/Write/Seek/etc.
+    bool isOpen;
+} OpenBinaryFile;
 
 // Saved state for persistent rooms. When leaving a persistent room, instance state
 // and visual properties are saved here. When returning, they are restored instead
@@ -361,9 +377,21 @@ struct Runner {
     bool drawBackgroundColor;
     bool shouldExit;
     bool debugMode;
-    void* nativeWindow;
-    void (*setWindowTitle)(void* window, const char* title);
-    bool (*windowHasFocus)(void* window);
+    // application_surface runtime state (mirrors GML toggles)
+    bool appSurfaceEnabled;
+    bool appSurfaceAutoDraw;
+    bool usingAppSurface;
+    int32_t applicationWidth;
+    int32_t applicationHeight;
+    int32_t oldApplicationWidth;
+    int32_t oldApplicationHeight;
+    // ID returned by renderer->vtable->ensureApplicationSurface each frame. Real surface ID on GL/GL-legacy,
+    // APPLICATION_SURFACE_ID (-1) on PS2. This is what BUILTIN_VAR_APPLICATION_SURFACE returns to GML.
+    int32_t applicationSurfaceId;
+    void (*setWindowTitle)(const char* title);
+    bool (*getWindowSize)(int32_t* outW, int32_t* outH);
+    void (*setWindowSize)(int32_t width, int32_t height);
+    bool (*windowHasFocus)(void);
     TileLayerMapEntry* tileLayerMap; // stb_ds hashmap: depth -> tile layer state
     RuntimeLayer* runtimeLayers; // stb_ds array, index-parallel to currentRoom->layers for parsed entries; dynamic entries appended
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
@@ -382,11 +410,11 @@ struct Runner {
     bool drawableListStructureDirty;
     bool drawableListSortDirty;
     // Dummy instance to serve as "self" during GLOB script execution
-    // In bytecode version 17+, global init scripts store method values on "self" via Pop.v.v
+    // In WAD version 17+, global init scripts store method values on "self" via Pop.v.v
     // The real runner uses a persistent YYObjectBase for this, the YYObjectBase is a "parent" of Instance
-    // For now, we'll use a dummy Instance with objectIndex = -1 as a hack
+    // For now, we'll use a dummy Instance with objectIndex = STRUCT_OBJECT_INDEX as a hack
     Instance* globalScopeInstance;
-    // Struct instances created by @@NewGMLObject@@. Reuses Instance with objectIndex=-1.
+    // Struct instances created by @@NewGMLObject@@. Reuses Instance with objectIndex=STRUCT_OBJECT_INDEX.
     // Tracked separately so event/step/draw iteration over runner->instances stays clean.
     Instance** structInstances;
     int32_t forcedDepth;
@@ -394,6 +422,7 @@ struct Runner {
     // ===[ Builtin function state ]===
     DsMapEntry** dsMapPool; // stb_ds array of stb_ds hashmaps
     DsList* dsListPool; // stb_ds array of DsList
+    DsQueue* dsQueuePool; // stb_ds array of DsQueue
     GmlBuffer* gmlBufferPool; // stb_ds array of GmlBuffer
     MpGrid* mpGridPool; // stb_ds array of motion-planning grids
 
@@ -418,9 +447,15 @@ struct Runner {
 
     // Text file handles for file_text_* functions
     OpenTextFile openTextFiles[MAX_OPEN_TEXT_FILES];
+    OpenBinaryFile openBinaryFiles[MAX_OPEN_BINARY_FILES];
 
     // Async map ID
     int32_t asyncLoadMapId;
+
+    // Legacy GMS 1.x globals
+    GMLReal score;
+    GMLReal lives;
+    GMLReal health;
 
     // Used by the "os_type" built-in
     YoYoOperatingSystem osType;
@@ -434,24 +469,48 @@ struct Runner {
 
     // GameMaker surface "stack".
     int32_t surfaceStack[MAX_SURFACES];
+
+    // Both must be set
+    // The original runner actually spawns a new process when game_change is called
+    char* pendingWorkingDirectory;
+    char* pendingLaunchParameters;
+
+    // GameMaker launcher parameters
+    // Just like the original runner, argv[0] is included in gameArgs
+    char** gameArgs;
 };
 
 const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype);
 void Runner_reset(Runner* runner);
 Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileSystem* fileSystem, AudioSystem* audioSystem);
+void Runner_setGameArgs(Runner* runner, char** argv, int32_t argc);
 void Runner_initFirstRoom(Runner* runner);
 void Runner_step(Runner* runner);
 void Runner_handlePendingRoomChange(Runner* runner);
 void Runner_executeEvent(Runner* runner, Instance* instance, int32_t eventType, int32_t eventSubtype);
 void Runner_executeEventFromObject(Runner* runner, Instance* instance, int32_t startObjectIndex, int32_t eventType, int32_t eventSubtype);
 void Runner_executeEventForAll(Runner* runner, int32_t eventType, int32_t eventSubtype);
+// Sets the "lives" global variable.
+// Used to fire events when the values are equal to or lesser than 0.
+void Runner_setLives(Runner* runner, GMLReal value);
+// Sets the "health" global variable.
+// Used to fire events when the values are equal to or lesser than 0.
+void Runner_setHealth(Runner* runner, GMLReal value);
 void Runner_draw(Runner* runner);
-void Runner_drawGUI(Runner* runner);
+// Ensures the application_surface exists at the right size, mirrors the renderer's ID into runner+renderer state, then
+// invokes renderer->vtable->beginFrame. Every platform main should call this instead of beginFrame directly.
+void Runner_beginFrame(Runner* runner, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH);
+void Runner_drawGUI(Runner* runner, int32_t windowW, int32_t windowH, int32_t targetW, int32_t targetH);
+void Runner_drawPre(Runner* runner, int32_t windowW, int32_t windowH);
+void Runner_drawPost(Runner* runner, int32_t windowW, int32_t windowH);
 void Runner_drawBackgrounds(Runner* runner, bool foreground);
 void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY);
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks);
 void Runner_scrollBackgrounds(Runner* runner);
 void Runner_drawTileLayer(Runner* runner, RoomLayerTilesData* data, float layerOffsetX, float layerOffsetY);
+// Allocates a fresh GML struct and registers it in instancesById and structInstances.
+// refCount starts at 1 (the registry's implicit ref); callers that retain a reference must Instance_structIncRef.
+Instance* Runner_createStruct(Runner* runner);
 Instance* Runner_createInstance(Runner* runner, GMLReal x, GMLReal y, int32_t objectIndex);
 Instance* Runner_createInstanceWithDepth(Runner* runner, GMLReal x, GMLReal y, int32_t objectIndex, int32_t depth);
 Instance* Runner_createInstanceWithLayer(Runner* runner, GMLReal x, GMLReal y, int32_t objectIndex, int32_t layerId);
@@ -482,6 +541,8 @@ bool Runner_surfaceSetTarget(Runner* runner, int32_t surfaceID);
 // Pops the top of the surface stack and bind whatever is below (or the main framebuffer when the stack is empty).
 // Returns false when there was nothing to pop.
 bool Runner_surfaceResetTarget(Runner* runner);
+// Returns the surfaceID at the top of the surface stack, or -1 when no surface is bound (the application surface is active).
+int32_t Runner_surfaceGetTarget(Runner* runner);
 
 void Runner_dumpState(Runner* runner);
 char* Runner_dumpStateJson(Runner* runner);

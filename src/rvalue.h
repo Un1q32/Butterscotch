@@ -8,7 +8,7 @@
 #include "real_type.h"
 #include "stb_ds.h"
 #include "utils.h"
-#include "bytecode_versions.h"
+#include "wad_versions.h"
 
 // Forward declarations
 struct GMLArray;
@@ -34,6 +34,24 @@ uint32_t Instance_getInstanceId(struct Instance* inst);
 #define GML_TYPE_STRING   0x6
 #define GML_TYPE_INT16    0xF
 
+// ===[ Asset Reference Types ]===
+typedef enum {
+    ASSET_TYPE_OBJECT = 0,
+    ASSET_TYPE_SPRITE = 1,
+    ASSET_TYPE_SOUND = 2,
+    ASSET_TYPE_ROOM = 3,
+    ASSET_TYPE_PATH = 4,
+    ASSET_TYPE_SCRIPT = 5,
+    ASSET_TYPE_FONT = 6,
+    ASSET_TYPE_TIMELINE = 7,
+    ASSET_TYPE_SHADER = 8,
+    ASSET_TYPE_SEQUENCE = 9,
+    ASSET_TYPE_ANIMCURVE = 10,
+    ASSET_TYPE_PARTICLESYSTEM = 11,
+    ASSET_TYPE_UNKNOWN = 12,
+    ASSET_TYPE_TILESET = 13,
+} AssetRefType;
+
 // ===[ RValue - Tagged Union ]===
 typedef enum {
     RVALUE_UNDEFINED = 0,
@@ -45,6 +63,7 @@ typedef enum {
     RVALUE_ARRAY = 6,
     RVALUE_METHOD = 7,
     RVALUE_STRUCT = 8,
+    RVALUE_ASSETREF = 9,
 } RValueType;
 
 struct RValue {
@@ -56,7 +75,7 @@ struct RValue {
 #endif
         const char* string;
         GMLArray* array;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         GMLMethod* method;
 #endif
         Instance* structInst;
@@ -67,96 +86,88 @@ struct RValue {
     // For RVALUE_ARRAY, RVALUE_METHOD, RVALUE_STRUCT: true = this RValue holds one strong ref and must decRef on RValue_free.
     // Non-owning ("weak") RValues are short-lived views returned by getters, caller must NOT free them.
     bool ownsReference;
-#if IS_BC17_OR_HIGHER_ENABLED
     uint8_t gmlStackType; // GML data type from the instruction that pushed this value
-#endif
+    uint8_t assetRefType; // For RVALUE_ASSETREF: Indicates the asset type (AssetRefType)
 } __attribute__((aligned(8)));
 
-// Helper to initialize .gmlStackType only on BC17+ builds
-#if IS_BC17_OR_HIGHER_ENABLED
-#  define RVALUE_INIT_GMLTYPE(t) .gmlStackType = (t)
-#else
-#  define RVALUE_INIT_GMLTYPE(t)
-#endif
-
-static RValue RValue_makeReal(GMLReal val) {
-    RValue rv = { .type = RVALUE_REAL, RVALUE_INIT_GMLTYPE(GML_TYPE_DOUBLE) };
+static inline RValue RValue_makeReal(GMLReal val) {
+    RValue rv = { .type = RVALUE_REAL, .gmlStackType = GML_TYPE_DOUBLE };
     rv.real = val;
     return rv;
 }
 
-static RValue RValue_makeInt32(int32_t val) {
-    RValue rv = { .type = RVALUE_INT32, RVALUE_INIT_GMLTYPE(GML_TYPE_INT32) };
+static inline RValue RValue_makeInt32(int32_t val) {
+    RValue rv = { .type = RVALUE_INT32, .gmlStackType = GML_TYPE_INT32 };
     rv.int32 = val;
     return rv;
 }
 
-static RValue RValue_makeInt64(int64_t val) {
+static inline RValue RValue_makeInt64(int64_t val) {
     RValue rv;
 #ifdef NO_RVALUE_INT64
     // Values that don't fit in int32 get promoted to real instead of clamped, because clamping to INT32_MIN causes arithmetic overflow bugs
     // (example: Undertale's mercymod = -99999999999999 in the Asriel fight)
     if (val > INT32_MAX || INT32_MIN > val) {
-        rv = (RValue){ .type = RVALUE_REAL, RVALUE_INIT_GMLTYPE(GML_TYPE_DOUBLE) };
+        rv = (RValue){ .type = RVALUE_REAL, .gmlStackType = GML_TYPE_DOUBLE };
         rv.real = val;
     } else {
-        rv = (RValue){ .type = RVALUE_INT32, RVALUE_INIT_GMLTYPE(GML_TYPE_INT32) };
+        rv = (RValue){ .type = RVALUE_INT32, .gmlStackType = GML_TYPE_INT32 };
         rv.int32 = val;
     }
 #else
-    rv = (RValue){ .type = RVALUE_INT64, RVALUE_INIT_GMLTYPE(GML_TYPE_INT64) };
+    rv = (RValue){ .type = RVALUE_INT64, .gmlStackType = GML_TYPE_INT64 };
     rv.int64 = val;
 #endif
     return rv;
 }
 
-static RValue RValue_makeBool(bool val) {
-    RValue rv = { .type = RVALUE_BOOL, RVALUE_INIT_GMLTYPE(GML_TYPE_BOOL) };
+static inline RValue RValue_makeBool(bool val) {
+    RValue rv = { .type = RVALUE_BOOL, .gmlStackType = GML_TYPE_BOOL };
     rv.int32 = val ? 1 : 0;
     return rv;
 }
 
-static RValue RValue_makeString(const char* val) {
-    RValue rv = { .type = RVALUE_STRING, .ownsReference = false, RVALUE_INIT_GMLTYPE(GML_TYPE_STRING) };
+static inline RValue RValue_makeString(const char* val) {
+    RValue rv = { .type = RVALUE_STRING, .ownsReference = false, .gmlStackType = GML_TYPE_STRING };
     rv.string = val;
     return rv;
 }
 
-static RValue RValue_makeOwnedString(char* val) {
-    RValue rv = { .type = RVALUE_STRING, .ownsReference = true, RVALUE_INIT_GMLTYPE(GML_TYPE_STRING) };
+static inline RValue RValue_makeOwnedString(char* val) {
+    RValue rv = { .type = RVALUE_STRING, .ownsReference = true, .gmlStackType = GML_TYPE_STRING };
     rv.string = val;
     return rv;
 }
 
-static RValue RValue_makeUndefined(void) {
-    return (RValue){ .type = RVALUE_UNDEFINED, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
+static inline RValue RValue_makeUndefined(void) {
+    return (RValue){ .type = RVALUE_UNDEFINED, .gmlStackType = GML_TYPE_VARIABLE };
 }
 
 // Takes ownership: refCount is NOT bumped (caller hands off its ref). The returned RValue decRefs on free.
 // Use this when you have a freshly-allocated array (GMLArray_alloc) or after a GMLArray_incRef.
-static RValue RValue_makeArray(GMLArray* arr) {
-    RValue rv = { .type = RVALUE_ARRAY, .ownsReference = true, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
+static inline RValue RValue_makeArray(GMLArray* arr) {
+    RValue rv = { .type = RVALUE_ARRAY, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
     rv.array = arr;
     return rv;
 }
 
 // Weak view: does not own (no decRef on free). Callers that stash the value long-term must incRef + set ownsString.
-static RValue RValue_makeArrayWeak(GMLArray* arr) {
-    RValue rv = { .type = RVALUE_ARRAY, .ownsReference = false, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
+static inline RValue RValue_makeArrayWeak(GMLArray* arr) {
+    RValue rv = { .type = RVALUE_ARRAY, .ownsReference = false, .gmlStackType = GML_TYPE_VARIABLE };
     rv.array = arr;
     return rv;
 }
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 // Takes ownership: refCount is NOT bumped (caller hands off its ref). The returned RValue decRefs on free.
-static RValue RValue_makeMethod(int32_t codeIndex, int32_t boundInstanceId) {
+static inline RValue RValue_makeMethod(int32_t codeIndex, int32_t boundInstanceId) {
     RValue rv = { .type = RVALUE_METHOD, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
     rv.method = GMLMethod_create(codeIndex, boundInstanceId);
     return rv;
 }
 
 // Weak view: does not own (no decRef on free). Callers that stash the value long-term must incRef + set ownsString.
-static RValue RValue_makeMethodWeak(GMLMethod* m) {
+static inline RValue RValue_makeMethodWeak(GMLMethod* m) {
     RValue rv = { .type = RVALUE_METHOD, .ownsReference = false, .gmlStackType = GML_TYPE_VARIABLE };
     rv.method = m;
     return rv;
@@ -165,16 +176,22 @@ static RValue RValue_makeMethodWeak(GMLMethod* m) {
 
 // Takes ownership: refCount is NOT bumped (caller hands off its ref). The returned RValue decRefs on free.
 // Use this for the freshly-allocated struct returned by @@NewGMLObject@@, after the caller has already accounted for both the registry's implicit ref and the returned-RValue ref.
-static RValue RValue_makeStruct(Instance* inst) {
-    RValue rv = { .type = RVALUE_STRUCT, .ownsReference = true, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
+static inline RValue RValue_makeStruct(Instance* inst) {
+    RValue rv = { .type = RVALUE_STRUCT, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
     rv.structInst = inst;
     return rv;
 }
 
 // Weak view: does not own (no decRef on free). Callers that stash the value long-term must incRef + set ownsString.
-static RValue RValue_makeStructWeak(Instance* inst) {
-    RValue rv = { .type = RVALUE_STRUCT, .ownsReference = false, RVALUE_INIT_GMLTYPE(GML_TYPE_VARIABLE) };
+static inline RValue RValue_makeStructWeak(Instance* inst) {
+    RValue rv = { .type = RVALUE_STRUCT, .ownsReference = false, .gmlStackType = GML_TYPE_VARIABLE };
     rv.structInst = inst;
+    return rv;
+}
+
+static inline RValue RValue_makeAssetRef(int32_t assetIndex, uint8_t assetType) {
+    RValue rv = { .type = RVALUE_ASSETREF, .assetRefType = assetType, .gmlStackType = GML_TYPE_INT32 };
+    rv.int32 = assetIndex;
     return rv;
 }
 
@@ -185,14 +202,14 @@ static RValue RValue_makeStructWeak(Instance* inst) {
 //
 // Useful to store arbitrary RValues in containers (ds_map, ds_list, etc.)
 // The caller's original RValue is unaffected and must still be freed normally.
-static RValue RValue_makeIndependent(RValue val) {
+static inline RValue RValue_makeIndependent(RValue val) {
     if (val.type == RVALUE_STRING && val.string != nullptr) {
         return RValue_makeOwnedString(safeStrdup(val.string));
     } else if (val.type == RVALUE_ARRAY && val.array != nullptr) {
         GMLArray_incRef(val.array);
         val.ownsReference = true;
         return val;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     } else if (val.type == RVALUE_METHOD && val.method != nullptr) {
         GMLMethod_incRef(val.method);
         val.ownsReference = true;
@@ -209,12 +226,27 @@ static RValue RValue_makeIndependent(RValue val) {
 
 // Converts an RValue to a heap-allocated string representation.
 // The caller must free the returned string
-static char* RValue_toString(RValue val) {
+static inline char* RValue_toString(RValue val) {
     char buf[64];
     switch (val.type) {
-        case RVALUE_REAL:
-            snprintf(buf, sizeof(buf), "%.16g", (double) val.real);
+        case RVALUE_REAL: {
+            GMLReal r = val.real;
+            if (isnan(r)) return safeStrdup("NaN");
+            if (isinf(r)) return safeStrdup(r < (GMLReal) 0 ? "-inf" : "inf");
+#ifdef USE_FLOAT_REALS
+            const GMLReal INT_SAFE_BOUND = 9.2233715e18f; // largest float strictly < 2^63
+#else
+            const GMLReal INT_SAFE_BOUND = 9.2233720368547758e18;
+#endif
+            // Is this a integer?
+            if (r >= -INT_SAFE_BOUND && r <= INT_SAFE_BOUND && r == (GMLReal) (int64_t) r) {
+                snprintf(buf, sizeof(buf), "%lld", (long long) (int64_t) r);
+            } else {
+                // For anything else, we format to two decimal places
+                snprintf(buf, sizeof(buf), "%.2f", (double) r);
+            }
             return safeStrdup(buf);
+        }
         case RVALUE_INT32:
             snprintf(buf, sizeof(buf), "%d", val.int32);
             return safeStrdup(buf);
@@ -232,7 +264,7 @@ static char* RValue_toString(RValue val) {
         case RVALUE_ARRAY:
             snprintf(buf, sizeof(buf), "<array:%p>", (void*) val.array);
             return safeStrdup(buf);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD:
             snprintf(buf, sizeof(buf), "<method:%d>", val.method->codeIndex);
             return safeStrdup(buf);
@@ -240,13 +272,16 @@ static char* RValue_toString(RValue val) {
         case RVALUE_STRUCT:
             snprintf(buf, sizeof(buf), "<struct:%u>", val.structInst != nullptr ? Instance_getInstanceId(val.structInst) : 0);
             return safeStrdup(buf);
+        case RVALUE_ASSETREF:
+            snprintf(buf, sizeof(buf), "%d", val.int32);
+            return safeStrdup(buf);
     }
     return safeStrdup("");
 }
 
 // Converts an RValue to a heap-allocated string representation, used for debug logs.
 // The caller must free the returned string
-static char* RValue_toStringFancy(RValue val) {
+static inline char* RValue_toStringFancy(RValue val) {
     switch (val.type) {
         case RVALUE_STRING: {
             char* valueAsString = RValue_toString(val);
@@ -269,7 +304,7 @@ static char* RValue_toStringFancy(RValue val) {
 // Converts an RValue to a heap-allocated string with a type tag prefix, used for trace-stack output.
 // Examples: int32(42), real(3.14), "hello", bool(true), undefined, <array:0x...>
 // The caller must free the returned string
-static char* RValue_toStringTyped(RValue val) {
+static inline char* RValue_toStringTyped(RValue val) {
     char buf[128];
     switch (val.type) {
         case RVALUE_REAL:
@@ -297,7 +332,7 @@ static char* RValue_toStringTyped(RValue val) {
         case RVALUE_ARRAY:
             snprintf(buf, sizeof(buf), "<array:%p>", (void*) val.array);
             return safeStrdup(buf);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD:
             snprintf(buf, sizeof(buf), "method(code=%d, inst=%d)", val.method->codeIndex, val.method->boundInstanceId);
             return safeStrdup(buf);
@@ -305,11 +340,14 @@ static char* RValue_toStringTyped(RValue val) {
         case RVALUE_STRUCT:
             snprintf(buf, sizeof(buf), "struct(id=%u)", val.structInst != nullptr ? Instance_getInstanceId(val.structInst) : 0);
             return safeStrdup(buf);
+        case RVALUE_ASSETREF:
+            snprintf(buf, sizeof(buf), "assetref(type=%d, index=%d)", val.assetRefType, val.int32);
+            return safeStrdup(buf);
     }
     return safeStrdup("???");
 }
 
-static void RValue_free(RValue* val) {
+static inline void RValue_free(RValue* val) {
     if (val->type == RVALUE_STRING && val->ownsReference && val->string != nullptr) {
         free((void*) val->string);
         val->string = nullptr;
@@ -318,7 +356,7 @@ static void RValue_free(RValue* val) {
         GMLArray_decRef(val->array);
         val->array = nullptr;
         val->ownsReference = false;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     } else if (val->type == RVALUE_METHOD && val->ownsReference && val->method != nullptr) {
         GMLMethod_decRef(val->method);
         val->method = nullptr;
@@ -331,7 +369,7 @@ static void RValue_free(RValue* val) {
     }
 }
 
-static GMLReal RValue_toReal(RValue val) {
+static inline GMLReal RValue_toReal(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:   return val.real;
         case RVALUE_INT32:  return (GMLReal) val.int32;
@@ -341,15 +379,16 @@ static GMLReal RValue_toReal(RValue val) {
         case RVALUE_BOOL:   return (GMLReal) val.int32;
         case RVALUE_STRING: return GMLReal_strtod(val.string, nullptr);
         case RVALUE_ARRAY:  return 0.0;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD: return 0.0;
 #endif
         case RVALUE_STRUCT: return val.structInst != nullptr ? (GMLReal) Instance_getInstanceId(val.structInst) : 0.0;
+        case RVALUE_ASSETREF: return (GMLReal) val.int32;
         default:            return 0.0;
     }
 }
 
-static int32_t RValue_toInt32(RValue val) {
+static inline int32_t RValue_toInt32(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:   return (int32_t) val.real;
         case RVALUE_INT32:  return val.int32;
@@ -359,15 +398,16 @@ static int32_t RValue_toInt32(RValue val) {
         case RVALUE_BOOL:   return val.int32;
         case RVALUE_STRING: return (int32_t) GMLReal_strtod(val.string, nullptr);
         case RVALUE_ARRAY:  return 0;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD: return 0;
 #endif
         case RVALUE_STRUCT: return val.structInst != nullptr ? (int32_t) Instance_getInstanceId(val.structInst) : 0;
+        case RVALUE_ASSETREF: return val.int32;
         default:            return 0;
     }
 }
 
-static int64_t RValue_toInt64(RValue val) {
+static inline int64_t RValue_toInt64(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:   return (int64_t) val.real;
         case RVALUE_INT32:  return (int64_t) val.int32;
@@ -377,15 +417,16 @@ static int64_t RValue_toInt64(RValue val) {
         case RVALUE_BOOL:   return (int64_t) val.int32;
         case RVALUE_STRING: return (int64_t) GMLReal_strtod(val.string, nullptr);
         case RVALUE_ARRAY:  return 0;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD: return 0;
 #endif
         case RVALUE_STRUCT: return val.structInst != nullptr ? (int64_t) Instance_getInstanceId(val.structInst) : 0;
+        case RVALUE_ASSETREF: return (int64_t) val.int32;
         default:            return 0;
     }
 }
 
-static bool RValue_toBool(RValue val) {
+static inline bool RValue_toBool(RValue val) {
     switch (val.type) {
         case RVALUE_REAL:   return val.real > 0.5;
         case RVALUE_INT32:  return val.int32 > 0;
@@ -395,10 +436,11 @@ static bool RValue_toBool(RValue val) {
         case RVALUE_BOOL:   return val.int32 != 0;
         case RVALUE_STRING: return val.string != nullptr && val.string[0] != '\0';
         case RVALUE_ARRAY:  return false;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         case RVALUE_METHOD: return true;
 #endif
         case RVALUE_STRUCT: return val.structInst != nullptr;
+        case RVALUE_ASSETREF: return val.int32 > 0;
         default:            return false;
     }
 }

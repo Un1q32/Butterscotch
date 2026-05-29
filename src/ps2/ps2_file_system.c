@@ -396,6 +396,107 @@ static bool ps2WriteFileBinary(FileSystem* fs, const char* relativePath, const u
     return written == (size_t) size;
 }
 
+// ===[ Streaming Binary I/O ]===
+// Same FILE* handle model as the overlay FS, but routes through the CONFIG.JSN mappings.
+
+typedef struct {
+    FILE* fp;
+    char* resolvedPath; // owned strdup of the device path used at open
+} Ps2BinaryHandle;
+
+static Ps2BinaryHandle* ps2BinaryHandleNew(FILE* fp, const char* resolvedPath) {
+    Ps2BinaryHandle* h = safeMalloc(sizeof(Ps2BinaryHandle));
+    h->fp = fp;
+    h->resolvedPath = safeStrdup(resolvedPath);
+    return h;
+}
+
+static void* ps2BinaryOpen(FileSystem* fs, const char* relativePath, int32_t mode) {
+    Ps2FileSystem* pfs = (Ps2FileSystem*) fs;
+    ptrdiff_t idx = shgeti(pfs->mappings, relativePath);
+    if (0 > idx) return nullptr;
+    char** paths = pfs->mappings[idx].value;
+    int pathCount = arrlen(paths);
+    if (pathCount == 0) return nullptr;
+
+    if (mode == GML_FILE_BIN_READ) {
+        // Read: probe every mapped location
+        repeat(pathCount, i) {
+            FILE* f = fopen(paths[i], "rb");
+            if (f != nullptr) return ps2BinaryHandleNew(f, paths[i]);
+        }
+        return nullptr;
+    }
+
+    const char* writePath = paths[0];
+    if (mode == GML_FILE_BIN_WRITE) {
+        ensureParentDirectory(pfs, writePath);
+        FILE* f = fopen(writePath, "wb");
+        return f != nullptr ? ps2BinaryHandleNew(f, writePath) : nullptr;
+    }
+
+    // GML_FILE_BIN_READWRITE: try the writable path first (most recent state lives there).
+    FILE* f = fopen(writePath, "r+b");
+    if (f != nullptr) return ps2BinaryHandleNew(f, writePath);
+    // Fall back to creating fresh - we never open the read-only mapped paths for r+b
+    // because the GameMaker File System sandbox forbids writing back to the bundle.
+    ensureParentDirectory(pfs, writePath);
+    f = fopen(writePath, "w+b");
+    return f != nullptr ? ps2BinaryHandleNew(f, writePath) : nullptr;
+}
+
+static void ps2BinaryClose(MAYBE_UNUSED FileSystem* fs, void* handle) {
+    if (handle == nullptr) return;
+    Ps2BinaryHandle* h = (Ps2BinaryHandle*) handle;
+    if (h->fp != nullptr) fclose(h->fp);
+    free(h->resolvedPath);
+    free(h);
+}
+static int32_t ps2BinaryRead(MAYBE_UNUSED FileSystem* fs, void* handle, void* dst, int32_t n) {
+    if (handle == nullptr || 0 >= n) return 0;
+    return (int32_t) fread(dst, 1, (size_t) n, ((Ps2BinaryHandle*) handle)->fp);
+}
+static int32_t ps2BinaryWrite(MAYBE_UNUSED FileSystem* fs, void* handle, const void* src, int32_t n) {
+    if (handle == nullptr || 0 >= n) return 0;
+    return (int32_t) fwrite(src, 1, (size_t) n, ((Ps2BinaryHandle*) handle)->fp);
+}
+static int32_t ps2BinaryTell(MAYBE_UNUSED FileSystem* fs, void* handle) {
+    if (handle == nullptr) return 0;
+    return (int32_t) ftell(((Ps2BinaryHandle*) handle)->fp);
+}
+static bool ps2BinarySeek(MAYBE_UNUSED FileSystem* fs, void* handle, int32_t pos) {
+    if (handle == nullptr) return false;
+    return fseek(((Ps2BinaryHandle*) handle)->fp, pos, SEEK_SET) == 0;
+}
+static int32_t ps2BinarySize(MAYBE_UNUSED FileSystem* fs, void* handle) {
+    if (handle == nullptr) return 0;
+    FILE* f = ((Ps2BinaryHandle*) handle)->fp;
+    long saved = ftell(f);
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, saved, SEEK_SET);
+    return (int32_t) size;
+}
+static void ps2BinaryRewrite(MAYBE_UNUSED FileSystem* fs, void* handle) {
+    if (handle == nullptr) return;
+    Ps2BinaryHandle* h = (Ps2BinaryHandle*) handle;
+    if (h->fp != nullptr) fclose(h->fp);
+    h->fp = fopen(h->resolvedPath, "wb+");
+}
+
+//Directory, pretty much stubbed
+static bool ps2DirectoryExists(FileSystem* fs, const char* relativePath) {
+    return true;
+}
+
+static bool ps2CreateDirectory(FileSystem* fs, const char* relativePath) {
+    return true;
+}
+
+static bool ps2DeleteDirectory(FileSystem* fs, const char* relativePath) {
+    return true;
+}
+
 // ===[ Vtable ]===
 
 static FileSystemVtable ps2FileSystemVtable = {
@@ -406,6 +507,17 @@ static FileSystemVtable ps2FileSystemVtable = {
     .deleteFile = deleteFile,
     .readFileBinary = ps2ReadFileBinary,
     .writeFileBinary = ps2WriteFileBinary,
+    .binaryOpen = ps2BinaryOpen,
+    .binaryClose = ps2BinaryClose,
+    .binaryRead = ps2BinaryRead,
+    .binaryWrite = ps2BinaryWrite,
+    .binaryTell = ps2BinaryTell,
+    .binarySeek = ps2BinarySeek,
+    .binarySize = ps2BinarySize,
+    .binaryRewrite = ps2BinaryRewrite,
+    .directoryExists = ps2DirectoryExists,
+    .createDirectory = ps2CreateDirectory,
+    .deleteDirectory = ps2DeleteDirectory,
 };
 
 // ===[ Lifecycle ]===

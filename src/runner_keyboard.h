@@ -11,15 +11,19 @@
 #define VK_NOKEY     0
 #define VK_ANYKEY    1
 #define VK_BACKSPACE 8
-#define VK_TAB       9
 #define VK_ENTER    13
-#define VK_SHIFT    16
-#define VK_CONTROL  17
 #define VK_ALT      18
-#define VK_ESCAPE   27
-#define VK_SPACE    32
 #define VK_PAGEUP   33
 #define VK_PAGEDOWN 34
+
+// if windows.h was included, use *its* definitions for the most part.
+#ifndef VK_TAB
+
+#define VK_TAB       9
+#define VK_SHIFT    16
+#define VK_CONTROL  17
+#define VK_ESCAPE   27
+#define VK_SPACE    32
 #define VK_END      35
 #define VK_HOME     36
 #define VK_LEFT     37
@@ -42,10 +46,13 @@
 #define VK_F11     122
 #define VK_F12     123
 
+#endif
+
 typedef struct RunnerKeyboardState {
     bool keyDown[GML_KEY_COUNT];     // Currently held
     bool keyPressed[GML_KEY_COUNT];  // Just pressed this frame
     bool keyReleased[GML_KEY_COUNT]; // Just released this frame
+    int32_t keyMap[GML_KEY_COUNT];   // keyboard_set_map: incoming key -> reported key (identity by default)
     int32_t lastKey;                 // Last key pressed (for keyboard_key variable)
     char lastChar[2];                // Last character pressed (for keyboard_char variable)
 } RunnerKeyboardState;
@@ -75,3 +82,8 @@ void RunnerKeyboard_simulateRelease(RunnerKeyboardState* kb, int32_t gmlKeyCode)
 
 // Clear a specific key's state
 void RunnerKeyboard_clear(RunnerKeyboardState* kb, int32_t gmlKeyCode);
+
+// keyboard_set_map / keyboard_get_map / keyboard_unset_map
+void RunnerKeyboard_setMap(RunnerKeyboardState* kb, int32_t fromKey, int32_t toKey);
+int32_t RunnerKeyboard_getMap(RunnerKeyboardState* kb, int32_t fromKey);
+void RunnerKeyboard_unsetMap(RunnerKeyboardState* kb);

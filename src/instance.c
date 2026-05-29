@@ -47,6 +47,11 @@ Instance* Instance_create(uint32_t instanceId, int32_t objectIndex, GMLReal x, G
     inst->gravityDirection = 270.0f;
     inst->pathIndex = -1;
     inst->pathScale = 1.0f;
+    inst->timelineIndex = -1;
+    inst->timelinePosition = 0.0f;
+    inst->timelineSpeed = 1.0f;
+    inst->timelineLoop = false;
+    inst->timelineRunning = true;
 
     // Initialize alarms to -1 (inactive)
     repeat(GML_ALARM_COUNT, i) {
@@ -72,13 +77,19 @@ uint32_t Instance_getInstanceId(Instance* inst) {
     return inst != nullptr ? inst->instanceId : 0;
 }
 
-void Instance_free(Instance* instance) {
+void Instance_freeContents(Instance* instance) {
     if (instance == nullptr) return;
 
     // Free owned strings and decRef owned arrays in selfVars hashmap, then release the entries buffer.
     IntRValueHashMap_freeAllValues(&instance->selfVars);
     arrfree(instance->collisionCells);
+    instance->collisionCells = nullptr;
+}
 
+void Instance_free(Instance* instance) {
+    if (instance == nullptr) return;
+
+    Instance_freeContents(instance);
     free(instance);
 }
 
@@ -125,6 +136,11 @@ void Instance_copyFields(Instance* source, Instance* destination) {
         destination->alarm[i] = source->alarm[i];
     }
     destination->activeAlarmMask = source->activeAlarmMask;
+    destination->timelineIndex = source->timelineIndex;
+    destination->timelinePosition = source->timelinePosition;
+    destination->timelineSpeed = source->timelineSpeed;
+    destination->timelineLoop = source->timelineLoop;
+    destination->timelineRunning = source->timelineRunning;
 
     // Deep-copy self variables (Instance_setSelfVar handles string duplication + array incRef)
     repeat(source->selfVars.capacity, i) {

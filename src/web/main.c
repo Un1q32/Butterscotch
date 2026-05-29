@@ -130,24 +130,28 @@ void* loop() {
         float displayScaleX;
         float displayScaleY;
 
+        Runner_drawPre(gRunner, 640, 480);
         Runner_computeViewDisplayScale(gRunner, gameW, gameH, &displayScaleX, &displayScaleY);
 
-        gRunner->renderer->vtable->beginFrame(gRunner->renderer, gameW, gameH, 640, 480);
+        Runner_beginFrame(gRunner, gameW, gameH, 640, 480);
 
         // Clear FBO with room background color
         if (gRunner->drawBackgroundColor) {
             int rInt = BGR_R(gRunner->backgroundColor);
             int gInt = BGR_G(gRunner->backgroundColor);
             int bInt = BGR_B(gRunner->backgroundColor);
-            glClearColor(rInt / 255.0f, gInt / 255.0f, bInt / 255.0f, 1.0f);
+            int aInt = BGR_A(gRunner->backgroundColor);
+            glClearColor(rInt / 255.0f, gInt / 255.0f, bInt / 255.0f, aInt / 255.0f);
         } else {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         }
         glClear(GL_COLOR_BUFFER_BIT);
 
         Runner_drawViews(gRunner, gameW, gameH, displayScaleX, displayScaleY, false);
-
-        gRunner->renderer->vtable->endFrame(gRunner->renderer);
+        gRunner->renderer->vtable->endFrameInit(gRunner->renderer);
+        Runner_drawPost(gRunner, 640, 480);
+        gRunner->renderer->vtable->endFrameEnd(gRunner->renderer);
+        Runner_drawGUI(gRunner, 640, 480, gameW, gameH);
 
         // Just like glfwSwapBuffers.
         // Only swap when there isn't a room change to match the original runner.
@@ -199,7 +203,7 @@ void* loop() {
     return nullptr;
 }
 
-void setWindowTitle(MAYBE_UNUSED void* nativeWindow, const char* title) {
+void setWindowTitle(const char* title) {
     MAIN_THREAD_EM_ASM({ postMessage({ type: 'windowTitle', title: UTF8ToString($0) }); }, title);
 }
 
@@ -298,11 +302,10 @@ void startRunner(const char* gamePath, const char* savesPath) {
 
     // Initialize the runner
     Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem);
-    runner->nativeWindow = nullptr;
     runner->setWindowTitle = setWindowTitle;
     runner->windowHasFocus = nullptr;
 
-    setWindowTitle(nullptr, dataWin->gen8.name);
+    setWindowTitle(dataWin->gen8.name);
 
     gRunner = runner;
 

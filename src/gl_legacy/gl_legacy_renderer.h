@@ -25,8 +25,8 @@ typedef struct {
 
     int32_t windowW; // stored from beginFrame for endFrame blit
     int32_t windowH;
-    int32_t gameW; // game resolution (for FBO sizing)
-    int32_t gameH;
+    int32_t gameW; // game width (matches the application_surface size)
+    int32_t gameH; // game height (matches the application_surface size)
 
     // Original counts from data.win (dynamic slots start at these indices)
     uint32_t originalTexturePageCount;
@@ -35,20 +35,12 @@ typedef struct {
 
     bool colorWriteR, colorWriteG, colorWriteB, colorWriteA;
 
-#ifndef PLATFORM_PS3
-    // FBO for render-to-texture (game renders here, then blitted to screen)
-    GLuint fbo;
-    GLuint fboTexture;
-    int32_t fboWidth;
-    int32_t fboHeight;
-
     // GML surfaces (each is an FBO with a backing color texture)
     GLuint* surfaces;
     GLuint* surfaceTexture;
     int32_t* surfaceWidth;
     int32_t* surfaceHeight;
     uint32_t surfaceCount;
-#endif
 } GLLegacyRenderer;
 
 Renderer* GLLegacyRenderer_create(void);

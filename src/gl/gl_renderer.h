@@ -40,15 +40,10 @@ typedef struct {
 
     GLuint whiteTexture; // 1x1 white pixel for drawing primitives (rectangles, lines, etc.)
 
-    // FBO for render-to-texture (game renders here, then blitted to screen)
-    GLuint fbo;
-    GLuint fboTexture;
-    int32_t fboWidth;
-    int32_t fboHeight;
     int32_t windowW; // stored from beginFrame for endFrame blit
     int32_t windowH;
-    int32_t gameW; // game resolution (for FBO sizing)
-    int32_t gameH;
+    int32_t gameW; // game width (matches the application_surface size)
+    int32_t gameH; // game height (matches the application_surface size)
 
     // Original counts from data.win (dynamic slots start at these indices)
     uint32_t originalTexturePageCount;

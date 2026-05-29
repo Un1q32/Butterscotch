@@ -204,10 +204,12 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
         }
         slot->ownsDecoder = false;
     } else {
-        bool isEmbedded = (sound->flags & 0x01) != 0;
-        bool isCompressed = (sound->flags & 0x02) != 0;
+        bool isRegular = (sound->flags & AUDIO_ENTRY_FLAG_REGULAR) == AUDIO_ENTRY_FLAG_REGULAR;
+        bool isEmbedded = (sound->flags & AUDIO_ENTRY_FLAG_IS_EMBEDDED) != 0;
+        bool isCompressed = (sound->flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) != 0;
+        bool inAudo = !isRegular || isEmbedded || isCompressed;
 
-        if (isEmbedded || isCompressed) {
+        if (inAudo) {
             // Embedded audio: decode from AUDO chunk memory
             if (0 > sound->audioFile || (uint32_t) sound->audioFile >= ma->base.audioGroups[sound->audioGroup]->audo.count) {
                 fprintf(stderr, "Audio: Invalid audio file index %d for sound '%s'\n", sound->audioFile, sound->name);
@@ -563,11 +565,13 @@ static float maGetSoundLength(AudioSystem* audio, int32_t soundOrInstance) {
 
     Sound* sound = &dw->sond.sounds[soundOrInstance];
 
-    bool isEmbedded = (sound->flags & 0x01) != 0;
-    bool isCompressed = (sound->flags & 0x02) != 0;
+    bool isRegular = (sound->flags & AUDIO_ENTRY_FLAG_REGULAR) == AUDIO_ENTRY_FLAG_REGULAR;
+    bool isEmbedded = (sound->flags & AUDIO_ENTRY_FLAG_IS_EMBEDDED) != 0;
+    bool isCompressed = (sound->flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) != 0;
+    bool inAudo = !isRegular || isEmbedded || isCompressed;
     ma_decoder decoder;
     ma_result decResult;
-    if (isEmbedded || isCompressed) {
+    if (inAudo) {
         if (0 > sound->audioFile || (uint32_t) sound->audioFile >= ma->base.audioGroups[sound->audioGroup]->audo.count) return 0.0f;
         AudioEntry* entry = &ma->base.audioGroups[sound->audioGroup]->audo.entries[sound->audioFile];
         ma_decoder_config decoderConfig = ma_decoder_config_init_default();
@@ -605,6 +609,15 @@ static void maGroupLoad(AudioSystem* audio, int32_t groupIndex) {
         int sz = snprintf(nullptr, 0, "audiogroup%d.dat", groupIndex);
         char buf[sz + 1];
         snprintf(buf, sizeof(buf), "audiogroup%d.dat", groupIndex);
+
+        // The original runner does not care if the file doesn't exist (this may happen if someone uses "audio_group_load" on a non-existent group)
+        FileSystem* fileSystem = ((MaAudioSystem*)audio)->fileSystem;
+        char* resolvedPath = (((MaAudioSystem*)audio)->fileSystem->vtable->resolvePath(((MaAudioSystem*)audio)->fileSystem, buf));
+        if (!fileSystem->vtable->fileExists(fileSystem, resolvedPath)) {
+            fprintf(stderr, "Audio: Wanted to load Audio Group %d, but Audio Group %d does not exist!\n", groupIndex, groupIndex);
+            return;
+        }
+
         DataWin *audioGroup = DataWin_parse(((MaAudioSystem*)audio)->fileSystem->vtable->resolvePath(((MaAudioSystem*)audio)->fileSystem, buf),
         (DataWinParserOptions) {
             .parseAudo = true,

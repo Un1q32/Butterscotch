@@ -410,9 +410,7 @@ static int32_t allocateChunks(GsRenderer* gs, int chunksNeeded, uint32_t startId
 }
 
 // ===[ EE RAM Atlas Cache (Bump Allocator with LRU Eviction + Compaction) ]===
-// Caches uncompressed atlas pixel data in a EE RAM buffer, allowingzero-copy DMA uploads to VRAM without per-upload decompression or temp allocations.
-
-#define EE_CACHE_CAPACITY (2 * 1024 * 1024) // 2 MiB
+// Caches uncompressed atlas pixel data in a EE RAM buffer, allowing zero-copy DMA uploads to VRAM without per-upload decompression or temp allocations.
 
 // Uncompressed pixel data size for an atlas of the given size and bpp.
 static uint32_t atlasUncompressedSize(uint16_t width, uint16_t height, uint8_t bpp) {
@@ -460,9 +458,9 @@ static void computeAtlasReservation(GsRenderer* gs) {
 
 // Initialize the EE RAM cache. Called from gsInit after opening TEXTURES.BIN.
 static void initEeCache(GsRenderer* gs) {
-    gs->eeCacheCapacity = EE_CACHE_CAPACITY;
+    gs->eeCacheCapacity = gs->eeAtlasCacheBytes;
     gs->eeCacheBumpPtr = 0;
-    gs->eeCache = (uint8_t*) safeMemalign(128, EE_CACHE_CAPACITY);
+    gs->eeCache = (uint8_t*) safeMemalign(128, gs->eeAtlasCacheBytes);
 
     gs->eeCacheEntries = safeMalloc(gs->atlasCount * sizeof(EeAtlasCacheEntry));
     repeat(gs->atlasCount, i) {
@@ -1105,8 +1103,12 @@ static void gsBeginFrame(Renderer* renderer, MAYBE_UNUSED int32_t gameW, MAYBE_U
     }
 }
 
-static void gsEndFrame(MAYBE_UNUSED Renderer* renderer) {
-    // No-op: flip happens in main loop
+static void gsEndFrameInit(MAYBE_UNUSED Renderer* renderer) {
+    // No-op: GS draws directly to the display buffer.
+}
+
+static void gsEndFrameEnd(MAYBE_UNUSED Renderer* renderer) {
+    // No-op: flip happens in main loop.
 }
 
 static void gsBeginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH, MAYBE_UNUSED int32_t portX, MAYBE_UNUSED int32_t portY, MAYBE_UNUSED int32_t portW, MAYBE_UNUSED int32_t portH, MAYBE_UNUSED float viewAngle) {
@@ -1849,7 +1851,7 @@ static bool gsResolveGlyph(GsRenderer* gs, DataWin* dw, GsFontState* state, Font
     return true;
 }
 
-static void gsDrawText(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, MAYBE_UNUSED float angleDeg) {
+static void gsDrawText(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, MAYBE_UNUSED float angleDeg, float lineSeparation) {
     GsRenderer* gs = (GsRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
 
@@ -1878,7 +1880,8 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
 
     // Vertical alignment
     int32_t lineCount = TextUtils_countLines(text, textLen);
-    float lineStride = TextUtils_lineStride(font);
+    // Caller-supplied separation is in world pre-scale pixels; divide by font->scaleY so the transform restores it.
+    float lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font) : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
     float valignOffset = 0;
     if (renderer->drawValign != 0) {
         float totalHeight = (float) lineCount * lineStride;
@@ -1964,7 +1967,7 @@ static void gsDrawText(Renderer* renderer, const char* text, float x, float y, f
     }
 }
 
-static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, MAYBE_UNUSED float angleDeg, int32_t _c1, int32_t _c2, int32_t _c3, int32_t _c4, float alpha) {
+static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, MAYBE_UNUSED float angleDeg, int32_t _c1, int32_t _c2, int32_t _c3, int32_t _c4, float alpha, float lineSeparation) {
     GsRenderer* gs = (GsRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
 
@@ -1985,7 +1988,7 @@ static void gsDrawTextColor(Renderer* renderer, const char* text, float x, float
 
     // Vertical alignment
     int32_t lineCount = TextUtils_countLines(text, textLen);
-    float lineStride = TextUtils_lineStride(font);
+    float lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font) : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
     float totalHeight = (float) lineCount * lineStride;
     float valignOffset = 0;
     if (renderer->drawValign == 1) valignOffset = -totalHeight / 2.0f;
@@ -2444,13 +2447,61 @@ static void gsGpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, b
     gsApplyFBA(gs, alphaOnly ? 0 : 1);
 }
 
+// Fallback for tiles not pre-baked into ATLAS.BIN.
+// Mirrors the generic Renderer_drawTile path: clamp the tile's source rect to the TPAG content area, then draw as a sub-rect of the background TPAG.
+static void gsDrawTileFromTPAG(GsRenderer* gs, RoomTile* tile, float offsetX, float offsetY) {
+    Renderer* renderer = &gs->base;
+    int32_t tpagIndex = Renderer_resolveObjectTPAGIndex(renderer->dataWin, tile);
+    if (0 > tpagIndex) return;
+
+    TexturePageItem* tpag = &renderer->dataWin->tpag.items[tpagIndex];
+
+    int32_t srcX = tile->sourceX;
+    int32_t srcY = tile->sourceY;
+    int32_t srcW = (int32_t) tile->width;
+    int32_t srcH = (int32_t) tile->height;
+    float drawX = (float) tile->x + offsetX;
+    float drawY = (float) tile->y + offsetY;
+
+    int32_t contentLeft = tpag->targetX;
+    int32_t contentTop = tpag->targetY;
+    if (contentLeft > srcX) {
+        int32_t clip = contentLeft - srcX;
+        drawX += (float) clip * tile->scaleX;
+        srcW -= clip;
+        srcX = contentLeft;
+    }
+    if (contentTop > srcY) {
+        int32_t clip = contentTop - srcY;
+        drawY += (float) clip * tile->scaleY;
+        srcH -= clip;
+        srcY = contentTop;
+    }
+
+    int32_t contentRight = tpag->targetX + tpag->sourceWidth;
+    int32_t contentBottom = tpag->targetY + tpag->sourceHeight;
+    if (srcX + srcW > contentRight) srcW = contentRight - srcX;
+    if (srcY + srcH > contentBottom) srcH = contentBottom - srcY;
+
+    if (0 >= srcW || 0 >= srcH) return;
+
+    int32_t atlasOffX = srcX - tpag->targetX;
+    int32_t atlasOffY = srcY - tpag->targetY;
+
+    uint32_t bgr = tile->color & 0x00FFFFFF;
+    gsDrawSpritePart(renderer, tpagIndex, atlasOffX, atlasOffY, srcW, srcH, drawX, drawY, tile->scaleX, tile->scaleY, 0.0f, 0.0f, 0.0f, bgr, tile->alpha);
+}
+
 static void gsDrawTile(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY) {
     GsRenderer* gs = (GsRenderer*) renderer;
 
     // Look up the tile in the atlas tile entries
     AtlasTileEntry* tileEntry = findTileEntry(gs, (int16_t) tile->backgroundDefinition, (uint16_t) tile->sourceX, (uint16_t) tile->sourceY, (uint16_t) tile->width, (uint16_t) tile->height);
-    if (tileEntry == nullptr)
+    if (tileEntry == nullptr) {
+        // Runtime-added tiles (tile_add) won't be in the pre-baked atlas. Fall back to rendering the sub-rect from the background's TPAG entry.
+        gsDrawTileFromTPAG(gs, tile, offsetX, offsetY);
         return;
+    }
 
     // Set up GSTEXTURE for this tile entry
     GSTEXTURE tex;
@@ -2602,7 +2653,15 @@ static int32_t gsCreateSurface(Renderer* renderer, int32_t width, int32_t height
 
 static bool gsSurfaceExists(Renderer* renderer, int32_t surfaceID) {
     GsRenderer* gs = (GsRenderer*) renderer;
+    // The application_surface (sentinel ID on PS2) is always live: it's the GS screen framebuffer at a fixed VRAM address.
+    if (surfaceID == APPLICATION_SURFACE_ID) return true;
     return gsSurfaceIsLive(gs, surfaceID);
+}
+
+// PS2's application surface IS the GS screen framebuffer, which lives at a fixed VRAM address outside the chunk pool.
+// There's nothing to allocate, so we just return the sentinel ID.
+static int32_t gsEnsureApplicationSurface(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) {
+    return APPLICATION_SURFACE_ID;
 }
 
 static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
@@ -2697,24 +2756,45 @@ static bool gsSetRenderTarget(Renderer* renderer, int32_t surfaceID) {
 
 static float gsGetSurfaceWidth(Renderer* renderer, int32_t surfaceID) {
     GsRenderer* gs = (GsRenderer*) renderer;
+    if (surfaceID == APPLICATION_SURFACE_ID) return (float) gs->gsGlobal->Width;
     if (!gsSurfaceIsLive(gs, surfaceID)) return 0.0f;
     return (float) gs->surfaces[surfaceID].width;
 }
 
 static float gsGetSurfaceHeight(Renderer* renderer, int32_t surfaceID) {
     GsRenderer* gs = (GsRenderer*) renderer;
+    if (surfaceID == APPLICATION_SURFACE_ID) return (float) gs->gsGlobal->Height;
     if (!gsSurfaceIsLive(gs, surfaceID)) return 0.0f;
     return (float) gs->surfaces[surfaceID].height;
 }
 
 static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth, int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg, uint32_t color, float alpha) {
     GsRenderer* gs = (GsRenderer*) renderer;
-    if (!gsSurfaceIsLive(gs, surfaceID)) return;
 
-    Surface* s = &gs->surfaces[surfaceID];
-    if (s->chunkCount == 0) return; // phantom surface — fully transparent, nothing to draw
+    int32_t surfaceW;
+    int32_t surfaceH;
+    uint32_t srcVram;
+    uint32_t srcTbw;
 
-    if (0 > srcWidth) { srcLeft = 0; srcTop = 0; srcWidth = s->width; srcHeight = s->height; }
+    if (surfaceID == APPLICATION_SURFACE_ID) {
+        // Sample the live GS screen framebuffer; flush pending draws first so the texture read sees a coherent FB.
+        gsKit_queue_exec(gs->gsGlobal);
+        dmaKit_wait_fast();
+        surfaceW = (int32_t) gs->gsGlobal->Width;
+        surfaceH = (int32_t) gs->gsGlobal->Height;
+        srcVram = gs->gsGlobal->ScreenBuffer[gs->gsGlobal->ActiveBuffer & 1];
+        srcTbw = (uint32_t) gs->gsGlobal->Width / 64;
+    } else {
+        if (!gsSurfaceIsLive(gs, surfaceID)) return;
+        Surface* s = &gs->surfaces[surfaceID];
+        if (s->chunkCount == 0) return; // phantom surface — fully transparent, nothing to draw
+        surfaceW = s->width;
+        surfaceH = s->height;
+        srcVram = gs->textureVramBase + (uint32_t) s->firstChunk * VRAM_CHUNK_SIZE;
+        srcTbw = s->tbw;
+    }
+
+    if (0 > srcWidth) { srcLeft = 0; srcTop = 0; srcWidth = surfaceW; srcHeight = surfaceH; }
 
     float worldW = (float) srcWidth * xscale;
     float worldH = (float) srcHeight * yscale;
@@ -2739,10 +2819,10 @@ static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, int32_t srcLeft
 
     GSTEXTURE tex;
     memset(&tex, 0, sizeof(tex));
-    tex.Width = s->width;
-    tex.Height = s->height;
-    tex.TBW = s->tbw;
-    tex.Vram = gs->textureVramBase + (uint32_t) s->firstChunk * VRAM_CHUNK_SIZE;
+    tex.Width = surfaceW;
+    tex.Height = surfaceH;
+    tex.TBW = srcTbw;
+    tex.Vram = srcVram;
     tex.PSM = GS_PSM_CT16;
     tex.Filter = GS_FILTER_NEAREST;
 
@@ -2769,7 +2849,9 @@ static void gsDrawSurface(Renderer* renderer, int32_t surfaceID, int32_t srcLeft
     // Restore default REPEAT so subsequent atlas draws aren't stuck on this region.
     gsKit_set_clamp(gs->gsGlobal, GS_CMODE_REPEAT);
 }
-static void gsSurfaceResize(MAYBE_UNUSED Renderer* renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED int32_t width, MAYBE_UNUSED int32_t height) {}
+static void gsSurfaceResize(MAYBE_UNUSED Renderer* renderer, int32_t surfaceID, int32_t width, int32_t height) {
+    // No-op: PS2 doesn't actually resize anything
+}
 
 static void gsSurfaceFree(Renderer* renderer, int32_t surfaceID) {
     GsRenderer* gs = (GsRenderer*) renderer;
@@ -2865,7 +2947,8 @@ static RendererVtable gsVtable = {
     .init = gsInit,
     .destroy = gsDestroy,
     .beginFrame = gsBeginFrame,
-    .endFrame = gsEndFrame,
+    .endFrameInit = gsEndFrameInit,
+    .endFrameEnd = gsEndFrameEnd,
     .beginView = gsBeginView,
     .endView = gsEndView,
     .beginGUI = gsBeginGUI,
@@ -2898,6 +2981,7 @@ static RendererVtable gsVtable = {
     .createSurface = gsCreateSurface,
     .surfaceExists = gsSurfaceExists,
     .setRenderTarget = gsSetRenderTarget,
+    .ensureApplicationSurface = gsEnsureApplicationSurface,
     .getSurfaceWidth = gsGetSurfaceWidth,
     .getSurfaceHeight = gsGetSurfaceHeight,
     .drawSurface = gsDrawSurface,
@@ -2909,8 +2993,9 @@ static RendererVtable gsVtable = {
 
 // ===[ Public API ]===
 
-Renderer* GsRenderer_create(GSGLOBAL* gsGlobal) {
+Renderer* GsRenderer_create(GSGLOBAL* gsGlobal, int64_t eeAtlasCacheMiB) {
     GsRenderer* gs = safeCalloc(1, sizeof(GsRenderer));
+    gs->eeAtlasCacheBytes = eeAtlasCacheMiB;
     gs->base.vtable = &gsVtable;
     gs->gsGlobal = gsGlobal;
     gs->scaleX = 2.0f;

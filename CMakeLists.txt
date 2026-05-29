@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.21)
+
+if(PLATFORM STREQUAL "ps3")
+set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/cmake/ppu.cmake)
+endif()
+
 project(butterscotch C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra)
 
-set(PLATFORM "" CACHE STRING "Platform backend")
+set(PLATFORM "desktop" CACHE STRING "Platform backend")
+set(DESKTOP_BACKEND "" CACHE STRING "Desktop platform backend")
 set(AUDIO_BACKEND "" CACHE STRING "Audio backend")
 
 # Build metadata
@@ -15,10 +21,6 @@ add_compile_definitions(
     BUTTERSCOTCH_COMMIT_HASH="${BUTTERSCOTCH_COMMIT_HASH}"
     BUTTERSCOTCH_COMMIT_DATE="${BUTTERSCOTCH_COMMIT_DATE}"
 )
-
-if(PLATFORM STREQUAL "")
-    message(FATAL_ERROR "PLATFORM is not set! Use -DPLATFORM=glfw (or another supported platform).")
-endif()
 
 # Audio backend defaults
 if(AUDIO_BACKEND STREQUAL "")
@@ -49,20 +51,24 @@ endif()
 
 # To avoid unused code in production builds that are only used for a single game (example: PlayStation 2 target), we can enable/disable specific features
 #
-# If only a single bytecode version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
+# If only a single WAD version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
 # performance on low end hardware!
-option(ENABLE_BC16 "Enable support for Bytecode Version 16" ON)
-option(ENABLE_BC17 "Enable support for Bytecode Version 17" ON)
+option(ENABLE_WAD14 "Enable support for WAD Version 14 and below" ON)
+option(ENABLE_WAD16 "Enable support for WAD Version 15/16" ON)
+option(ENABLE_WAD17 "Enable support for WAD Version 17" ON)
 option(ENABLE_LEGACY_GL "Enable the legacy OpenGL renderer" ON)
 option(ENABLE_MODERN_GL "Enable the modern OpenGL renderer" ON)
-if(NOT ENABLE_BC16 AND NOT ENABLE_BC17)
-    message(FATAL_ERROR "You need to build Butterscotch with at least one bytecode version enabled!")
+if(NOT ENABLE_WAD14 AND NOT ENABLE_WAD16 AND NOT ENABLE_WAD17)
+    message(FATAL_ERROR "You need to build Butterscotch with at least one WAD version enabled!")
 endif()
-if(ENABLE_BC16)
-    add_compile_definitions(ENABLE_BC16)
+if(ENABLE_WAD14)
+    add_compile_definitions(ENABLE_WAD14)
 endif()
-if(ENABLE_BC17)
-    add_compile_definitions(ENABLE_BC17)
+if(ENABLE_WAD16)
+    add_compile_definitions(ENABLE_WAD16)
+endif()
+if(ENABLE_WAD17)
+    add_compile_definitions(ENABLE_WAD17)
 endif()
 if(ENABLE_LEGACY_GL)
     add_compile_definitions(ENABLE_LEGACY_GL)
@@ -106,6 +112,7 @@ elseif(AUDIO_BACKEND STREQUAL "miniaudio")
     target_include_directories(butterscotch PUBLIC vendor/miniaudio)
     target_include_directories(butterscotch PUBLIC src/audio/miniaudio)
     add_compile_definitions(USE_MINIAUDIO)
+    set(AUDIO_LIBRARIES pthread)
 elseif(AUDIO_BACKEND STREQUAL "web")
     target_include_directories(butterscotch PUBLIC vendor/miniaudio)
     target_include_directories(butterscotch PUBLIC src/audio/web)
@@ -123,9 +130,29 @@ target_include_directories(butterscotch PUBLIC vendor/stb/ds)
 target_sources(butterscotch PRIVATE vendor/md5/md5.c)
 target_include_directories(butterscotch PUBLIC vendor/md5)
 
-if(PLATFORM STREQUAL "glfw")
-    if (NOT ENABLE_LEGACY_GL AND NOT ENABLE_MODERN_GL)
-        message(FATAL_ERROR "GLFW requires at least one GL version!")
+# Steve Reid's SHA1 implementation
+target_sources(butterscotch PRIVATE vendor/sha1/sha1.c)
+target_include_directories(butterscotch PUBLIC vendor/sha1)
+
+# Base64 implementation
+target_sources(butterscotch PRIVATE vendor/base64/base64.c)
+target_include_directories(butterscotch PUBLIC vendor/base64)
+
+# bzip2
+add_library(bzip2 STATIC
+    vendor/bzip2/blocksort.c
+    vendor/bzip2/bzlib.c
+    vendor/bzip2/compress.c
+    vendor/bzip2/crctable.c
+    vendor/bzip2/decompress.c
+    vendor/bzip2/huffman.c
+    vendor/bzip2/randtable.c
+)
+target_include_directories(bzip2 PUBLIC vendor/bzip2)
+
+if(PLATFORM STREQUAL "desktop")
+    if(NOT ENABLE_LEGACY_GL AND NOT ENABLE_MODERN_GL)
+        message(FATAL_ERROR "You must enable at least one renderer!")
     endif()
     file(GLOB GL_SOURCES src/image/*.c src/gl_common/*.c)
     if(ENABLE_LEGACY_GL)
@@ -186,28 +213,49 @@ if(PLATFORM STREQUAL "glfw")
     # stb_vorbis
     target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
 
+    set(PLATFORM_LIBRARIES glad m bzip2)
     if(MINGW)
-        find_package(glfw3 REQUIRED)
-        set(GLFW3_LIBRARIES glfw3)
-
-        # Target Windows 7+ (avoids referencing newer APIs like MapViewOfFileNuma2 that MinGW import libs don't provide)
-        # https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/include/sdkddkver.h
-        target_compile_definitions(butterscotch PRIVATE _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000 WIN32_LEAN_AND_MEAN)
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m opengl32 gdi32 winmm bz2)
-        target_link_options(butterscotch PRIVATE -static)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Haiku")
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(GLFW3 REQUIRED glfw3)
-        target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
-        target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m pthread bz2)
-    else()
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(GLFW3 REQUIRED glfw3)
-        target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
-        target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} ${AUDIO_LIBRARIES} glad m pthread dl bz2)
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} opengl32 gdi32 winmm)
+    elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} dl)
     endif()
+
+    if(DESKTOP_BACKEND STREQUAL "glfw3")
+        if(MINGW)
+            find_package(glfw3 REQUIRED)
+
+            # Target Windows 7+ (avoids referencing newer APIs like MapViewOfFileNuma2 that MinGW import libs don't provide)
+            # https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/include/sdkddkver.h
+            target_compile_definitions(butterscotch PRIVATE _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000 WIN32_LEAN_AND_MEAN)
+            target_link_options(butterscotch PRIVATE -static)
+            set(BACKEND_LIBRARIES glfw3 opengl32 gdi32 winmm)
+        else()
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(GLFW3 REQUIRED glfw3)
+            target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
+            target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
+            set(BACKEND_LIBRARIES ${GLFW3_LIBRARIES})
+        endif()
+
+        #gamecontrollerdb
+        add_custom_command(TARGET butterscotch POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
+                $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
+        )
+    elseif(DESKTOP_BACKEND STREQUAL "glfw2")
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(GLFW2 REQUIRED libglfw)
+        target_include_directories(butterscotch PRIVATE ${GLFW2_INCLUDE_DIRS})
+        target_link_directories(butterscotch PRIVATE ${GLFW2_LIBRARY_DIRS})
+        set(BACKEND_LIBRARIES ${GLFW2_LIBRARIES})
+    elseif(DESKTOP_BACKEND STREQUAL "sdl1")
+        find_package(SDL REQUIRED)
+        target_include_directories(butterscotch PUBLIC ${SDL_INCLUDE_DIR})
+        set(BACKEND_LIBRARIES ${SDL_LIBRARY})
+    endif()
+    target_link_libraries(butterscotch ${BACKEND_LIBRARIES} ${AUDIO_LIBRARIES} ${PLATFORM_LIBRARIES})
+    target_sources(butterscotch PRIVATE src/desktop/backends/${DESKTOP_BACKEND}.c)
 
     # Enable AddressSanitizer by default in Debug builds
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -220,13 +268,6 @@ if(PLATFORM STREQUAL "glfw")
         target_compile_options(butterscotch PRIVATE -fsanitize=address -fno-omit-frame-pointer)
         target_link_options(butterscotch PRIVATE -fsanitize=address)
     endif()
-
-    #gamecontrollerdb
-    add_custom_command(TARGET butterscotch POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
-            $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
-    )
 elseif(PLATFORM STREQUAL "web")
     if (NOT ENABLE_MODERN_GL)
         message(FATAL_ERROR "Web requires modern gl!")
@@ -243,6 +284,9 @@ elseif(PLATFORM STREQUAL "web")
 
     # stb_vorbis (for miniaudio's OGG decoding)
     target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
+
+    # bzip2
+    target_link_libraries(butterscotch PRIVATE bzip2)
 
     set_target_properties(butterscotch PROPERTIES SUFFIX ".mjs")
 
@@ -263,11 +307,10 @@ elseif(PLATFORM STREQUAL "web")
             "-sALLOW_MEMORY_GROWTH"
             "-sSHARED_MEMORY=1"
             "-sPTHREAD_POOL_SIZE=4"
-            "--use-port=bzip2"
             "-pthread"
     )
 
-    target_compile_options(butterscotch PRIVATE "--use-port=bzip2" "-pthread")
+    target_compile_options(butterscotch PRIVATE "-pthread")
 elseif(PLATFORM STREQUAL "web-meta")
     set_target_properties(butterscotch PROPERTIES
         SUFFIX ".mjs"
@@ -327,7 +370,7 @@ elseif(PLATFORM STREQUAL "ps2")
 
     # Platform identifier for PS2-specific code paths (e.g., scratchpad allocation)
     add_compile_definitions(PLATFORM_PS2)
-    
+
     # PS2 renderer hot path logs
     option(ENABLE_PS2_RENDERER_LOGS "Enable hot path logs in the PS2 renderer" OFF)
     if(ENABLE_PS2_RENDERER_LOGS)
@@ -512,7 +555,7 @@ elseif(PLATFORM STREQUAL "ps3")
     if(ENABLE_VM_STUB_LOGS)
         add_compile_definitions(ENABLE_VM_STUB_LOGS)
     endif()
-    
+
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)
 
@@ -528,7 +571,7 @@ elseif(PLATFORM STREQUAL "ps3")
 
     find_package(SDL2 REQUIRED)
     target_include_directories(butterscotch PRIVATE ${SDL2_INCLUDE_DIRS})
-    target_link_libraries(butterscotch PRIVATE ${SDL2_LIBRARIES} m gcm_sys rsx sysutil io audio rt lv2 io audio bz2)
+    target_link_libraries(butterscotch PRIVATE ${SDL2_LIBRARIES} m gcm_sys rsx sysutil io audio rt lv2 io audio bzip2)
 else()
     message(FATAL_ERROR "Unknown platform! ${PLATFORM}")
 endif()
