@@ -223,6 +223,12 @@ typedef struct {
     bool freed;    // true when the slot is destroyed and available for reuse by ds_list_create (matches native GMS)
 } DsList;
 
+// ds_queue: FIFO, items[0] is the head (next to dequeue), last item is the tail.
+typedef struct {
+    RValue* items; // stb_ds dynamic array of RValues
+    bool freed;    // true when the slot is destroyed and available for reuse by ds_queue_create
+} DsQueue;
+
 // ===[ GML Buffer System ]===
 
 // Buffer type constants (matching GML)
@@ -382,11 +388,10 @@ struct Runner {
     // ID returned by renderer->vtable->ensureApplicationSurface each frame. Real surface ID on GL/GL-legacy,
     // APPLICATION_SURFACE_ID (-1) on PS2. This is what BUILTIN_VAR_APPLICATION_SURFACE returns to GML.
     int32_t applicationSurfaceId;
-    void* nativeWindow;
-    void (*setWindowTitle)(void* window, const char* title);
-    bool (*getWindowSize)(void* window, int32_t* outW, int32_t* outH);
-    void (*setWindowSize)(void* window, int32_t width, int32_t height);
-    bool (*windowHasFocus)(void* window);
+    void (*setWindowTitle)(const char* title);
+    bool (*getWindowSize)(int32_t* outW, int32_t* outH);
+    void (*setWindowSize)(int32_t width, int32_t height);
+    bool (*windowHasFocus)(void);
     TileLayerMapEntry* tileLayerMap; // stb_ds hashmap: depth -> tile layer state
     RuntimeLayer* runtimeLayers; // stb_ds array, index-parallel to currentRoom->layers for parsed entries; dynamic entries appended
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
@@ -405,7 +410,7 @@ struct Runner {
     bool drawableListStructureDirty;
     bool drawableListSortDirty;
     // Dummy instance to serve as "self" during GLOB script execution
-    // In bytecode version 17+, global init scripts store method values on "self" via Pop.v.v
+    // In WAD version 17+, global init scripts store method values on "self" via Pop.v.v
     // The real runner uses a persistent YYObjectBase for this, the YYObjectBase is a "parent" of Instance
     // For now, we'll use a dummy Instance with objectIndex = STRUCT_OBJECT_INDEX as a hack
     Instance* globalScopeInstance;
@@ -417,6 +422,7 @@ struct Runner {
     // ===[ Builtin function state ]===
     DsMapEntry** dsMapPool; // stb_ds array of stb_ds hashmaps
     DsList* dsListPool; // stb_ds array of DsList
+    DsQueue* dsQueuePool; // stb_ds array of DsQueue
     GmlBuffer* gmlBufferPool; // stb_ds array of GmlBuffer
     MpGrid* mpGridPool; // stb_ds array of motion-planning grids
 
@@ -463,11 +469,21 @@ struct Runner {
 
     // GameMaker surface "stack".
     int32_t surfaceStack[MAX_SURFACES];
+
+    // Both must be set
+    // The original runner actually spawns a new process when game_change is called
+    char* pendingWorkingDirectory;
+    char* pendingLaunchParameters;
+
+    // GameMaker launcher parameters
+    // Just like the original runner, argv[0] is included in gameArgs
+    char** gameArgs;
 };
 
 const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype);
 void Runner_reset(Runner* runner);
 Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileSystem* fileSystem, AudioSystem* audioSystem);
+void Runner_setGameArgs(Runner* runner, char** argv, int32_t argc);
 void Runner_initFirstRoom(Runner* runner);
 void Runner_step(Runner* runner);
 void Runner_handlePendingRoomChange(Runner* runner);

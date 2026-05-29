@@ -141,6 +141,29 @@ static DsList* dsListGet(Runner* runner, int32_t id) {
     return &runner->dsListPool[id];
 }
 
+// ===[ DS_QUEUE SYSTEM ]===
+
+static int32_t dsQueueCreate(Runner* runner) {
+    int32_t poolSize = (int32_t) arrlen(runner->dsQueuePool);
+    repeat(poolSize, i) {
+        if (runner->dsQueuePool[i].freed) {
+            runner->dsQueuePool[i].freed = false;
+            runner->dsQueuePool[i].items = nullptr;
+            return i;
+        }
+    }
+    DsQueue q = { .items = nullptr, .freed = false };
+    int32_t id = poolSize;
+    arrput(runner->dsQueuePool, q);
+    return id;
+}
+
+static DsQueue* dsQueueGet(Runner* runner, int32_t id) {
+    if (0 > id || id >= (int32_t) arrlen(runner->dsQueuePool)) return nullptr;
+    if (runner->dsQueuePool[id].freed) return nullptr;
+    return &runner->dsQueuePool[id];
+}
+
 // ===[ BUILT-IN VARIABLE GET/SET ]===
 
 /**
@@ -230,7 +253,14 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "buffer_u64", BUILTIN_VAR_BUFFER_U64 },
     { "buffer_u8", BUILTIN_VAR_BUFFER_U8 },
     { "buffer_wrap", BUILTIN_VAR_BUFFER_WRAP },
+    { "current_day", BUILTIN_VAR_CURRENT_DAY },
+    { "current_hour", BUILTIN_VAR_CURRENT_HOUR },
+    { "current_minute", BUILTIN_VAR_CURRENT_MINUTE },
+    { "current_month", BUILTIN_VAR_CURRENT_MONTH },
+    { "current_second", BUILTIN_VAR_CURRENT_SECOND },
     { "current_time", BUILTIN_VAR_CURRENT_TIME },
+    { "current_weekday", BUILTIN_VAR_CURRENT_WEEKDAY },
+    { "current_year", BUILTIN_VAR_CURRENT_YEAR },
     { "debug_mode", BUILTIN_VAR_DEBUG_MODE },
     { "depth", BUILTIN_VAR_DEPTH },
     { "direction", BUILTIN_VAR_DIRECTION },
@@ -788,6 +818,25 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
             return RValue_makeReal((GMLReal) runner->backgroundColor);
 
         // Timing
+        case BUILTIN_VAR_CURRENT_DAY:
+        case BUILTIN_VAR_CURRENT_HOUR:
+        case BUILTIN_VAR_CURRENT_MINUTE:
+        case BUILTIN_VAR_CURRENT_MONTH:
+        case BUILTIN_VAR_CURRENT_SECOND:
+        case BUILTIN_VAR_CURRENT_WEEKDAY:
+        case BUILTIN_VAR_CURRENT_YEAR: {
+            time_t now = time(NULL);
+            struct tm *t = localtime(&now);
+            switch (builtinVarId) {
+                case BUILTIN_VAR_CURRENT_DAY:     return RValue_makeReal(t->tm_mday);
+                case BUILTIN_VAR_CURRENT_HOUR:    return RValue_makeReal(t->tm_hour);
+                case BUILTIN_VAR_CURRENT_MINUTE:  return RValue_makeReal(t->tm_min);
+                case BUILTIN_VAR_CURRENT_MONTH:   return RValue_makeReal(t->tm_mon + 1);
+                case BUILTIN_VAR_CURRENT_SECOND:  return RValue_makeReal(t->tm_sec);
+                case BUILTIN_VAR_CURRENT_WEEKDAY: return RValue_makeReal(t->tm_wday);
+                case BUILTIN_VAR_CURRENT_YEAR:    return RValue_makeReal(t->tm_year + 1900);
+            }
+        }
         case BUILTIN_VAR_CURRENT_TIME: {
             #ifdef _WIN32
             LARGE_INTEGER freq, counter;
@@ -1044,6 +1093,13 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
             bool changed = value != inst->spriteIndex;
             if (changed) {
                 inst->spriteIndex = value;
+                // The native runner resets the image_index to zero if the new frame count is smaller than the current image_index
+                if (value >= 0 && runner->dataWin->sprt.count > (uint32_t) value) {
+                    int32_t newFrameCount = (int32_t) runner->dataWin->sprt.sprites[value].textureCount;
+                    if (newFrameCount > 0 && (int32_t) inst->imageIndex >= newFrameCount) {
+                        inst->imageIndex = 0;
+                    }
+                }
                 SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
             }
             return;
@@ -1344,7 +1400,14 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
         case BUILTIN_VAR_BUFFER_FIXED ... BUILTIN_VAR_BUFFER_SEEK_END:
         case BUILTIN_VAR_ID:
         case BUILTIN_VAR_OBJECT_INDEX:
+        case BUILTIN_VAR_CURRENT_DAY:
+        case BUILTIN_VAR_CURRENT_HOUR:
+        case BUILTIN_VAR_CURRENT_MINUTE:
+        case BUILTIN_VAR_CURRENT_MONTH:
+        case BUILTIN_VAR_CURRENT_SECOND:
         case BUILTIN_VAR_CURRENT_TIME:
+        case BUILTIN_VAR_CURRENT_WEEKDAY:
+        case BUILTIN_VAR_CURRENT_YEAR:
         case BUILTIN_VAR_VIEW_CURRENT:
         case BUILTIN_VAR_PATH_INDEX:
         case BUILTIN_VAR_DEBUG_MODE:
@@ -1665,7 +1728,7 @@ static RValue builtin_is_undefined(MAYBE_UNUSED VMContext* ctx, RValue* args, in
     return RValue_makeBool(args[0].type == RVALUE_UNDEFINED);
 }
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 static RValue builtin_is_method(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeBool(false);
     return RValue_makeBool(args[0].type == RVALUE_METHOD);
@@ -3153,7 +3216,7 @@ static RValue builtin_variable_struct_exists(VMContext* ctx, RValue* args, int32
 
 // ===[ METHOD ]===
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 static RValue builtin_method(VMContext* ctx, MAYBE_UNUSED RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeUndefined();
 
@@ -3188,7 +3251,7 @@ static RValue builtin_script_execute(VMContext* ctx, RValue* args, int32_t argCo
 
     int32_t codeId;
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     if (args[0].type == RVALUE_METHOD) {
         // If it is a method value, we'll need to extract code index directly
         codeId = args[0].method->codeIndex;
@@ -3199,9 +3262,9 @@ static RValue builtin_script_execute(VMContext* ctx, RValue* args, int32_t argCo
         int32_t rawArg = RValue_toInt32(args[0]);
         codeId = -1;
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
         // In GMS 2 BC17+, "scriptName" in source code is compiled as a FUNC-table index (same as builtin_method). Resolve funcIdx -> codeIndex via codeIndexByName.
-        if (IS_BC17_OR_HIGHER(ctx) && rawArg >= 0 && ctx->dataWin->func.functionCount > (uint32_t) rawArg) {
+        if (IS_WAD17_OR_HIGHER(ctx) && rawArg >= 0 && ctx->dataWin->func.functionCount > (uint32_t) rawArg) {
             const char* funcName = ctx->dataWin->func.functions[rawArg].name;
             if (funcName != nullptr) {
                 ptrdiff_t idx = shgeti(ctx->codeIndexByName, (char*) funcName);
@@ -3241,7 +3304,7 @@ static RValue builtin_script_execute(VMContext* ctx, RValue* args, int32_t argCo
 
     // If the method has a bound instance, temporarily swap currentInstance
     Instance* savedInstance = ctx->currentInstance;
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     if (args[0].type == RVALUE_METHOD && args[0].method->boundInstanceId >= 0) {
         Runner* runner = ctx->runner;
         Instance* bound = hmget(runner->instancesById, args[0].method->boundInstanceId);
@@ -3266,6 +3329,20 @@ static RValue builtin_os_get_region(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RV
 }
 
 STUB_RETURN_FALSE(os_is_paused);
+
+static RValue builtin_environment_get_variable(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    char* name = RValue_toString(args[0]);
+    if (name == nullptr) return RValue_makeOwnedString(safeStrdup(""));
+
+    const char* value = getenv(name);
+    free(name);
+
+    if (value == nullptr) {
+        return RValue_makeOwnedString(safeStrdup(""));
+    }
+
+    return RValue_makeOwnedString(safeStrdup(value));
+}
 
 // ===[ DS_MAP BUILTIN FUNCTIONS ]===
 
@@ -3795,20 +3872,15 @@ static void dsStreamWriteValue(uint8_t** buf, RValue val) {
     }
 }
 
-static RValue builtin_ds_list_write(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
-    Runner* runner = ctx->runner;
-    int32_t id = RValue_toInt32(args[0]);
-    DsList* list = dsListGet(runner, id);
-    if (list == nullptr) return RValue_makeOwnedString(safeStrdup(""));
-
-    uint8_t* buf = nullptr;
-    int32_t len = (int32_t) arrlen(list->items);
-    dsStreamAppendU32(&buf, 303); // version tag (see GameMaker-HTML5 ds_list.js)
-    dsStreamAppendU32(&buf, (uint32_t) len);
+// Appends each RValue in `items` (length `len`) to `buf` using the ds wire format.
+static void dsStreamAppendValues(uint8_t** buf, const RValue* items, int32_t len) {
     repeat(len, i) {
-        dsStreamWriteValue(&buf, list->items[i]);
+        dsStreamWriteValue(buf, items[i]);
     }
+}
 
+// Consumes "buf" (stb_ds array): hex-encodes it, frees it, and returns the hex as an owned-string RValue.
+static RValue dsStreamFinishToHexString(uint8_t* buf) {
     int32_t byteLen = (int32_t) arrlen(buf);
     char* hex = safeMalloc((size_t) byteLen * 2 + 1);
     static const char HEX_CHARS[] = "0123456789ABCDEF";
@@ -3819,6 +3891,193 @@ static RValue builtin_ds_list_write(VMContext* ctx, RValue* args, MAYBE_UNUSED i
     hex[byteLen * 2] = '\0';
     arrfree(buf);
     return RValue_makeOwnedString(hex);
+}
+
+static RValue builtin_ds_list_write(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    DsList* list = dsListGet(runner, id);
+    if (list == nullptr) return RValue_makeOwnedString(safeStrdup(""));
+
+    uint8_t* buf = nullptr;
+    int32_t len = (int32_t) arrlen(list->items);
+    dsStreamAppendU32(&buf, 303); // version tag (see GameMaker-HTML5 ds_list.js)
+    dsStreamAppendU32(&buf, (uint32_t) len);
+    dsStreamAppendValues(&buf, list->items, len);
+    return dsStreamFinishToHexString(buf);
+}
+
+// ===[ DS_QUEUE FUNCTIONS ]===
+
+static RValue builtin_ds_queue_create(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    return RValue_makeReal((GMLReal) dsQueueCreate(ctx->runner));
+}
+
+static RValue builtin_ds_queue_destroy(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeUndefined();
+    repeat(arrlen(q->items), i) {
+        RValue_free(&q->items[i]);
+    }
+    arrfree(q->items);
+    q->items = nullptr;
+    q->freed = true;
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_ds_queue_clear(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeUndefined();
+    repeat(arrlen(q->items), i) {
+        RValue_free(&q->items[i]);
+    }
+    arrfree(q->items);
+    q->items = nullptr;
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_ds_queue_copy(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    int32_t destId = RValue_toInt32(args[0]);
+    int32_t srcId = RValue_toInt32(args[1]);
+    DsQueue* dest = dsQueueGet(runner, destId);
+    DsQueue* src = dsQueueGet(runner, srcId);
+    if (dest == nullptr || src == nullptr) return RValue_makeUndefined();
+    repeat(arrlen(dest->items), i) {
+        RValue_free(&dest->items[i]);
+    }
+    arrfree(dest->items);
+    dest->items = nullptr;
+    repeat(arrlen(src->items), i) {
+        arrput(dest->items, RValue_makeIndependent(src->items[i]));
+    }
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_ds_queue_size(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) arrlen(q->items));
+}
+
+static RValue builtin_ds_queue_empty(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeBool(true);
+    return RValue_makeBool(arrlen(q->items) == 0);
+}
+
+static RValue builtin_ds_queue_enqueue(VMContext* ctx, RValue* args, int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeUndefined();
+    repeat(argCount - 1, i) {
+        arrput(q->items, RValue_makeIndependent(args[i + 1]));
+    }
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_ds_queue_dequeue(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr || arrlen(q->items) == 0) return RValue_makeReal(0.0);
+    RValue head = q->items[0];
+    arrdel(q->items, 0);
+    return head;
+}
+
+static RValue builtin_ds_queue_head(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr || arrlen(q->items) == 0) return RValue_makeReal(0.0);
+    return RValue_makeIndependent(q->items[0]);
+}
+
+static RValue builtin_ds_queue_tail(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr || arrlen(q->items) == 0) return RValue_makeReal(0.0);
+    return RValue_makeIndependent(q->items[arrlen(q->items) - 1]);
+}
+
+static RValue builtin_ds_queue_write(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeOwnedString(safeStrdup(""));
+
+    uint8_t* buf = nullptr;
+    int32_t len = (int32_t) arrlen(q->items);
+    // Wire format mirrors GameMaker-HTML5 ds_queue.js: magic 203, last=len, first=0, count=len, then values head->tail.
+    dsStreamAppendU32(&buf, 203);
+    dsStreamAppendU32(&buf, (uint32_t) len);
+    dsStreamAppendU32(&buf, 0);
+    dsStreamAppendU32(&buf, (uint32_t) len);
+    dsStreamAppendValues(&buf, q->items, len);
+    return dsStreamFinishToHexString(buf);
+}
+
+static RValue builtin_ds_queue_read(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t id = RValue_toInt32(args[0]);
+    if (args[1].type != RVALUE_STRING || args[1].string == nullptr || args[1].string[0] == '\0') {
+        return RValue_makeBool(false);
+    }
+    DsQueue* q = dsQueueGet(ctx->runner, id);
+    if (q == nullptr) return RValue_makeBool(false);
+
+    const char* hex = args[1].string;
+    int32_t hexLen = (int32_t) strlen(hex);
+    if (2 > hexLen || (hexLen & 1) != 0) return RValue_makeBool(false);
+
+    int32_t byteLen = hexLen / 2;
+    uint8_t* bytes = safeMalloc((size_t) byteLen);
+    repeat(byteLen, i) {
+        int hi = dsHexNibble(hex[i * 2]);
+        int lo = dsHexNibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) { free(bytes); return RValue_makeBool(false); }
+        bytes[i] = (uint8_t) ((hi << 4) | lo);
+    }
+
+    DsReadStream s = { .data = bytes, .size = byteLen, .pos = 0, .error = false };
+    uint32_t magic = dsStreamReadU32(&s);
+    int32_t version;
+    if (magic == 202) {
+        version = 3;
+    } else if (magic == 203) {
+        version = 0;
+    } else {
+        free(bytes);
+        return RValue_makeBool(false);
+    }
+
+    // last = total values stored on the wire (loop count), first = how many at the start to skip, count = informational.
+    int32_t last = dsStreamReadS32(&s);
+    int32_t first = dsStreamReadS32(&s);
+    (void) dsStreamReadS32(&s); // count
+    if (s.error || 0 > last) { free(bytes); return RValue_makeBool(false); }
+
+    // Replace queue contents.
+    repeat(arrlen(q->items), i) {
+        RValue_free(&q->items[i]);
+    }
+    arrfree(q->items);
+    q->items = nullptr;
+
+    repeat(last, i) {
+        RValue v = dsStreamReadValue(&s, version);
+        if (s.error) { RValue_free(&v); free(bytes); return RValue_makeBool(false); }
+        if (first <= 0) {
+            arrput(q->items, v);
+        } else {
+            RValue_free(&v);
+        }
+        first--;
+    }
+
+    free(bytes);
+    return RValue_makeBool(true);
 }
 
 // ===[ ARRAY FUNCTIONS ]===
@@ -4513,8 +4772,8 @@ static RValue builtin_audio_group_is_loaded(VMContext* ctx, RValue* args, MAYBE_
 }
 
 static RValue builtin_audio_play_music(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
-    if (ctx->dataWin->gen8.bytecodeVersion >= 14) {
-        fprintf(stderr, "VM: [%s] audio_play_music is no-op in bytecode version 14+!\n", ctx->currentCodeName);
+    if (ctx->dataWin->gen8.wadVersion >= 14) {
+        fprintf(stderr, "VM: [%s] audio_play_music is no-op in WAD version 14+!\n", ctx->currentCodeName);
         return RValue_makeUndefined();
     }
 
@@ -4529,8 +4788,8 @@ static RValue builtin_audio_play_music(VMContext* ctx, RValue* args, MAYBE_UNUSE
 }
 
 static RValue builtin_audio_stop_music(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    if (ctx->dataWin->gen8.bytecodeVersion >= 14) {
-        fprintf(stderr, "VM: [%s] audio_stop_music is no-op in bytecode version 14+!\n", ctx->currentCodeName);
+    if (ctx->dataWin->gen8.wadVersion >= 14) {
+        fprintf(stderr, "VM: [%s] audio_stop_music is no-op in WAD version 14+!\n", ctx->currentCodeName);
         return RValue_makeUndefined();
     }
 
@@ -4647,7 +4906,7 @@ static RValue builtin_application_surface_enable(VMContext* ctx, RValue* args, M
     if (!enable) {
         int32_t w = runner->applicationWidth;
         int32_t h = runner->applicationHeight;
-        if (runner->getWindowSize != nullptr && runner->getWindowSize(runner->nativeWindow, &w, &h) && w > 0 && h > 0) {
+        if (runner->getWindowSize != nullptr && runner->getWindowSize(&w, &h) && w > 0 && h > 0) {
             runner->applicationWidth = w;
             runner->applicationHeight = h;
         }
@@ -5538,7 +5797,7 @@ static RValue builtin_window_get_width(VMContext* ctx, MAYBE_UNUSED RValue* args
     if (runner != nullptr && runner->getWindowSize != nullptr) {
         int32_t w = 0;
         int32_t h = 0;
-        if (runner->getWindowSize(runner->nativeWindow, &w, &h)) {
+        if (runner->getWindowSize(&w, &h)) {
             return RValue_makeReal((GMLReal) w);
         }
     }
@@ -5550,7 +5809,7 @@ static RValue builtin_window_get_height(VMContext* ctx, MAYBE_UNUSED RValue* arg
     if (runner != nullptr && runner->getWindowSize != nullptr) {
         int32_t w = 0;
         int32_t h = 0;
-        if (runner->getWindowSize(runner->nativeWindow, &w, &h)) {
+        if (runner->getWindowSize(&w, &h)) {
             return RValue_makeReal((GMLReal) h);
         }
     }
@@ -5569,7 +5828,7 @@ static RValue builtin_window_set_size(VMContext* ctx, RValue* args, MAYBE_UNUSED
     if (height < 1) height = 1;
 
     if (runner->setWindowSize != nullptr) {
-        runner->setWindowSize(runner->nativeWindow, width, height);
+        runner->setWindowSize(width, height);
     }
 
     return RValue_makeUndefined();
@@ -5581,7 +5840,7 @@ static RValue builtin_window_set_caption(VMContext* ctx, MAYBE_UNUSED RValue* ar
 
     Runner* runner = ctx->runner;
     if (runner->setWindowTitle) {
-        runner->setWindowTitle(runner->nativeWindow, val);
+        runner->setWindowTitle(val);
         printf("GL: Window title set to: %s\n", val);
     }
 
@@ -5592,7 +5851,7 @@ static RValue builtin_window_set_caption(VMContext* ctx, MAYBE_UNUSED RValue* ar
 static RValue builtin_window_has_focus(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     if (runner != nullptr && runner->windowHasFocus) {
-        return RValue_makeBool(runner->windowHasFocus(runner->nativeWindow));
+        return RValue_makeBool(runner->windowHasFocus());
     }
 
     return RValue_makeBool(true);
@@ -6123,6 +6382,148 @@ static RValue builtin_action_move_to(VMContext* ctx, MAYBE_UNUSED RValue* args, 
         }
         SpatialGrid_markInstanceAsDirty(ctx->runner->spatialGrid, inst);
     }
+    return RValue_makeUndefined();
+}
+
+// action_move_start(): teleport the current instance back to its (xstart, ystart) spawn position.
+static RValue builtin_action_move_start(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->currentInstance != nullptr) {
+        Instance* inst = ctx->currentInstance;
+        inst->x = inst->xstart;
+        inst->y = inst->ystart;
+        SpatialGrid_markInstanceAsDirty(ctx->runner->spatialGrid, inst);
+    }
+    return RValue_makeUndefined();
+}
+
+// action_potential_step(x, y, stepsize, checkall): DnD wrapper around mp_potential_step that honors the "relative" checkbox by shifting (x, y) by the current instance's position.
+static RValue builtin_action_potential_step(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    GMLReal goalX = RValue_toReal(args[0]);
+    GMLReal goalY = RValue_toReal(args[1]);
+    GMLReal stepsize = RValue_toReal(args[2]);
+    bool checkall = RValue_toBool(args[3]);
+    if (ctx->actionRelativeFlag && ctx->currentInstance != nullptr) {
+        goalX += ctx->currentInstance->x;
+        goalY += ctx->currentInstance->y;
+    }
+    return builtinMpPotentialStepCommon(ctx, goalX, goalY, stepsize, INSTANCE_ALL, checkall);
+}
+
+// Tests whether the current instance can occupy (testX, testY) without colliding (useall=true checks all instances, false checks only solids).
+static bool bounceTestFree(Runner* runner, Instance* inst, GMLReal testX, GMLReal testY, bool useall) {
+    if (useall) {
+        return placeEmptyAt(runner, inst, testX, testY);
+    }
+    return placeFreeAt(runner, inst, testX, testY);
+}
+
+// action_bounce(adv, against): DnD wrapper around move_bounce_solid / move_bounce_all.
+// * adv (arg[0]): real, treated as bool via the native ">= 0.5" rule.
+// * against (arg[1]): real menu pick: 0 = solid only, 1 = all instances (useall = (against == 1.0)).
+static RValue builtin_action_bounce(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->currentInstance == nullptr) return RValue_makeUndefined();
+
+    Runner* runner = ctx->runner;
+    Instance* inst = ctx->currentInstance;
+    bool advanced = RValue_toReal(args[0]) >= 0.5;
+    bool useall = RValue_toReal(args[1]) == 1.0;
+
+    bool didBounce = false;
+    if (!bounceTestFree(runner, inst, inst->x, inst->y, useall)) {
+        inst->x = inst->xprevious;
+        inst->y = inst->yprevious;
+        SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
+        didBounce = true;
+    }
+
+    GMLReal xx = inst->x;
+    GMLReal yy = inst->y;
+
+    if (advanced) {
+        int32_t n = 18;
+        GMLReal dir = 10.0 * GMLReal_round(inst->direction / 10.0);
+        GMLReal ldir = dir;
+        GMLReal rdir = dir;
+        for (int32_t i = 1; 2 * n > i; i++) {
+            ldir -= 180.0 / (GMLReal) n;
+            GMLReal xn = xx + inst->speed * GMLReal_cos(ldir * (M_PI / 180.0));
+            GMLReal yn = yy - inst->speed * GMLReal_sin(ldir * (M_PI / 180.0));
+            if (bounceTestFree(runner, inst, xn, yn, useall)) {
+                break;
+            }
+            didBounce = true;
+        }
+        for (int32_t i = 1; 2 * n > i; i++) {
+            rdir += 180.0 / (GMLReal) n;
+            GMLReal xn = xx + inst->speed * GMLReal_cos(rdir * (M_PI / 180.0));
+            GMLReal yn = yy - inst->speed * GMLReal_sin(rdir * (M_PI / 180.0));
+            if (bounceTestFree(runner, inst, xn, yn, useall)) {
+                break;
+            }
+            didBounce = true;
+        }
+        if (didBounce) {
+            inst->direction = (float) (180.0 + (ldir + rdir) - dir);
+            Instance_computeComponentsFromSpeed(inst);
+        }
+    } else {
+        bool canMoveH = bounceTestFree(runner, inst, inst->x + inst->hspeed, inst->y, useall);
+        bool canMoveV = bounceTestFree(runner, inst, inst->x, inst->y + inst->vspeed, useall);
+        bool canMoveDiagonally = bounceTestFree(runner, inst, inst->x + inst->hspeed, inst->y + inst->vspeed, useall);
+        if (!canMoveH && !canMoveV) {
+            inst->hspeed = -inst->hspeed;
+            inst->vspeed = -inst->vspeed;
+        } else if (canMoveH && canMoveV && !canMoveDiagonally) {
+            inst->hspeed = -inst->hspeed;
+            inst->vspeed = -inst->vspeed;
+        } else if (!canMoveH) {
+            inst->hspeed = -inst->hspeed;
+        } else if (!canMoveV) {
+            inst->vspeed = -inst->vspeed;
+        }
+        Instance_computeSpeedFromComponents(inst);
+    }
+    return RValue_makeUndefined();
+}
+
+// Steps the current instance up to maxdist pixels in "dir" (degrees), stopping the unit before it would collide. useall=true tests all instances, false tests only solids.
+static void moveContactCommon(Runner* runner, Instance* inst, GMLReal dir, GMLReal maxdist, bool useall) {
+    int32_t steps = (maxdist <= 0.0) ? 1000 : (int32_t) GMLReal_bankersRound(maxdist);
+    GMLReal rad = dir * (M_PI / 180.0);
+    GMLReal dx = GMLReal_cos(rad);
+    GMLReal dy = -GMLReal_sin(rad);
+    if (!bounceTestFree(runner, inst, inst->x, inst->y, useall)) {
+        return;
+    }
+    for (int32_t i = 1; steps >= i; i++) {
+        GMLReal nx = inst->x + dx;
+        GMLReal ny = inst->y + dy;
+        if (!bounceTestFree(runner, inst, nx, ny, useall)) {
+            return;
+        }
+        inst->x = (float) nx;
+        inst->y = (float) ny;
+        SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
+    }
+}
+
+static RValue builtin_move_contact_solid(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->currentInstance == nullptr) return RValue_makeUndefined();
+    GMLReal dir = RValue_toReal(args[0]);
+    GMLReal maxdist = RValue_toReal(args[1]);
+    moveContactCommon(ctx->runner, ctx->currentInstance, dir, maxdist, false);
+    return RValue_makeUndefined();
+}
+
+// action_move_contact(dir, maxdist, against): DnD wrapper around move_contact_solid / move_contact_all.
+// * args[2] == 0: solid only
+// * args[2] == 1: use all
+static RValue builtin_action_move_contact(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->currentInstance == nullptr) return RValue_makeUndefined();
+    GMLReal dir = RValue_toReal(args[0]);
+    GMLReal maxdist = RValue_toReal(args[1]);
+    bool useall = RValue_toReal(args[2]) == 1.0;
+    moveContactCommon(ctx->runner, ctx->currentInstance, dir, maxdist, useall);
     return RValue_makeUndefined();
 }
 
@@ -7821,6 +8222,30 @@ static RValue builtin_sprite_get_yoffset(VMContext* ctx, RValue* args, MAYBE_UNU
     return RValue_makeReal((GMLReal) ctx->dataWin->sprt.sprites[spriteIndex].originY);
 }
 
+static RValue builtin_sprite_get_bbox_left(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t spriteIndex = (int32_t) RValue_toReal(args[0]);
+    if (0 > spriteIndex || (uint32_t) spriteIndex >= ctx->dataWin->sprt.count) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) ctx->dataWin->sprt.sprites[spriteIndex].marginLeft);
+}
+
+static RValue builtin_sprite_get_bbox_right(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t spriteIndex = (int32_t) RValue_toReal(args[0]);
+    if (0 > spriteIndex || (uint32_t) spriteIndex >= ctx->dataWin->sprt.count) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) ctx->dataWin->sprt.sprites[spriteIndex].marginRight);
+}
+
+static RValue builtin_sprite_get_bbox_top(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t spriteIndex = (int32_t) RValue_toReal(args[0]);
+    if (0 > spriteIndex || (uint32_t) spriteIndex >= ctx->dataWin->sprt.count) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) ctx->dataWin->sprt.sprites[spriteIndex].marginTop);
+}
+
+static RValue builtin_sprite_get_bbox_bottom(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    int32_t spriteIndex = (int32_t) RValue_toReal(args[0]);
+    if (0 > spriteIndex || (uint32_t) spriteIndex >= ctx->dataWin->sprt.count) return RValue_makeReal(0.0);
+    return RValue_makeReal((GMLReal) ctx->dataWin->sprt.sprites[spriteIndex].marginBottom);
+}
+
 static RValue builtin_sprite_get_name(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     int32_t spriteIndex = (int32_t) RValue_toReal(args[0]);
     if (0 > spriteIndex || (uint32_t) spriteIndex >= ctx->dataWin->sprt.count) return RValue_makeString("<undefined>");
@@ -8919,41 +9344,39 @@ static RValue builtin_alarm_get(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE
     return RValue_makeReal(-1);
 }
 
+#define LEGACY_DND_CMP_EQ 0
+#define LEGACY_DND_CMP_LT 1
+#define LEGACY_DND_CMP_GT 2
+#define LEGACY_DND_CMP_LTE 3
+#define LEGACY_DND_CMP_GTE 4
+
+// action_if_variable(variable, value, op)
+// Compares the variable against value using op (LEGACY_DND_CMP_*).
+// String operands compare via strcmp; mismatched types compare unequal.
 static RValue builtin_action_if_variable(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    bool check;
-    switch (args[0].type) {
-        case RVALUE_REAL: {
-            check = args[0].real != 0.0;
-            break;
-        }
-        case RVALUE_INT32: {
-            check = args[0].int32 != 0;
-            break;
-        }
-#ifndef NO_RVALUE_INT64
-        case RVALUE_INT64: {
-            check = args[0].int64 != 0;
-            break;
-        }
-#endif
-        case RVALUE_BOOL: {
-            check = args[0].int32 != 0;
-            break;
-        }
-        case RVALUE_STRING: {
-            check = args[0].string != nullptr && args[0].string[0] != '\0';
-            break;
-        }
-        default: {
-            check = false;
-            break;
-        }
+    int32_t op = RValue_toInt32(args[2]);
+    GMLReal diff;
+
+    bool aIsString = args[0].type == RVALUE_STRING;
+    bool bIsString = args[1].type == RVALUE_STRING;
+    if (aIsString != bIsString) {
+        return RValue_makeBool(false);
+    }
+    if (aIsString) {
+        const char* sa = args[0].string != nullptr ? args[0].string : "";
+        const char* sb = args[1].string != nullptr ? args[1].string : "";
+        diff = (GMLReal) strcmp(sa, sb);
+    } else {
+        diff = (GMLReal) (RValue_toReal(args[0]) - RValue_toReal(args[1]));
     }
 
-    int32_t idx = check ? 1 : 2;
-    RValue result = args[idx];
-    args[idx].ownsReference = false; // Steal ownership to avoid double-free in handleCall
-    return result;
+    bool result;
+    if (op == LEGACY_DND_CMP_LT) result = diff < 0.0;
+    else if (op == LEGACY_DND_CMP_GT) result = diff > 0.0;
+    else if (op == LEGACY_DND_CMP_LTE) result = diff <= 0.0;
+    else if (op == LEGACY_DND_CMP_GTE) result = diff >= 0.0;
+    else result = diff == 0.0f;
+    return RValue_makeBool(result);
 }
 
 static RValue builtin_action_if_dice(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -8967,9 +9390,6 @@ static RValue builtin_action_if_dice(VMContext* ctx, MAYBE_UNUSED RValue* args, 
     return RValue_makeBool((rand() % probability) == 0);
 }
 
-#define LEGACY_DND_CMP_EQ 0
-#define LEGACY_DND_CMP_LT 1
-#define LEGACY_DND_CMP_GT 2
 
 static RValue builtin_action_set_score(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
@@ -9082,6 +9502,119 @@ static RValue builtin_action_if_health(VMContext* ctx, MAYBE_UNUSED RValue* args
     else result = runner->health == value;
     return RValue_makeBool(result);
 }
+
+// action_if_aligned(hsnap, vsnap) - Returns true if self.x is a multiple of hsnap AND self.y is a multiple of vsnap.
+// A snap value <= 0 disables that axis check.
+static RValue builtin_action_if_aligned(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Instance* self = ctx->currentInstance;
+    if (self == nullptr) return RValue_makeBool(false);
+
+    GMLReal hsnap = RValue_toReal(args[0]);
+    GMLReal vsnap = RValue_toReal(args[1]);
+
+    if (hsnap > 0.0) {
+        GMLReal q = self->x / hsnap;
+        GMLReal rounded = (GMLReal) (long) (q + (q >= 0.0 ? 0.5 : -0.5));
+        if (((self->x - hsnap * rounded) > 0.001) || (-0.001 > (self->x - hsnap * rounded))) return RValue_makeBool(false);
+    }
+    if (vsnap > 0.0) {
+        GMLReal q = self->y / vsnap;
+        GMLReal rounded = (GMLReal) (long) (q + (q >= 0.0 ? 0.5 : -0.5));
+        if (((self->y - vsnap * rounded) > 0.001) || (-0.001 > (self->y - vsnap * rounded))) return RValue_makeBool(false);
+    }
+    return RValue_makeBool(true);
+}
+
+// action_if_collision(x, y, kind)
+// * kind 0: "only solid": returns true if NOT place_free (there's a solid collision)
+// * kind 1: "all": returns true if NOT place_empty (there's any collision)
+// When relative flag is set, x/y are offsets from self.
+static RValue builtin_action_if_collision(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Instance* self = ctx->currentInstance;
+    if (self == nullptr) return RValue_makeBool(false);
+
+    float x = (float) RValue_toReal(args[0]);
+    float y = (float) RValue_toReal(args[1]);
+    int32_t kind = RValue_toInt32(args[2]);
+    applyActionRelativeOffset(ctx, &x, &y);
+
+    RValue posArgs[2] = { RValue_makeReal((GMLReal) x), RValue_makeReal((GMLReal) y) };
+    RValue inner = (kind == 0) ? builtin_place_free(ctx, posArgs, 2) : builtin_place_empty(ctx, posArgs, 2);
+    return RValue_makeBool(!RValue_toBool(inner));
+}
+
+// action_if_empty(x, y, kind)
+// * kind 0: returns place_free(x, y)
+// * kind 1: returns place_empty(x, y)
+static RValue builtin_action_if_empty(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Instance* self = ctx->currentInstance;
+    if (self == nullptr) return RValue_makeBool(true);
+
+    float x = (float) RValue_toReal(args[0]);
+    float y = (float) RValue_toReal(args[1]);
+    int32_t kind = RValue_toInt32(args[2]);
+    applyActionRelativeOffset(ctx, &x, &y);
+
+    RValue posArgs[2] = { RValue_makeReal((GMLReal) x), RValue_makeReal((GMLReal) y) };
+    return (kind == 0) ? builtin_place_free(ctx, posArgs, 2) : builtin_place_empty(ctx, posArgs, 2);
+}
+
+// action_if_object(obj, x, y)
+// Returns true if the self instance, moved to (x, y), would be touching an instance of obj.
+// Equivalent to place_meeting(x, y, obj). Relative flag offsets x/y from self.
+static RValue builtin_action_if_object(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Instance* self = ctx->currentInstance;
+    if (self == nullptr) return RValue_makeBool(false);
+
+    int32_t obj = RValue_toInt32(args[0]);
+    float x = (float) RValue_toReal(args[1]);
+    float y = (float) RValue_toReal(args[2]);
+    applyActionRelativeOffset(ctx, &x, &y);
+
+    RValue meetArgs[3] = { RValue_makeReal((GMLReal) x), RValue_makeReal((GMLReal) y), RValue_makeReal((GMLReal) obj) };
+    return builtin_place_meeting(ctx, meetArgs, 3);
+}
+
+// action_if_number(obj, number, op)
+// * op 0: instance_number(obj) == number
+// * op 1: instance_number(obj) < number
+// * op 2: instance_number(obj) > number
+static RValue builtin_action_if_number(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    GMLReal value = RValue_toReal(args[1]);
+    int32_t op = RValue_toInt32(args[2]);
+
+    RValue numArgs[1] = { args[0] };
+    GMLReal count = RValue_toReal(builtin_instance_number(ctx, numArgs, 1));
+
+    bool result;
+    if (op == LEGACY_DND_CMP_LT) result = count < value;
+    else if (op == LEGACY_DND_CMP_GT) result = count > value;
+    else result = count == value;
+    return RValue_makeBool(result);
+}
+
+// action_if_next_room()
+// Returns true if there IS a room after the current one in room order.
+static RValue builtin_action_if_next_room(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    uint32_t count = runner->dataWin->gen8.roomOrderCount;
+    if (count == 0) return RValue_makeBool(false);
+    int32_t lastRoom = runner->dataWin->gen8.roomOrder[count - 1];
+    return RValue_makeBool(runner->currentRoomIndex != lastRoom);
+}
+
+// action_if_previous_room()
+// Returns true if there IS a room before the current one in room order.
+static RValue builtin_action_if_previous_room(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    uint32_t count = runner->dataWin->gen8.roomOrderCount;
+    if (count == 0) return RValue_makeBool(false);
+    int32_t firstRoom = runner->dataWin->gen8.roomOrder[0];
+    return RValue_makeBool(runner->currentRoomIndex != firstRoom);
+}
+
+STUB_RETURN_FALSE(action_if_mouse)
+STUB_RETURN_FALSE(action_if_question)
 
 // DnD "back" / "bar" color preset in BGR format enum used by action_draw_health.
 // Indices match the GMS 1.x DnD dropdowns:
@@ -9922,7 +10455,7 @@ static RValue builtin_layer_tile_alpha(VMContext* ctx, RValue* args, MAYBE_UNUSE
     return RValue_makeUndefined();
 }
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 static RValue builtin_layer_get_all_elements(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     int32_t id = resolveLayerIdArg(runner, args[0]);
@@ -10064,7 +10597,7 @@ static RValue builtin_layer_sprite_destroy(VMContext* ctx, RValue* args, MAYBE_U
     return RValue_makeUndefined();
 }
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 static RValue builtin_layer_tilemap_get_id(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(-1.0);
     Runner* runner = ctx->runner;
@@ -10233,7 +10766,7 @@ static RValue builtin_Other(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNU
     return RValue_makeInt32((int32_t) inst->instanceId);
 }
 
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
 // @@NullObject@@ - GMS2 internal sentinel pushed before "method()" when the GML source is a struct literal or anonymous constructor: the bound self is "nothing yet", and @@NewGMLObject@@ rebinds to the fresh struct.
 // We encode it as INSTANCE_NOONE so "method()" stores it as is (its -1 -> current remap does not fire).
 static RValue builtin_NullObject(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -11076,6 +11609,16 @@ static RValue builtin_json_decode(VMContext* ctx, RValue* args, int32_t argCount
     return RValue_makeReal(mapIndex);
 }
 
+static RValue builtin_object_exists(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) {
+        return RValue_makeBool(false);
+    }
+
+    int32_t id = RValue_toInt32(args[0]);
+    bool exists = id >= 0 && ctx->dataWin->objt.count > (uint32_t) id;
+    return RValue_makeBool(exists);
+}
+
 static RValue builtin_object_get_sprite(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) {
         fprintf(stderr, "[object_get_sprite] Expected at least 1 argument\n");
@@ -11365,6 +11908,38 @@ static RValue builtin_gpu_get_colorwriteenable(VMContext* ctx, MAYBE_UNUSED RVal
     return RValue_makeArray(out);
 }
 
+static RValue builtin_game_change(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+
+    char* workingDirectory = RValue_toString(args[0]);
+    char* launchParameters = RValue_toString(args[1]);
+
+    // I really doubt that a game calls game_change twice in a row, but...
+    if (ctx->runner->pendingWorkingDirectory != nullptr) {
+        free(ctx->runner->pendingWorkingDirectory);
+    }
+
+    if (ctx->runner->pendingLaunchParameters != nullptr) {
+        free(ctx->runner->pendingLaunchParameters);
+    }
+
+    ctx->runner->pendingWorkingDirectory = workingDirectory;
+    ctx->runner->pendingLaunchParameters = launchParameters;
+
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_parameter_count(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    return RValue_makeReal((int32_t) arrlen(ctx->runner->gameArgs));
+}
+
+static RValue builtin_parameter_string(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeString("");
+    int32_t index = RValue_toInt32(args[0]);
+    if (0 > index || index >= (int32_t) arrlen(ctx->runner->gameArgs)) return RValue_makeString("");
+    return RValue_makeString(ctx->runner->gameArgs[index]);
+}
+
 // ===[ REGISTRATION ]===
 
 void VMBuiltins_registerAll(VMContext* ctx) {
@@ -11411,7 +11986,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "is_int32", builtin_is_int32);
     VM_registerBuiltin(ctx, "is_int64", builtin_is_int64);
     VM_registerBuiltin(ctx, "is_undefined", builtin_is_undefined);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "is_method", builtin_is_method);
     VM_registerBuiltin(ctx, "is_callable", builtin_is_callable);
 #endif
@@ -11454,6 +12029,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "action_move_point", builtin_move_towards_point);
     }
     VM_registerBuiltin(ctx, "move_snap", builtin_move_snap);
+    VM_registerBuiltin(ctx, "move_contact_solid", builtin_move_contact_solid);
     VM_registerBuiltin(ctx, "lengthdir_x", builtin_lengthdir_x);
     VM_registerBuiltin(ctx, "lengthdir_y", builtin_lengthdir_y);
 
@@ -11513,7 +12089,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 
     // Script
     VM_registerBuiltin(ctx, "script_execute", builtin_script_execute);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "method", builtin_method);
 #endif
 
@@ -11521,6 +12097,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "os_get_language", builtin_os_get_language);
     VM_registerBuiltin(ctx, "os_get_region", builtin_os_get_region);
     VM_registerBuiltin(ctx, "os_is_paused", builtin_os_is_paused);
+    VM_registerBuiltin(ctx, "environment_get_variable", builtin_environment_get_variable);
 
     // ds_map
     VM_registerBuiltin(ctx, "ds_map_create", builtin_ds_map_create);
@@ -11547,6 +12124,20 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "ds_list_clear", builtin_ds_list_clear);
     VM_registerBuiltin(ctx, "ds_list_write", builtin_ds_list_write);
     VM_registerBuiltin(ctx, "ds_list_read", builtin_ds_list_read);
+
+    // ds_queue
+    VM_registerBuiltin(ctx, "ds_queue_create", builtin_ds_queue_create);
+    VM_registerBuiltin(ctx, "ds_queue_destroy", builtin_ds_queue_destroy);
+    VM_registerBuiltin(ctx, "ds_queue_clear", builtin_ds_queue_clear);
+    VM_registerBuiltin(ctx, "ds_queue_copy", builtin_ds_queue_copy);
+    VM_registerBuiltin(ctx, "ds_queue_size", builtin_ds_queue_size);
+    VM_registerBuiltin(ctx, "ds_queue_empty", builtin_ds_queue_empty);
+    VM_registerBuiltin(ctx, "ds_queue_enqueue", builtin_ds_queue_enqueue);
+    VM_registerBuiltin(ctx, "ds_queue_dequeue", builtin_ds_queue_dequeue);
+    VM_registerBuiltin(ctx, "ds_queue_head", builtin_ds_queue_head);
+    VM_registerBuiltin(ctx, "ds_queue_tail", builtin_ds_queue_tail);
+    VM_registerBuiltin(ctx, "ds_queue_write", builtin_ds_queue_write);
+    VM_registerBuiltin(ctx, "ds_queue_read", builtin_ds_queue_read);
 
     // Array
 
@@ -11743,6 +12334,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "action_set_relative", builtin_action_set_relative);
         VM_registerBuiltin(ctx, "action_move", builtin_action_move);
         VM_registerBuiltin(ctx, "action_move_to", builtin_action_move_to);
+        VM_registerBuiltin(ctx, "action_move_start", builtin_action_move_start);
+        VM_registerBuiltin(ctx, "action_potential_step", builtin_action_potential_step);
+        VM_registerBuiltin(ctx, "action_bounce", builtin_action_bounce);
+        VM_registerBuiltin(ctx, "action_move_contact", builtin_action_move_contact);
         VM_registerBuiltin(ctx, "action_snap", builtin_action_snap);
         VM_registerBuiltin(ctx, "action_set_friction", builtin_action_set_friction);
         VM_registerBuiltin(ctx, "action_set_gravity", builtin_action_set_gravity);
@@ -11883,6 +12478,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "sprite_get_xoffset", builtin_sprite_get_xoffset);
     VM_registerBuiltin(ctx, "sprite_get_yoffset", builtin_sprite_get_yoffset);
     VM_registerBuiltin(ctx, "sprite_get_name", builtin_sprite_get_name);
+    VM_registerBuiltin(ctx, "sprite_get_bbox_left", builtin_sprite_get_bbox_left);
+    VM_registerBuiltin(ctx, "sprite_get_bbox_right", builtin_sprite_get_bbox_right);
+    VM_registerBuiltin(ctx, "sprite_get_bbox_top", builtin_sprite_get_bbox_top);
+    VM_registerBuiltin(ctx, "sprite_get_bbox_bottom", builtin_sprite_get_bbox_bottom);
     VM_registerBuiltin(ctx, "sprite_set_offset", builtin_sprite_set_offset);
     VM_registerBuiltin(ctx, "sprite_create_from_surface", builtin_sprite_create_from_surface);
     VM_registerBuiltin(ctx, "sprite_delete", builtin_sprite_delete);
@@ -11976,7 +12575,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "layer_hspeed", builtin_layer_hspeed);
     VM_registerBuiltin(ctx, "layer_get_vspeed", builtin_layer_get_vspeed);
     VM_registerBuiltin(ctx, "layer_vspeed", builtin_layer_vspeed);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "layer_get_all", builtin_layer_get_all);
     VM_registerBuiltin(ctx, "layer_get_all_elements", builtin_layer_get_all_elements);
 #endif
@@ -11991,7 +12590,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "layer_sprite_get_angle", builtin_layer_sprite_get_angle);
     VM_registerBuiltin(ctx, "layer_sprite_destroy", builtin_layer_sprite_destroy);
     VM_registerBuiltin(ctx, "layer_tile_visible", builtin_layer_tile_visible);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "layer_get_id_at_depth", builtin_layer_get_id_at_depth);
     VM_registerBuiltin(ctx, "layer_tilemap_get_id", builtin_layer_tilemap_get_id);
     VM_registerBuiltin(ctx, "draw_tilemap", builtin_draw_tilemap);
@@ -12022,7 +12621,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "@@This@@", builtin_This);
     VM_registerBuiltin(ctx, "@@Other@@", builtin_Other);
     VM_registerBuiltin(ctx, "@@Global@@", builtin_Global);
-#if IS_BC17_OR_HIGHER_ENABLED
+#if IS_WAD17_OR_HIGHER_ENABLED
     VM_registerBuiltin(ctx, "@@NullObject@@", builtin_NullObject);
     VM_registerBuiltin(ctx, "@@NewGMLObject@@", builtin_NewGMLObject);
     VM_registerBuiltin(ctx, "@@SetStatic@@", builtin_SetStatic);
@@ -12079,6 +12678,15 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "action_draw_life_images", builtin_action_draw_life_images);
         VM_registerBuiltin(ctx, "action_set_health", builtin_action_set_health);
         VM_registerBuiltin(ctx, "action_if_health", builtin_action_if_health);
+        VM_registerBuiltin(ctx, "action_if_aligned", builtin_action_if_aligned);
+        VM_registerBuiltin(ctx, "action_if_collision", builtin_action_if_collision);
+        VM_registerBuiltin(ctx, "action_if_empty", builtin_action_if_empty);
+        VM_registerBuiltin(ctx, "action_if_object", builtin_action_if_object);
+        VM_registerBuiltin(ctx, "action_if_number", builtin_action_if_number);
+        VM_registerBuiltin(ctx, "action_if_next_room", builtin_action_if_next_room);
+        VM_registerBuiltin(ctx, "action_if_previous_room", builtin_action_if_previous_room);
+        VM_registerBuiltin(ctx, "action_if_mouse", builtin_action_if_mouse);
+        VM_registerBuiltin(ctx, "action_if_question", builtin_action_if_question);
         VM_registerBuiltin(ctx, "action_draw_health", builtin_action_draw_health);
         VM_registerBuiltin(ctx, "action_sprite_set", builtin_action_sprite_set);
         VM_registerBuiltin(ctx, "action_message", builtin_action_message);
@@ -12109,6 +12717,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "font_add_sprite", builtin_font_add_sprite);
     VM_registerBuiltin(ctx, "font_add_sprite_ext", builtin_font_add_sprite_ext);
     VM_registerBuiltin(ctx, "font_get_name", builtin_font_get_name);
+    VM_registerBuiltin(ctx, "object_exists", builtin_object_exists);
     VM_registerBuiltin(ctx, "object_get_sprite", builtin_object_get_sprite);
     VM_registerBuiltin(ctx, "asset_get_index", builtin_asset_get_index);
     VM_registerBuiltin(ctx,"gpu_set_blendmode", builtin_gpu_set_blendmode);
@@ -12130,4 +12739,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "draw_set_color_write_enable", builtin_gpu_set_colorwriteenable);
         VM_registerBuiltin(ctx, "draw_set_colour_write_enable", builtin_gpu_set_colorwriteenable);
     }
+    VM_registerBuiltin(ctx, "game_change", builtin_game_change);
+    VM_registerBuiltin(ctx, "parameter_count", builtin_parameter_count);
+    VM_registerBuiltin(ctx, "parameter_string", builtin_parameter_string);
 }
