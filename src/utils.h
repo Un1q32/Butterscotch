@@ -25,7 +25,6 @@
     do { \
         if (!(condition)) { \
         fprintf(stderr, "Requirement failed at %s:%d\n", __FILE__, __LINE__); \
-        fflush(stderr); \
         abort(); \
     } \
 } while (0)
@@ -34,7 +33,6 @@
 do { \
 if (!(condition)) { \
 fprintf(stderr, "Requirement failed at %s:%d: %s\n", __FILE__, __LINE__, message); \
-fflush(stderr); \
 abort(); \
 } \
 } while (0)
@@ -43,7 +41,6 @@ abort(); \
 do { \
 if (!(condition)) { \
 fprintf(stderr, "Requirement failed at %s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
-fflush(stderr); \
 abort(); \
 } \
 } while (0)
@@ -52,7 +49,6 @@ abort(); \
 typeof(ptr) _val = (ptr); \
 if (_val == NULL) { \
 fprintf(stderr, "%s:%d: requireNotNull failed: '%s'\n", __FILE__, __LINE__, #ptr); \
-fflush(stderr); \
 abort(); \
 } \
 _val; \
@@ -62,7 +58,6 @@ _val; \
 typeof(ptr) _val = (ptr); \
 if (_val == NULL) { \
 fprintf(stderr, "%s:%d: requireNotNull failed: %s\n", __FILE__, __LINE__, (msg)); \
-fflush(stderr); \
 abort(); \
 } \
 _val; \
