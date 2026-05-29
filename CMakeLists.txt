@@ -77,6 +77,9 @@ endif()
 if(ENABLE_MODERN_GL)
     add_compile_definitions(ENABLE_MODERN_GL)
 endif()
+if(ENABLE_SW_RENDERER)
+    add_compile_definitions(ENABLE_SW_RENDERER)
+endif()
 
 if(PLATFORM STREQUAL "web-meta")
     # Metadata-only build: just the data.win parser and its direct deps. No VM, no runner, no I/O subsystems.
