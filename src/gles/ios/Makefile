@@ -112,6 +112,12 @@ Butterscotch_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore OpenGLES Open
 # AL_BUFFER_CACHE_SIZE/BUDGET caps the shared buffer cache so we never
 # hold more than ~2 MB of decoded PCM across all cached sounds — this
 # prevents OOM during the boss fight's SFX burst.
+# Inject the build's git commit as the app version (shown in Settings →
+# About). Falls back to "unknown" outside a git checkout; a trailing "+"
+# marks a dirty working tree.
+BS_GIT_VERSION := $(shell git rev-parse --short=10 HEAD 2>/dev/null || echo unknown)
+BS_GIT_DIRTY   := $(shell git diff --quiet HEAD 2>/dev/null || echo +)
+
 Butterscotch_CFLAGS  = -fno-objc-arc \
                        -ffixed-r9 \
                        -DBS_PLATFORM_IOS=1 \
@@ -123,6 +129,7 @@ Butterscotch_CFLAGS  = -fno-objc-arc \
                        -DAL_BUFFER_CACHE_SIZE=32 \
                        -DAL_BUFFER_CACHE_BUDGET='(2u * 1024u * 1024u)' \
                        -DAL_BUFFER_CACHE_MAX_ENTRY='(64u * 1024u)' \
+                       -DBS_GIT_VERSION='"$(BS_GIT_VERSION)$(BS_GIT_DIRTY)"' \
                        -I$(THEOS_PROJECT_DIR)/../../ \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/ds \
                        -I$(THEOS_PROJECT_DIR)/../../../vendor/stb/image \

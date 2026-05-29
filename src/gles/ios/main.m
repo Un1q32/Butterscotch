@@ -48,6 +48,27 @@
 Renderer* GLES1Renderer_create(void);
 void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
 
+// Build version: the git commit hash is injected by the Makefile
+// (-DBS_GIT_VERSION). Outside a git checkout it falls back to "unknown".
+#ifndef BS_GIT_VERSION
+#define BS_GIT_VERSION "unknown"
+#endif
+
+// Canonical upstream repository (the official Butterscotch runner).
+#define BS_REPO_URL @"https://github.com/ButterscotchRunner/Butterscotch"
+
+// NSUserDefaults key for the user-configurable games folder.
+#define BS_GAMES_FOLDER_KEY @"BSGamesFolder"
+
+// Return the user-specified games folder, or nil if unset/blank.
+static NSString* BSCustomGamesFolder(void) {
+    NSString* p = [[NSUserDefaults standardUserDefaults] stringForKey:BS_GAMES_FOLDER_KEY];
+    if (p == nil) return nil;
+    p = [p stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([p length] == 0) return nil;
+    return p;
+}
+
 // ============================================================================
 // GameEntry — one playable folder
 // ============================================================================
@@ -70,9 +91,11 @@ void GLES1Renderer_setDataWinPath(Renderer* r, const char* path);
 @end
 
 // Return paths to scan, in order. The first readable, non-empty
-// directory wins.
+// directory wins. A user-specified folder (Settings) takes priority.
 static NSArray* BSCandidateRootDirectories(void) {
     NSMutableArray* roots = [NSMutableArray array];
+    NSString* custom = BSCustomGamesFolder();
+    if (custom != nil) [roots addObject:custom];
     [roots addObject:@"/var/mobile/Documents/Butterscotch"];
     [roots addObject:@"/var/mobile/Media/Butterscotch"];
     NSArray* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -1165,6 +1188,157 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
 @end
 
 // ============================================================================
+// SettingsViewController — games folder + about/version
+// ============================================================================
+
+@interface BSSettingsViewController : UITableViewController <UITextFieldDelegate> {
+    UITextField* _folderField;
+}
+@end
+
+@implementation BSSettingsViewController
+
+- (id)init {
+    self = [super initWithStyle:UITableViewStyleGrouped];
+    if (self == nil) return nil;
+    self.title = @"Settings";
+    return self;
+}
+
+- (void)dealloc {
+    [_folderField release];
+    [super dealloc];
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)o {
+    return o == UIInterfaceOrientationPortrait;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+
+    _folderField = [[UITextField alloc] initWithFrame:CGRectMake(12, 0, 280, 44)];
+    _folderField.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _folderField.placeholder = @"Default (auto-detect)";
+    _folderField.text = BSCustomGamesFolder() ? BSCustomGamesFolder() : @"";
+    _folderField.font = [UIFont systemFontOfSize:15];
+    _folderField.textColor = [UIColor colorWithRed:0.20f green:0.31f blue:0.52f alpha:1.0f];
+    _folderField.autocorrectionType = UITextAutocorrectionTypeNo;
+    _folderField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    _folderField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    _folderField.returnKeyType = UIReturnKeyDone;
+    _folderField.delegate = self;
+
+    UIBarButtonItem* save = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
+                                                                          target:self
+                                                                          action:@selector(saveAndClose)];
+    self.navigationItem.rightBarButtonItem = save;
+    [save release];
+}
+
+- (void)persistFolder {
+    NSString* v = [_folderField.text stringByTrimmingCharactersInSet:
+                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
+    if ([v length] == 0) {
+        [d removeObjectForKey:BS_GAMES_FOLDER_KEY];
+    } else {
+        [d setObject:v forKey:BS_GAMES_FOLDER_KEY];
+    }
+    [d synchronize];
+}
+
+- (void)saveAndClose {
+    [_folderField resignFirstResponder];
+    [self persistFolder];
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField*)tf {
+    [tf resignFirstResponder];
+    [self persistFolder];
+    return YES;
+}
+
+// ---- table data ----
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tv {
+    return 2; // 0 = games folder, 1 = about
+}
+
+- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)section {
+    if (section == 0) return 2; // folder field + reset
+    return 2;                   // version + source link
+}
+
+- (NSString*)tableView:(UITableView*)tv titleForHeaderInSection:(NSInteger)section {
+    return (section == 0) ? @"Games Folder" : @"About";
+}
+
+- (NSString*)tableView:(UITableView*)tv titleForFooterInSection:(NSInteger)section {
+    if (section == 0) {
+        return @"Folder to scan for games. Each sub-folder containing a "
+               @"data.win shows up as one game. Leave blank to auto-detect "
+               @"the default locations.";
+    }
+    return @"OpenGL ES 1.1 iOS port — runs on armv6 (iPod Touch 2G, "
+           @"iPhone 3G) under iPhone OS 3.";
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tv cellForRowAtIndexPath:(NSIndexPath*)ip {
+    if (ip.section == 0 && ip.row == 0) {
+        UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                        reuseIdentifier:nil] autorelease];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        _folderField.frame = CGRectInset(cell.contentView.bounds, 12, 0);
+        [cell.contentView addSubview:_folderField];
+        return cell;
+    }
+
+    static NSString* kReuse = @"BSSettingsCell";
+    UITableViewCell* cell = [tv dequeueReusableCellWithIdentifier:kReuse];
+    if (cell == nil) {
+        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+                                       reuseIdentifier:kReuse] autorelease];
+    }
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    cell.detailTextLabel.text = nil;
+
+    if (ip.section == 0) {
+        // Reset row
+        cell.textLabel.text = @"Reset to default";
+        cell.textLabel.textColor = [UIColor colorWithRed:0.20f green:0.31f blue:0.52f alpha:1.0f];
+        cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    } else if (ip.row == 0) {
+        cell.textLabel.text = @"Version";
+        cell.textLabel.textColor = [UIColor blackColor];
+        cell.detailTextLabel.text = @BS_GIT_VERSION;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else {
+        cell.textLabel.text = @"Source code";
+        cell.textLabel.textColor = [UIColor blackColor];
+        cell.detailTextLabel.text = @"ButterscotchRunner/Butterscotch";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleBlue;
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView*)tv didSelectRowAtIndexPath:(NSIndexPath*)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    if (ip.section == 0 && ip.row == 1) {
+        // Reset to default
+        _folderField.text = @"";
+        [_folderField resignFirstResponder];
+        [self persistFolder];
+    } else if (ip.section == 1 && ip.row == 1) {
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:BS_REPO_URL]];
+    }
+}
+
+@end
+
+// ============================================================================
 // GamePickerViewController — UITableView of folders containing data.win
 // ============================================================================
 
@@ -1223,7 +1397,26 @@ static void BSDataWinProgress(const char* chunkName, int chunkIndex, int totalCh
                                                                               action:@selector(refresh)];
     self.navigationItem.rightBarButtonItem = refresh;
     [refresh release];
+
+    UIBarButtonItem* settings = [[UIBarButtonItem alloc] initWithTitle:@"Settings"
+                                                                 style:UIBarButtonItemStylePlain
+                                                                target:self
+                                                                action:@selector(openSettings)];
+    self.navigationItem.leftBarButtonItem = settings;
+    [settings release];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // Re-scan every time we appear so a games-folder change in Settings
+    // (or a freshly dropped data.win) is picked up without restarting.
     [self refresh];
+}
+
+- (void)openSettings {
+    BSSettingsViewController* svc = [[BSSettingsViewController alloc] init];
+    [self.navigationController pushViewController:svc animated:YES];
+    [svc release];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tv {
