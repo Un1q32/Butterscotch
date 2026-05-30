@@ -754,7 +754,6 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             slot = IntRValueHashMap_findSlot(&inst->selfVars, varDef->varID);
             // sparse storage: nonexistent entry -> treat as undefined scalar (array reads fall through to VM_arrayReadAt returning undefined)
             if (slot == nullptr) {
-                if (access.isArray) return (RValue){ .type = RVALUE_UNDEFINED };
                 return (RValue){ .type = RVALUE_UNDEFINED };
             }
             break;
