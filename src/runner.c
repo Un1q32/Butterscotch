@@ -1846,12 +1846,13 @@ void Runner_setGameArgs(Runner* runner, char** argv, int32_t argc) {
     repeat(argc, i) arrput(runner->gameArgs, safeStrdup(argv[i]));
 }
 
-void Runner_destroyInstance(MAYBE_UNUSED Runner* runner, Instance* inst) {
+void Runner_destroyInstance(MAYBE_UNUSED Runner* runner, Instance* inst, bool runDestroyEvent) {
     // We check this to avoid a infinite loop if "inst" is destroyed within a event destroy event
     if (inst->destroyed)
         return;
     inst->destroyed = true;
-    Runner_executeEvent(runner, inst, EVENT_DESTROY, 0);
+    if (runDestroyEvent)
+        Runner_executeEvent(runner, inst, EVENT_DESTROY, 0);
     Runner_executeEvent(runner, inst, EVENT_CLEANUP, 0);
     // A destroyed instance must ALWAYS be not active
     // If a destroyed instance is active, then well, something went VERY wrong

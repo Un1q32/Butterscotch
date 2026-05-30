@@ -158,9 +158,6 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
-    runner->setWindowTitle = platformSetWindowTitle;
-    runner->getWindowSize = platformGetWindowSize;
-    runner->setWindowSize = platformSetWindowSize;
     runner->windowHasFocus = platformGetWindowFocus;
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE)
@@ -215,8 +212,10 @@ double platformGetTime(void) {
 }
 
 bool platformHandleEvents(void) {
+    if (!glfwGetWindowParam(GLFW_OPENED))
+        return true;
     glfwPollEvents();
-    return !glfwGetWindowParam(GLFW_OPENED);
+    return false;
 }
 
 void platformSleepUntil(double time) {
@@ -235,8 +234,4 @@ void platformSleepUntil(double time) {
     while (platformGetTime() < time) {
         // Spin-wait for the remaining sub-millisecond
     }
-}
-
-void platformGamepad_poll(RunnerGamepadState* gp) {
-    (void)gp;
 }

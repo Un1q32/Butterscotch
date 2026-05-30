@@ -515,7 +515,7 @@ Instance* Runner_createInstance(Runner* runner, GMLReal x, GMLReal y, int32_t ob
 Instance* Runner_createInstanceWithDepth(Runner* runner, GMLReal x, GMLReal y, int32_t objectIndex, int32_t depth);
 Instance* Runner_createInstanceWithLayer(Runner* runner, GMLReal x, GMLReal y, int32_t objectIndex, int32_t layerId);
 Instance* Runner_copyInstance(Runner* runner, Instance* source, bool performEvent);
-void Runner_destroyInstance(Runner* runner, Instance* inst);
+void Runner_destroyInstance(Runner* runner, Instance* inst, bool runDestroyEvent);
 void Runner_cleanupDestroyedInstances(Runner* runner);
 // Add inst to the per-object lists of its object and every ancestor.
 void Runner_addInstanceToObjectLists(Runner* runner, Instance* inst);

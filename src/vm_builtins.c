@@ -2111,6 +2111,11 @@ static RValue builtin_cos(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t arg
     return RValue_makeReal(GMLReal_cos(RValue_toReal(args[0])));
 }
 
+static RValue builtin_arccos(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(0.0);
+    return RValue_makeReal(GMLReal_acos(RValue_toReal(args[0])));
+}
+
 static RValue builtin_dsin(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(0.0);
     return RValue_makeReal(GMLReal_sin(RValue_toReal(args[0]) * (M_PI / 180.0)));
@@ -5956,10 +5961,11 @@ static RValue builtin_instance_destroy(VMContext* ctx, RValue* args, int32_t arg
     if (1 > argCount) {
         // No args: destroy the current instance
         if (ctx->currentInstance != nullptr) {
-            Runner_destroyInstance(runner, ctx->currentInstance);
+            Runner_destroyInstance(runner, ctx->currentInstance, true);
         }
         return RValue_makeUndefined();
     }
+    bool runDestroyEvent = argCount >= 2 ? RValue_toBool(args[1]) : true;
     // 1 arg: find and destroy matching instances. Destroy events run user code that can spawn/destroy/instance_change other instances; iterate a snapshot of the bucket so those mutations don't corrupt our loop.
     int32_t id = RValue_toInt32(args[0]);
     if (id >= 0 && runner->dataWin->objt.count > (uint32_t) id) {
@@ -5967,12 +5973,12 @@ static RValue builtin_instance_destroy(VMContext* ctx, RValue* args, int32_t arg
         int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
         for (int32_t i = snapBase; snapEnd > i; i++) {
             Instance* inst = runner->instanceSnapshots[i];
-            if (inst->active) Runner_destroyInstance(runner, inst);
+            if (inst->active) Runner_destroyInstance(runner, inst, runDestroyEvent);
         }
         Runner_popInstanceSnapshot(runner, snapBase);
     } else {
         Instance* inst = hmget(runner->instancesById, id);
-        if (inst != nullptr && inst->active) Runner_destroyInstance(runner, inst);
+        if (inst != nullptr && inst->active) Runner_destroyInstance(runner, inst, runDestroyEvent);
     }
     return RValue_makeUndefined();
 }
@@ -6276,7 +6282,7 @@ static RValue builtin_event_perform(VMContext* ctx, RValue* args, int32_t argCou
 static RValue builtin_action_kill_object(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     if (ctx->currentInstance != nullptr) {
-        Runner_destroyInstance(runner, ctx->currentInstance);
+        Runner_destroyInstance(runner, ctx->currentInstance, true);
     }
     return RValue_makeUndefined();
 }
@@ -7021,7 +7027,7 @@ static RValue builtin_buffer_base64_decode(MAYBE_UNUSED VMContext* ctx, RValue* 
     char* input = RValue_toString(args[1]);
     unsigned int inLen = (unsigned int) strlen(input);
     size_t outLen = BASE64_DECODE_OUT_SIZE(inLen);
-    char* out = safeMalloc(outLen);
+    uint8_t* out = safeMalloc(outLen);
     base64_decode((const unsigned char*) input, inLen, out);
     free(input);
     int32_t id = gmlBufferCreate(runner, outLen, GML_BUFFER_GROW, 1);
@@ -7430,6 +7436,7 @@ static RValue builtin_draw_healthbar(VMContext* ctx, RValue* args, MAYBE_UNUSED 
     }
 
     runner->renderer->vtable->drawRectangle(runner->renderer,x1,y1,healthbarX,y2,intermediateColor, runner->renderer->drawAlpha, false);
+    return RValue_makeUndefined();
 }
 
 static RValue builtin_draw_set_color(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -7526,17 +7533,27 @@ static RValue builtin_draw_text_transformed(VMContext* ctx, RValue* args, MAYBE_
 
 // Drives draw_text_ext / draw_text_ext_transformed by wrapping the (preprocessed) text and forwarding to drawText.
 // Disable wrapping with 0 > "width", keep the font default line stride with 0 > "separation".
-static void drawTextExtCommon(Runner* runner, const char* str, float x, float y, float xscale, float yscale, float angle, int32_t separation, int32_t width) {
+static void drawTextExtCommonColor(Runner* runner, const char* str, float x, float y, float xscale, float yscale, float angle, int32_t separation, int32_t width, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4) {
     int32_t fontIndex = runner->renderer->drawFont;
     if (0 > fontIndex || (uint32_t) fontIndex >= runner->dataWin->font.count) return;
     Font* font = &runner->dataWin->font.fonts[fontIndex];
 
     PreprocessedText processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
     PreprocessedText wrappedText = TextUtils_wrapText(font, processedText.text, width);
-    runner->renderer->vtable->drawText(runner->renderer, wrappedText.text, x, y, xscale, yscale, angle, (float) separation);
+    if (c1 == c2 && c2 == c3 && c3 == c4 && c4 == runner->renderer->drawColor) {
+        // using the ordinary drawText is safe
+        runner->renderer->vtable->drawText(runner->renderer, wrappedText.text, x, y, xscale, yscale, angle, (float) separation);
+    } else {
+        runner->renderer->vtable->drawTextColor(runner->renderer, wrappedText.text, x, y, xscale, yscale, angle, c1, c2, c3, c4, 1.0f, (float) separation);
+    }
     PreprocessedText_free(wrappedText);
     PreprocessedText_free(processedText);
 }
+static void drawTextExtCommon(Runner* runner, const char* str, float x, float y, float xscale, float yscale, float angle, int32_t separation, int32_t width) {
+    uint32_t fill = runner->renderer->drawColor;
+    drawTextExtCommonColor(runner, str, x, y, xscale, yscale, angle, separation, width, fill, fill, fill, fill);
+}
+
 
 static RValue builtin_draw_text_ext(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
@@ -7549,6 +7566,26 @@ static RValue builtin_draw_text_ext(VMContext* ctx, RValue* args, MAYBE_UNUSED i
     int32_t width = RValue_toInt32(args[4]);
 
     drawTextExtCommon(runner, str, x, y, 1.0f, 1.0f, 0.0f, separation, width);
+    free(str);
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_draw_text_ext_color(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    if (runner->renderer == nullptr) return RValue_makeUndefined();
+
+    float x = (float) RValue_toReal(args[0]);
+    float y = (float) RValue_toReal(args[1]);
+    char* str = RValue_toString(args[2]);
+    int32_t separation = RValue_toInt32(args[3]);
+    int32_t width = RValue_toInt32(args[4]);
+
+    int32_t c1 = (float) RValue_toInt32(args[5]);
+    int32_t c2 = (float) RValue_toInt32(args[6]);
+    int32_t c3 = (float) RValue_toInt32(args[7]);
+    int32_t c4 = (float) RValue_toInt32(args[8]);
+
+    drawTextExtCommonColor(runner, str, x, y, 1.0f, 1.0f, 0.0f, separation, width, c1, c2, c3, c4);
     free(str);
     return RValue_makeUndefined();
 }
@@ -12006,6 +12043,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "log2", builtin_log2);
     VM_registerBuiltin(ctx, "sqr", builtin_sqr);
     VM_registerBuiltin(ctx, "sin", builtin_sin);
+    VM_registerBuiltin(ctx, "arccos", builtin_arccos);
     VM_registerBuiltin(ctx, "arcsin", builtin_arcsin);
     VM_registerBuiltin(ctx, "arctan", builtin_arctan);
     VM_registerBuiltin(ctx, "cos", builtin_cos);
@@ -12407,6 +12445,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "draw_text", builtin_draw_text);
     VM_registerBuiltin(ctx, "draw_text_transformed", builtin_draw_text_transformed);
     VM_registerBuiltin(ctx, "draw_text_ext", builtin_draw_text_ext);
+    VM_registerBuiltin(ctx, "draw_text_ext_color", builtin_draw_text_ext_color);
     VM_registerBuiltin(ctx, "draw_text_ext_transformed", builtin_draw_text_ext_transformed);
     VM_registerBuiltin(ctx, "draw_text_color", builtin_draw_text_color);
     VM_registerBuiltin(ctx, "draw_text_color_transformed", builtin_draw_text_color_transformed);
