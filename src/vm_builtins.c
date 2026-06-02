@@ -7428,6 +7428,36 @@ static RValue builtin_buffer_async_group_end(MAYBE_UNUSED VMContext* ctx, MAYBE_
     return RValue_makeReal((GMLReal) requestId);
 }
 
+// filename_change_ext(fname, newext): changes the extension of fname to newext
+// (see GameMaker-HTML5 Function_File.js for reference)
+static RValue builtin_filename_change_ext(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+
+    char* fname = RValue_toString(args[0]);
+    char* newext = RValue_toString(args[1]); // includes the ., example: ".gmk"
+
+    char *last = strrchr(fname, '.');
+
+    if (last != nullptr && last != 0) {
+        long index = last - fname;
+        char* new = safeMalloc(index + strlen(newext) + 1);
+        memcpy(new, fname, (size_t) index);
+        memcpy(new + index, newext, (size_t) strlen(newext));
+        new[index + strlen(newext)] = '\0';
+        RValue result = RValue_makeOwnedString(new);
+
+        free(fname);
+        free(newext);
+
+        return result;
+    }
+
+    free(newext);
+
+    // If there isn't a dot, we return the original string as is
+    return RValue_makeOwnedString(fname);
+}
+
 static RValue builtin_buffer_base64_encode(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     if (3 > argCount) return RValue_makeOwnedString(safeStrdup(""));
@@ -13042,6 +13072,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "buffer_save_async", builtin_buffer_save_async);
     VM_registerBuiltin(ctx, "buffer_async_group_begin", builtin_buffer_async_group_begin);
     VM_registerBuiltin(ctx, "buffer_async_group_end", builtin_buffer_async_group_end);
+    VM_registerBuiltin(ctx, "filename_change_ext", builtin_filename_change_ext);
     VM_registerBuiltin(ctx, "buffer_base64_encode", builtin_buffer_base64_encode);
     VM_registerBuiltin(ctx, "buffer_base64_decode", builtin_buffer_base64_decode);
     VM_registerBuiltin(ctx, "base64_encode", builtin_base64_encode);
