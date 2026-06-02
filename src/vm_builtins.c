@@ -1938,6 +1938,70 @@ static RValue builtin_string_pos(MAYBE_UNUSED VMContext* ctx, RValue* args, int3
     return RValue_makeReal((GMLReal) charIndex);
 }
 
+// Appends a copy of [start, start + len) to the array as an owned string, growing it by one slot.
+static void appendSplitSegment(GMLArray* arr, int32_t* count, const char* start, int32_t len) {
+    char* segment = safeMalloc((size_t) len + 1);
+    if (len > 0) memcpy(segment, start, (size_t) len);
+    segment[len] = '\0';
+    GMLArray_growTo(arr, *count + 1);
+    RValue* slot = GMLArray_slot(arr, *count);
+    *slot = RValue_makeOwnedString(segment);
+    (*count)++;
+}
+
+static RValue builtin_string_split(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeArray(GMLArray_create(0));
+    char* string = RValue_toString(args[0]);
+    char* delimiter = RValue_toString(args[1]);
+    bool removeEmpty = argCount > 2 ? RValue_toBool(args[2]) : false;
+    // maxSplits is actually a real (the native runner compares it as a double), but how are you going to split something by... 0.5?
+    GMLReal maxSplits = argCount > 3 ? RValue_toReal(args[3]) : (GMLReal) INT32_MAX;
+
+    int32_t delimiterLen = (int32_t) strlen(delimiter);
+
+    // Native runner returns an empty array when maxSplits was explicitly given and is <= 0, or when the delimiter is empty.
+    if ((argCount > 3 && 0.0 >= maxSplits) || delimiterLen == 0) {
+        free(string);
+        free(delimiter);
+        return RValue_makeArray(GMLArray_create(0));
+    }
+
+    GMLArray* out = GMLArray_create(0);
+    int32_t count = 0;
+
+    int32_t stringLen = (int32_t) strlen(string);
+    const char* end = string + stringLen;
+    const char* segmentStart = string; // Start of the current (not yet emitted) segment
+    const char* cursor = string;
+    int32_t splits = 0;
+
+    // Keep splitting until we run out of room for another delimiter or hit maxSplits.
+    // Like the native runner, we only test for the delimiter at UTF-8 codepoint boundaries.
+    while (maxSplits > (GMLReal) splits && end - delimiterLen >= cursor) {
+        if (memcmp(cursor, delimiter, (size_t) delimiterLen) == 0) {
+            int32_t segmentLen = (int32_t) (cursor - segmentStart);
+            if (!(removeEmpty && segmentLen == 0)) appendSplitSegment(out, &count, segmentStart, segmentLen);
+            cursor += delimiterLen;
+            segmentStart = cursor;
+            splits++;
+        } else {
+            // Advance one codepoint so the next strncmp lands on a codepoint boundary.
+            int32_t consumed = 0;
+            TextUtils_decodeUtf8(cursor, (int32_t) (end - cursor), &consumed);
+            if (0 >= consumed) consumed = 1;
+            cursor += consumed;
+        }
+    }
+
+    // Whatever is left becomes the final segment.
+    int32_t tailLen = (int32_t) (end - segmentStart);
+    if (!(removeEmpty && tailLen == 0)) appendSplitSegment(out, &count, segmentStart, tailLen);
+
+    free(string);
+    free(delimiter);
+    return RValue_makeArray(out);
+}
+
 static RValue builtin_string_char_at(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (2 > argCount) return RValue_makeOwnedString(safeStrdup(""));
     char* str = RValue_toString(args[0]);
@@ -12250,6 +12314,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "string_copy", builtin_string_copy);
     VM_registerBuiltin(ctx, "string_pos", builtin_string_pos);
     VM_registerBuiltin(ctx, "string_char_at", builtin_string_char_at);
+    VM_registerBuiltin(ctx, "string_split", builtin_string_split);
     VM_registerBuiltin(ctx, "string_delete", builtin_string_delete);
     VM_registerBuiltin(ctx, "string_insert", builtin_string_insert);
     VM_registerBuiltin(ctx, "string_replace", builtin_string_replace);
