@@ -6307,7 +6307,7 @@ static RValue builtin_instance_deactivate_all(VMContext* ctx, RValue* args, int3
         Instance* instance = ctx->runner->instances[i];
 
         if (!notme || instance != ctx->currentInstance) {
-            instance->active = false;
+            Runner_setActiveState(ctx->runner, instance, false);
         }
     }
     return RValue_makeUndefined();
@@ -6318,7 +6318,7 @@ static RValue builtin_instance_activate_all(MAYBE_UNUSED VMContext* ctx, MAYBE_U
     repeat(instances, i) {
         Instance* instance = ctx->runner->instances[i];
         if (!instance->destroyed)
-            ctx->runner->instances[i]->active = true;
+            Runner_setActiveState(ctx->runner, ctx->runner->instances[i], true);
     }
     return RValue_makeUndefined();
 }
@@ -6333,7 +6333,7 @@ static RValue builtin_instance_activate_object(VMContext* ctx, RValue* args, int
     int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
     for (int32_t i = snapBase; snapEnd > i; i++) {
         Instance* instance = runner->instanceSnapshots[i];
-        if (!instance->active && !instance->destroyed) instance->active = true;
+        if (!instance->active && !instance->destroyed) Runner_setActiveState(ctx->runner, instance, true);
     }
     Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
@@ -6348,7 +6348,7 @@ static RValue builtin_instance_deactivate_object(VMContext* ctx, RValue* args, i
     int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
     for (int32_t i = snapBase; snapEnd > i; i++) {
         Instance* instance = runner->instanceSnapshots[i];
-        if (instance->active && !instance->destroyed) instance->active = false;
+        if (instance->active && !instance->destroyed) Runner_setActiveState(ctx->runner, instance, false);
     }
     Runner_popInstanceSnapshot(runner, snapBase);
     return RValue_makeUndefined();
@@ -6386,7 +6386,7 @@ static RValue builtin_instance_activate_region(VMContext* ctx, RValue* args, int
             }
         }
 
-        if (outside != wantInside) inst->active = true;
+        if (outside != wantInside) Runner_setActiveState(ctx->runner, inst, true);
     }
     return RValue_makeUndefined();
 }
@@ -6420,7 +6420,7 @@ static RValue builtin_instance_deactivate_region(VMContext* ctx, RValue* args, i
         } else {
             if (inst->x > right || left > inst->x || inst->y > bottom || top > inst->y) outside = true;
         }
-        if (outside != wantInside) inst->active = false;
+        if (outside != wantInside) Runner_setActiveState(ctx->runner, inst, false);
     }
     return RValue_makeUndefined();
 }
@@ -10274,7 +10274,7 @@ static void instanceSetLayerActiveState(Runner* runner, int32_t layerId, bool is
         repeat(layerData->instanceCount, instanceIndex) {
             Instance* inst = hmget(runner->instancesById, layerData->instanceIds[instanceIndex]);
             if (inst != nullptr && !inst->destroyed)
-                inst->active = isActive;
+                Runner_setActiveState(runner, inst, isActive);
         }
         return;
     }
