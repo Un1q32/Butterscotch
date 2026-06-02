@@ -526,11 +526,11 @@ static inline void Renderer_drawTiled(Renderer* renderer, int32_t tpagIndex, flo
 }
 
 // Draws a tiled background
-static inline void Renderer_drawBackgroundTiled(Renderer* renderer, int32_t tpagIndex, float bgX, float bgY, bool tileX, bool tileY, float roomW, float roomH, float alpha) {
+static inline void Renderer_drawBackgroundTiled(Renderer* renderer, int32_t tpagIndex, float bgX, float bgY, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, float alpha) {
     DataWin* dw = renderer->dataWin;
     if (0 > tpagIndex || (uint32_t) tpagIndex >= dw->tpag.count) return;
 
-    Renderer_drawTiled(renderer, tpagIndex, 0.0f, 0.0f, bgX, bgY, 1.0f, 1.0f, tileX, tileY, roomW, roomH, 0xFFFFFFu, alpha);
+    Renderer_drawTiled(renderer, tpagIndex, 0.0f, 0.0f, bgX, bgY, xscale, yscale, tileX, tileY, roomW, roomH, 0xFFFFFFu, alpha);
 }
 
 // Draws a tiled sprite across the room

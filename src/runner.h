@@ -120,6 +120,7 @@ typedef struct {
     float x, y;               // float for sub-pixel scrolling accumulation
     bool tileX, tileY;
     float speedX, speedY;
+    float xScale, yScale;     // legacy background_xscale[]/background_yscale[] (default 1.0)
     bool stretch;
     float alpha;
 } RuntimeBackground;

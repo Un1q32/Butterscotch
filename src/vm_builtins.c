@@ -229,7 +229,9 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "background_vspeed", BUILTIN_VAR_BACKGROUND_VSPEED },
     { "background_width", BUILTIN_VAR_BACKGROUND_WIDTH },
     { "background_x", BUILTIN_VAR_BACKGROUND_X },
+    { "background_xscale", BUILTIN_VAR_BACKGROUND_XSCALE },
     { "background_y", BUILTIN_VAR_BACKGROUND_Y },
+    { "background_yscale", BUILTIN_VAR_BACKGROUND_YSCALE },
     { "bbox_bottom", BUILTIN_VAR_BBOX_BOTTOM },
     { "bbox_left", BUILTIN_VAR_BBOX_LEFT },
     { "bbox_right", BUILTIN_VAR_BBOX_RIGHT },
@@ -796,6 +798,12 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
         case BUILTIN_VAR_BACKGROUND_Y:
             if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) return RValue_makeReal((GMLReal) runner->backgrounds[arrayIndex].y);
             return RValue_makeReal(0.0);
+        case BUILTIN_VAR_BACKGROUND_XSCALE:
+            if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) return RValue_makeReal((GMLReal) runner->backgrounds[arrayIndex].xScale);
+            return RValue_makeReal(1.0);
+        case BUILTIN_VAR_BACKGROUND_YSCALE:
+            if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) return RValue_makeReal((GMLReal) runner->backgrounds[arrayIndex].yScale);
+            return RValue_makeReal(1.0);
         case BUILTIN_VAR_BACKGROUND_HSPEED:
             if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) return RValue_makeReal((GMLReal) runner->backgrounds[arrayIndex].speedX);
             return RValue_makeReal(0.0);
@@ -1379,6 +1387,12 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
             return;
         case BUILTIN_VAR_BACKGROUND_Y:
             if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) runner->backgrounds[arrayIndex].y = (float) RValue_toReal(val);
+            return;
+        case BUILTIN_VAR_BACKGROUND_XSCALE:
+            if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) runner->backgrounds[arrayIndex].xScale = (float) RValue_toReal(val);
+            return;
+        case BUILTIN_VAR_BACKGROUND_YSCALE:
+            if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) runner->backgrounds[arrayIndex].yScale = (float) RValue_toReal(val);
             return;
         case BUILTIN_VAR_BACKGROUND_HSPEED:
             if (arrayIndex >= 0 && MAX_BACKGROUNDS > arrayIndex) runner->backgrounds[arrayIndex].speedX = (float) RValue_toReal(val);

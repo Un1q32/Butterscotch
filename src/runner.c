@@ -467,10 +467,10 @@ void Runner_drawBackgrounds(Runner* runner, bool foreground) {
             float yscale = roomH / (float) tpag->boundingHeight;
             runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, 0.0f, 0.0f, 0.0f, 0.0f, xscale, yscale, 0.0f, 0xFFFFFF, bg->alpha);
         } else if (bg->tileX || bg->tileY) {
-            Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, bg->x, bg->y, bg->tileX, bg->tileY, roomW, roomH, bg->alpha);
+            Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, bg->x, bg->y, bg->xScale, bg->yScale, bg->tileX, bg->tileY, roomW, roomH, bg->alpha);
         } else {
             // Single placement
-            runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, bg->x, bg->y, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0xFFFFFF, bg->alpha);
+            runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, bg->x, bg->y, 0.0f, 0.0f, bg->xScale, bg->yScale, 0.0f, 0xFFFFFF, bg->alpha);
         }
     }
 }
@@ -764,7 +764,7 @@ void Runner_draw(Runner* runner) {
                             float yscale = roomH / (float) tpag->boundingHeight;
                             runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, 0.0f, 0.0f, 0.0f, 0.0f, xscale, yscale, 0.0f, bg->blend, bg->alpha);
                         } else if (bg->htiled || bg->vtiled) {
-                            Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, layerOffsetX + bg->xOffset, layerOffsetY + bg->yOffset, bg->htiled, bg->vtiled, roomW, roomH, bg->alpha);
+                            Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, layerOffsetX + bg->xOffset, layerOffsetY + bg->yOffset, bg->xScale, bg->yScale, bg->htiled, bg->vtiled, roomW, roomH, bg->alpha);
                         } else {
                             runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, layerOffsetX + bg->xOffset, layerOffsetY + bg->yOffset, 0.0f, 0.0f, bg->xScale, bg->yScale, 0.0f, bg->blend, bg->alpha);
                         }
@@ -872,7 +872,7 @@ void Runner_draw(Runner* runner) {
                     float yscale = roomH / (float) tpag->boundingHeight;
                     runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, 0.0f, 0.0f, 0.0f, 0.0f, xscale, yscale, 0.0f, 0xFFFFFF, 1.0);
                 } else if (data->hTiled || data->vTiled) {
-                    Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, layerOffsetX, layerOffsetY, data->hTiled, data->vTiled, roomW, roomH, 1.0);
+                    Renderer_drawBackgroundTiled(runner->renderer, tpagIndex, layerOffsetX, layerOffsetY, 1.0f, 1.0f, data->hTiled, data->vTiled, roomW, roomH, 1.0);
                 } else {
                     // Single placement
                     runner->renderer->vtable->drawSprite(runner->renderer, tpagIndex, layerOffsetX, layerOffsetY, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0xFFFFFF, 1.0);
@@ -1281,6 +1281,8 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         dst->tileY = (bool) src->tileY;
         dst->speedX = (float) src->speedX;
         dst->speedY = (float) src->speedY;
+        dst->xScale = 1.0f;
+        dst->yScale = 1.0f;
         dst->stretch = src->stretch;
         dst->alpha = 1.0f;
     }
