@@ -9019,6 +9019,7 @@ static RValue builtin_place_meeting(VMContext* ctx, RValue* args, int32_t argCou
     GMLReal testX = RValue_toReal(args[0]);
     GMLReal testY = RValue_toReal(args[1]);
     int32_t target = RValue_toInt32(args[2]);
+    if (target == INSTANCE_NOONE) return RValue_makeBool(false);
 
     // Save current position and temporarily move to test position
     GMLReal savedX = caller->x;
@@ -9327,6 +9328,7 @@ static RValue builtin_collision_circle(VMContext* ctx, RValue* args, int32_t arg
     int32_t prec = RValue_toInt32(args[4]);
     int32_t notme = RValue_toInt32(args[5]);
 
+    if (targetObjIndex == INSTANCE_NOONE) return RValue_makeReal((GMLReal) INSTANCE_NOONE);
     if (0 > radius) radius = -radius;
     GMLReal radiusSq = radius * radius;
 
@@ -9425,6 +9427,7 @@ static RValue builtin_collision_rectangle_list(VMContext* ctx, RValue* args, int
     int32_t listId = RValue_toInt32(args[7]);
     // arg 8 (ordered) is currently ignored; instances are appended in iteration order
 
+    if (target == INSTANCE_NOONE) return RValue_makeReal(0.0);
     DsList* list = dsListGet(runner, listId);
     if (list == nullptr) return RValue_makeReal(0.0);
 
@@ -9546,6 +9549,7 @@ static RValue builtin_instance_place(VMContext* ctx, RValue* args, int32_t argCo
     GMLReal testX = RValue_toReal(args[0]);
     GMLReal testY = RValue_toReal(args[1]);
     int32_t targetObjIndex = RValue_toInt32(args[2]);
+    if (targetObjIndex == INSTANCE_NOONE) return RValue_makeReal((GMLReal) INSTANCE_NOONE);
 
     GMLReal savedX = caller->x;
     GMLReal savedY = caller->y;
@@ -9603,6 +9607,8 @@ static RValue builtin_instance_place_list(VMContext* ctx, RValue* args, int32_t 
     int32_t targetObjIndex = RValue_toInt32(args[2]);
     int32_t listId = RValue_toInt32(args[3]);
     // arg 4 (ordered) is currently ignored; instances are appended in iteration order
+
+    if (targetObjIndex == INSTANCE_NOONE) return RValue_makeReal(0.0);
 
     DsList* list = dsListGet(runner, listId);
     if (list == nullptr) return RValue_makeReal(0.0);
@@ -9692,6 +9698,7 @@ static RValue builtin_position_meeting(VMContext* ctx, RValue* args, int32_t arg
     GMLReal px = RValue_toReal(args[0]);
     GMLReal py = RValue_toReal(args[1]);
     int32_t target = RValue_toInt32(args[2]);
+    if (target == INSTANCE_NOONE) return RValue_makeBool(false);
 
     if (runner->collisionCompatibilityMode) {
         px = compatRoundCoord(px); py = compatRoundCoord(py);
