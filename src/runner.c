@@ -2870,6 +2870,14 @@ void Runner_step(Runner* runner) {
         }
     }
 
+    if (RunnerKeyboard_check(kb, VK_ANYKEY)) Runner_executeEventForAll(runner, EVENT_KEYBOARD, VK_ANYKEY);
+    if (RunnerKeyboard_checkPressed(kb, VK_ANYKEY)) Runner_executeEventForAll(runner, EVENT_KEYPRESS, VK_ANYKEY);
+    if (RunnerKeyboard_checkReleased(kb, VK_ANYKEY)) Runner_executeEventForAll(runner, EVENT_KEYRELEASE, VK_ANYKEY);
+
+    if (RunnerKeyboard_check(kb, VK_NOKEY)) Runner_executeEventForAll(runner, EVENT_KEYBOARD, VK_NOKEY);
+    if (RunnerKeyboard_checkPressed(kb, VK_NOKEY)) Runner_executeEventForAll(runner, EVENT_KEYPRESS, VK_NOKEY);
+    if (RunnerKeyboard_checkReleased(kb, VK_NOKEY)) Runner_executeEventForAll(runner, EVENT_KEYRELEASE, VK_NOKEY);
+
     // Tick timelines
     tickTimelines(runner);
 
