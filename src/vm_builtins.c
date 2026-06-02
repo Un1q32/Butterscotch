@@ -3538,7 +3538,7 @@ static RValue builtin_ds_map_set_pre(VMContext* ctx, RValue* args, int32_t argCo
 }
 
 // This is an undocumented ds_map function, see GameMaker-HTML5's ds_map.js
-// It is essentially the ds_map_set but it returns the OLD value (i'm old!), if not it returns the new value
+// It is essentially the ds_map_set but it returns the OLD value (i'm old!), if not present then it returns the new value
 static RValue builtin_ds_map_set_post(VMContext* ctx, RValue* args, int32_t argCount) {
     return dsMapSetCommon(ctx, args, argCount, false, true);
 }
