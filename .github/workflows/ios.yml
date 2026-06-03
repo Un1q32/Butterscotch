@@ -39,31 +39,6 @@ jobs:
           sudo apt-get install -y wget gnupg lsb-release software-properties-common \
                                   build-essential perl curl ca-certificates \
                                   zip unzip xz-utils bzip2 git fakeroot make
-          # clang-10 inside the Linux→iOS cross toolchain is dynamically
-          # linked against libtinfo.so.5 and its versioned NCURSES_TINFO_5.0
-          # symbols. Ubuntu 24.04 only ships libtinfo.so.6, which is NOT
-          # symbol-compatible. We extract the libtinfo5 .deb from
-          # the jammy archive (it's a self-contained binary blob with no
-          # additional dependencies) and drop libtinfo.so.5.9 into
-          # /usr/lib/x86_64-linux-gnu/.
-          curl -fsSL -o /tmp/libtinfo5.deb \
-            "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb"
-          mkdir -p /tmp/tinfo5
-          dpkg-deb -x /tmp/libtinfo5.deb /tmp/tinfo5
-          sudo cp /tmp/tinfo5/lib/x86_64-linux-gnu/libtinfo.so.5.9 /usr/lib/x86_64-linux-gnu/
-          sudo ln -sf libtinfo.so.5.9 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
-          sudo ldconfig
-
-      - name: Install ldid (fake codesigner)
-        run: |
-          sudo apt-get install -y ldid || {
-            # Build from source if no apt package is available. ldid
-            # needs libplist-dev (and pkg-config to find it).
-            sudo apt-get install -y libplist-dev pkg-config
-            git clone --depth 1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
-            (cd /tmp/ldid && make -j$(nproc) && sudo install -m 755 ldid /usr/local/bin/ldid)
-          }
-          ldid -V || true
 
       - name: Install Theos + iOS cross toolchain
         env:
@@ -78,9 +53,9 @@ jobs:
           # the legacy armv6 ABI we need for iPod Touch 2G).
           mkdir -p "$THEOS/toolchain/linux/iphone"
           curl -fsSL \
-            "https://github.com/sbingner/llvm-project/releases/download/v10.0.0-1/linux-ios-arm64e-clang-toolchain.tar.lzma" \
-            -o /tmp/ios-toolchain.tar.lzma
-          tar -xf /tmp/ios-toolchain.tar.lzma -C "$THEOS/toolchain/linux/iphone" --strip-components=1
+            "https://github.com/L1ghtmann/llvm-project/releases/download/main-update_3-eabca92/iOSToolchain-x86_64.tar.xz" \
+            -o /tmp/ios-toolchain.tar.xz
+          tar -xf /tmp/ios-toolchain.tar.xz -C "$THEOS/toolchain"
           ls "$THEOS/toolchain/linux/iphone/bin" | head -20
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
