@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -18,10 +19,11 @@
 static GLFWwindow *window;
 static Runner *g_runner;
 
-// Butterscotch expects framebuffer pixels, but GLFW3 expects logical pixels
+// Butterscotch expects framebuffer pixels, but GLFW3 expects logical pixels.
+// We round the logical size UP (ceil) so the resulting framebuffer is never SMALLER than requested.
 static void framebufferToLogical(float xs, float ys, int fbW, int fbH, int* outW, int* outH) {
-    *outW = (xs > 0.0f) ? (int) ((float) fbW / xs + 0.5f) : fbW;
-    *outH = (ys > 0.0f) ? (int) ((float) fbH / ys + 0.5f) : fbH;
+    *outW = (xs > 0.0f) ? (int) ceilf((float) fbW / xs) : fbW;
+    *outH = (ys > 0.0f) ? (int) ceilf((float) fbH / ys) : fbH;
 }
 
 void platformSetWindowTitle(const char* title) {
@@ -41,14 +43,30 @@ bool platformGetWindowSize(int32_t* outW, int32_t* outH) {
     return true;
 }
 
+bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH) {
+    if (!outW || !outH || !window) return false;
+    int w = 0;
+    int h = 0;
+    glfwGetWindowSize(window, &w, &h);
+    if (w <= 0 || h <= 0) return false;
+    *outW = w;
+    *outH = h;
+    return true;
+}
+
 void platformSetWindowSize(int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return;
     if (!window) return;
     float xs = 1.0f, ys = 1.0f;
-    glfwGetWindowContentScale((GLFWwindow*) window, &xs, &ys);
+    glfwGetWindowContentScale(window, &xs, &ys);
     int logicalW, logicalH;
     framebufferToLogical(xs, ys, width, height, &logicalW, &logicalH);
     glfwSetWindowSize(window, logicalW, logicalH);
+}
+
+void platformGetMousePos(double *xPos, double *yPos) {
+    if (!xPos || !yPos) return;
+    glfwGetCursorPos(window, xPos, yPos);
 }
 
 static bool platformGetWindowFocus(void) {
@@ -127,7 +145,39 @@ static void resizeCallback(GLFWwindow* window, int width, int height) {
 
 #endif
 
-bool platformInit(int reqW, int reqH, const char *title, bool headless) {
+static int32_t glfwMouseButtonToGml(int glfwButton) {
+    switch (glfwButton) {
+        case GLFW_MOUSE_BUTTON_LEFT: return GML_MB_LEFT;
+        case GLFW_MOUSE_BUTTON_RIGHT: return GML_MB_RIGHT;
+        case GLFW_MOUSE_BUTTON_MIDDLE: return GML_MB_MIDDLE;
+        default: return INT32_MIN; // Unknown
+    }
+}
+
+static void cursorPositionCallback(GLFWwindow* window, double xpos, double ypos) {
+    int winWidth, winHeight;
+    glfwGetWindowSize(window, &winWidth, &winHeight);
+
+    if (winWidth <= 0 || winHeight <= 0) return;
+
+    g_runner->mouse->normalizedX = (xpos - g_runner->viewportX) / g_runner->viewportW;
+    g_runner->mouse->normalizedY = (ypos - g_runner->viewportY) / g_runner->viewportH;
+}
+
+static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    (void)mods;
+    int32_t gmlButton = glfwMouseButtonToGml(button);
+    if (0 > gmlButton) return;
+    if (action == GLFW_PRESS) RunnerMouse_onButtonDown(g_runner->mouse, gmlButton);
+    else if (action == GLFW_RELEASE) RunnerMouse_onButtonUp(g_runner->mouse, gmlButton);
+}
+
+static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    (void)xoffset;
+    RunnerMouse_onWheel(g_runner->mouse, yoffset);
+}
+
+bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) {
     // Init GLFW
     glfwSetErrorCallback(glfwErrorCallback);
     if (!glfwInit()) {
@@ -199,6 +249,11 @@ bool platformInit(int reqW, int reqH, const char *title, bool headless) {
     // Set up keyboard input
     glfwSetKeyCallback(window, keyCallback);
     glfwSetCharCallback(window, characterCallback);
+    // Set up mouse input
+    glfwSetCursorPosCallback(window, cursorPositionCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetScrollCallback(window, scrollCallback);
+
     return true;
 }
 
@@ -209,9 +264,6 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
-    runner->setWindowTitle = platformSetWindowTitle;
-    runner->getWindowSize = platformGetWindowSize;
-    runner->setWindowSize = platformSetWindowSize;
     runner->windowHasFocus = platformGetWindowFocus;
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE)
@@ -250,39 +302,6 @@ void *platformGetProcAddress(const char *name) {
 
 double platformGetTime(void) {
     return glfwGetTime();
-}
-
-bool platformHandleEvents(void) {
-    glfwPollEvents();
-    return glfwWindowShouldClose(window);
-}
-
-void platformSleepUntil(double time) {
-    double remaining = time - platformGetTime();
-    if (remaining > 0.002) {
-#ifdef _WIN32
-        Sleep((DWORD) ((remaining - 0.001) * 1000));
-#else
-        struct timespec ts = {
-            .tv_sec = 0,
-            .tv_nsec = (long) ((remaining - 0.001) * 1e9)
-        };
-        nanosleep(&ts, NULL);
-#endif
-    }
-    while (platformGetTime() < time) {
-        // Spin-wait for the remaining sub-millisecond
-    }
-}
-
-static float applyDeadzone(float value, float deadzone) {
-    if (value < 0.0f) {
-        if (value > -deadzone) return 0.0f;
-        return (value + deadzone) / (1.0f - deadzone);
-    } else {
-        if (value < deadzone) return 0.0f;
-        return (value - deadzone) / (1.0f - deadzone);
-    }
 }
 
 enum {
@@ -332,10 +351,10 @@ static void mapGlfwToGml(const GLFWgamepadstate* glfwState, GamepadSlot* slot) {
     float rh = glfwState->axes[GLFW_GAMEPAD_AXIS_RIGHT_X];
     float rv = glfwState->axes[GLFW_GAMEPAD_AXIS_RIGHT_Y];
 
-    slot->axisValue[0] = applyDeadzone(lh, slot->deadzone);
-    slot->axisValue[1] = applyDeadzone(lv, slot->deadzone);
-    slot->axisValue[2] = applyDeadzone(rh, slot->deadzone);
-    slot->axisValue[3] = applyDeadzone(rv, slot->deadzone);
+    slot->axisValue[0] = lh;
+    slot->axisValue[1] = lv;
+    slot->axisValue[2] = rh;
+    slot->axisValue[3] = rv;
 
     for (int i = 0; GP_BUTTON_COUNT > i; i++) {
         if (i == IDX_LT || i == IDX_RT) continue;
@@ -343,9 +362,14 @@ static void mapGlfwToGml(const GLFWgamepadstate* glfwState, GamepadSlot* slot) {
     }
 }
 
-void platformGamepad_poll(RunnerGamepadState* gp) {
+bool platformHandleEvents(void) {
+    if (glfwWindowShouldClose(window))
+        return true;
+
+    glfwPollEvents();
+
     for (int slotIdx = 0; slotIdx < 1 && slotIdx < MAX_GAMEPADS; slotIdx++) {
-        GamepadSlot* slot = &gp->slots[slotIdx];
+        GamepadSlot* slot = g_runner->gamepads->slots + slotIdx;
 
         bool currentlyConnected = false;
         int  foundJid = -1;
@@ -393,7 +417,27 @@ void platformGamepad_poll(RunnerGamepadState* gp) {
                 if (slot->buttonDown[btn] && !wasDown) slot->buttonPressed[btn] = true;
                 if (!slot->buttonDown[btn] && wasDown) slot->buttonReleased[btn] = true;
             }
-            gp->connectedCount++;
+            g_runner->gamepads->connectedCount++;
         }
+    }
+
+    return false;
+}
+
+void platformSleepUntil(double time) {
+    double remaining = time - platformGetTime();
+    if (remaining > 0.002) {
+#ifdef _WIN32
+        Sleep((DWORD) ((remaining - 0.001) * 1000));
+#else
+        struct timespec ts = {
+            .tv_sec = 0,
+            .tv_nsec = (long) ((remaining - 0.001) * 1e9)
+        };
+        nanosleep(&ts, NULL);
+#endif
+    }
+    while (platformGetTime() < time) {
+        // Spin-wait for the remaining sub-millisecond
     }
 }

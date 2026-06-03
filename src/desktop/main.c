@@ -10,6 +10,7 @@
 #include <signal.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <mmsystem.h>
 #endif
 #ifdef __GLIBC__
 #include <malloc.h>
@@ -49,7 +50,7 @@
 #include "utils.h"
 #include "profiler.h"
 
-enum gfx_api gfx;
+enum GraphicsAPI gfx;
 
 #if !defined(ENABLE_GLES) && (defined(ENABLE_MODERN_GL) || defined(ENABLE_LEGACY_GL))
 static void APIENTRY glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, MAYBE_UNUSED GLsizei length, const GLchar* message, MAYBE_UNUSED const void* userParam) {
@@ -152,9 +153,12 @@ typedef struct {
     const char* playbackInputsPath;
     const char* renderer;
     YoYoOperatingSystem osType;
+    int32_t windowWidth, windowHeight; // 0 = auto (gen8 default, or the console-native size for console os-types)
+    float widescreenAspect; // "widescreen hack" target aspect ratio (width/height), 0 = disabled
     char** gameArgs; // stb_ds array of owned strings, gameArgs[0] = runner executable path
     bool lazyRooms;
     StringBooleanEntry* eagerRooms; // stb_ds string-keyed set of room names
+    bool lazyTextures;
     int profilerFramesBetween; // 0 = disabled
 #ifdef ENABLE_VM_OPCODE_PROFILER
     bool opcodeProfiler;
@@ -204,6 +208,50 @@ static bool parseOsTypeArg(const char* s, YoYoOperatingSystem* out) {
 static void printOsTypeNames(FILE* out) {
     forEachIndexed(const OsTypeNameEntry, entry, i, OS_TYPE_NAMES, OS_TYPE_NAMES_COUNT) {
         fprintf(out, "%s%s", i > 0 ? ", " : "", entry->name);
+    }
+}
+
+// Resolves the window size for the specified operating system.
+// The "--window-size" argument takes precedence over the default resolution for each platform.
+static void resolveWindowSize(const CommandLineArgs* args, uint32_t gen8Width, uint32_t gen8Height, int32_t* outW, int32_t* outH) {
+    if (args->windowWidth > 0 && args->windowHeight > 0) {
+        *outW = args->windowWidth;
+        *outH = args->windowHeight;
+        return;
+    }
+
+    switch (args->osType) {
+        case OS_PS4:
+        case OS_XBOXONE:
+        case OS_PS3:
+        case OS_XBOX360:
+            *outW = 1920;
+            *outH = 1080;
+            break;
+        case OS_SWITCH:
+            *outW = 1280;
+            *outH = 720;
+            break;
+        case OS_PSVITA:
+            *outW = 960;
+            *outH = 544;
+            break;
+        default:
+            *outW = (int32_t) gen8Width;
+            *outH = (int32_t) gen8Height;
+            break;
+    }
+
+    // Widescreen hack handling to grow the window size to match
+    if (args->widescreenAspect > 0.0f && *outW > 0 && *outH > 0) {
+        float nativeAspect = (float) *outW / (float) *outH;
+        if (args->widescreenAspect > nativeAspect) {
+            int widened = (int) ((float) *outH * args->widescreenAspect + 0.5f);
+            if (widened > *outW) *outW = widened;
+        } else if (args->widescreenAspect < nativeAspect) {
+            int heightened = (int) ((float) *outW / args->widescreenAspect + 0.5f);
+            if (heightened > *outH) *outH = heightened;
+        }
     }
 }
 
@@ -272,9 +320,12 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
         {"lazy-rooms", no_argument, nullptr, 'z'},
         {"eager-room", required_argument, nullptr, 'G'},
         {"os-type", required_argument, nullptr, 'O'},
+        {"window-size", required_argument, nullptr, 'w'},
+        {"widescreen-hack", optional_argument, nullptr, 1000},
         {"profile-gml-scripts", required_argument, nullptr, 'q'},
         {"save-folder", required_argument, nullptr, 'B'},
         {"game-args", required_argument, nullptr, 'N'},
+        {"lazy-textures", no_argument, nullptr, 'L'},
 #ifdef ENABLE_VM_OPCODE_PROFILER
         {"profile-opcodes", no_argument, nullptr, 'Q'},
 #endif
@@ -357,6 +408,9 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 break;
             case 'l':
                 shput(args->instanceLifecyclesToBeTraced, optarg, true);
+                break;
+            case 'L':
+                args->lazyTextures = true;
                 break;
             case 'e':
                 shput(args->eventsToBeTraced, optarg, true);
@@ -514,6 +568,34 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                     exit(1);
                 }
                 break;
+            case 'w': {
+                int32_t w = 0, h = 0;
+                if (sscanf(optarg, "%dx%d", &w, &h) != 2 || 0 >= w || 0 >= h) {
+                    fprintf(stderr, "Error: Invalid --window-size value '%s' (expected WxH, e.g. 960x544)\n", optarg);
+                    exit(1);
+                }
+                args->windowWidth = w;
+                args->windowHeight = h;
+                break;
+            }
+            case 1000: {
+                if (optarg == nullptr) {
+                    args->widescreenAspect = 16.0f / 9.0f;
+                    break;
+                }
+                int aw = 0, ah = 0;
+                double ratio = 0.0;
+                char* endPtr;
+                if (sscanf(optarg, "%d:%d", &aw, &ah) == 2 && aw > 0 && ah > 0) {
+                    args->widescreenAspect = (float) aw / (float) ah;
+                } else if ((ratio = strtod(optarg, &endPtr)), *endPtr == '\0' && ratio > 0.0) {
+                    args->widescreenAspect = (float) ratio;
+                } else {
+                    fprintf(stderr, "Error: Invalid --widescreen-hack value '%s' (expected W:H like 16:9, or a decimal like 1.7778)\n", optarg);
+                    exit(1);
+                }
+                break;
+            }
             default:
                 fprintf(stderr, "Usage: %s <path to data.win or game.unx>\n", argv[0]);
                 exit(1);
@@ -683,7 +765,8 @@ static PreviousSignalActionEntry* previousSignalActions = nullptr;
 static void onCrashSignal(int sig) {
     saveInputRecording();
     // Restore the previous handler (ASAN) and re-raise so it can report the fault
-    sigaction(sig, &previousSignalActions[hmgeti(previousSignalActions, sig)].value, nullptr);
+    ssize_t idx = hmgeti(previousSignalActions, sig);
+    sigaction(sig, &previousSignalActions[idx].value, nullptr);
     raise(sig);
 }
 #endif
@@ -691,6 +774,9 @@ static void onCrashSignal(int sig) {
 // ===[ MAIN ]===
 int main(int argc, char* argv[]) {
     setbuf(stderr, NULL);
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
 
     CommandLineArgs args;
     parseCommandLineArgs(&args, argc, argv);
@@ -708,37 +794,34 @@ int main(int argc, char* argv[]) {
     while (true) {
         printf("Loading %s...\n", args.dataWinPath);
 
-        DataWin* dataWin = DataWin_parse(
-            currentDataWinPath,
-            (DataWinParserOptions) {
-                .parseGen8 = true,
-                .parseOptn = true,
-                .parseLang = true,
-                .parseExtn = false,
-                .parseSond = true,
-                .parseAgrp = true,
-                .parseSprt = true,
-                .parseBgnd = true,
-                .parsePath = true,
-                .parseScpt = true,
-                .parseGlob = true,
-                .parseShdr = true,
-                .parseFont = true,
-                .parseTmln = true,
-                .parseObjt = true,
-                .parseRoom = true,
-                .parseTpag = true,
-                .parseCode = true,
-                .parseVari = true,
-                .parseFunc = true,
-                .parseStrg = true,
-                .parseTxtr = true,
-                .parseAudo = true,
-                .skipLoadingPreciseMasksForNonPreciseSprites = true,
-                .lazyLoadRooms = args.lazyRooms,
-                .eagerlyLoadedRooms = args.eagerRooms
-            }
-        );
+        DataWinParserOptions options = {0};
+        options.parseGen8 = true;
+        options.parseOptn = true;
+        options.parseLang = true;
+        options.parseExtn = true;
+        options.parseSond = true;
+        options.parseAgrp = true;
+        options.parseSprt = true;
+        options.parseBgnd = true;
+        options.parsePath = true;
+        options.parseScpt = true;
+        options.parseGlob = true;
+        options.parseShdr = true;
+        options.parseFont = true;
+        options.parseTmln = true;
+        options.parseObjt = true;
+        options.parseRoom = true;
+        options.parseTpag = true;
+        options.parseCode = true;
+        options.parseVari = true;
+        options.parseFunc = true;
+        options.parseStrg = true;
+        options.parseTxtr = true;
+        options.parseAudo = true;
+        options.skipLoadingPreciseMasksForNonPreciseSprites = true;
+        options.lazyLoadRooms = args.lazyRooms;
+        options.eagerlyLoadedRooms = args.eagerRooms;
+        DataWin* dataWin = DataWin_parse(currentDataWinPath, options);
 
         Gen8* gen8 = &dataWin->gen8;
         printf("Loaded \"%s\" (%d) successfully! [WAD Version %u / GameMaker version %u.%u.%u.%u]\n", gen8->name, gen8->gameID, gen8->wadVersion, dataWin->detectedFormat.major, dataWin->detectedFormat.minor, dataWin->detectedFormat.release, dataWin->detectedFormat.build);
@@ -976,8 +1059,11 @@ int main(int argc, char* argv[]) {
         }
 
 
+        int32_t windowW, windowH;
+        resolveWindowSize(&args, gen8->defaultWindowWidth, gen8->defaultWindowHeight, &windowW, &windowH);
+
         if (!platformInitialized) {
-            if (!platformInit((int)gen8->defaultWindowWidth, (int)gen8->defaultWindowHeight, windowTitle, args.headless)) {
+            if (!platformInit(windowW, windowH, windowTitle, args.headless)) {
                 DataWin_free(dataWin);
                 freeCommandLineArgs(&args);
                 return 1;
@@ -1014,7 +1100,7 @@ int main(int argc, char* argv[]) {
         } else {
             // game_change path: reuse the existing window/GL context, just retitle and resize for the new game.
             platformSetWindowTitle(gen8->displayName);
-            platformSetWindowSize((int32_t) gen8->defaultWindowWidth, (int32_t) gen8->defaultWindowHeight);
+            platformSetWindowSize(windowW, windowH);
         }
 
         // Initialize the renderer
@@ -1055,8 +1141,25 @@ int main(int argc, char* argv[]) {
 
         // Initialize the runner
         Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem);
+
+        if (!args.lazyTextures) {
+            repeat(runner->dataWin->txtr.count, i) {
+#ifdef ENABLE_MODERN_GL
+                if (gfx == MODERN_GL)
+                    GLRenderer_ensureTextureLoaded((GLRenderer*) renderer, (int32_t) i);
+#endif
+
+#ifdef ENABLE_LEGACY_GL
+                if (gfx == LEGACY_GL)
+                    GLLegacyRenderer_ensureTextureLoaded((GLLegacyRenderer*) renderer, (int32_t) i);
+#endif
+            }
+        }
         runner->debugMode = args.debug;
         runner->osType = args.osType;
+        runner->setWindowSize = platformSetWindowSize;
+        runner->getWindowSize = platformGetWindowSize;
+        runner->setWindowTitle = platformSetWindowTitle;
         Runner_setGameArgs(runner, currentGameArgs, (int32_t) arrlen(currentGameArgs));
         platformInitFunctions(runner);
 
@@ -1086,7 +1189,8 @@ int main(int argc, char* argv[]) {
         runner->vmContext->traceEventInherited = args.traceEventInherited;
 
 #ifndef _WIN32
-        struct sigaction sa = { .sa_handler = onCrashSignal };
+        struct sigaction sa = {0};
+        sa.sa_handler = onCrashSignal;
         sigemptyset(&sa.sa_mask);
         struct sigaction prev;
         sigaction(SIGABRT, &sa, &prev);
@@ -1109,6 +1213,7 @@ int main(int argc, char* argv[]) {
         bool debugShowCollisionMasks = false;
         bool actuallyShuttingDown = false;
         double lastFrameTime = platformGetTime();
+        double lastFrameStartTime = platformGetTime(); // for delta_time
         bool shouldWindowClose = false;
         while (true) {
             if (runner->shouldExit || shouldWindowClose) {
@@ -1121,14 +1226,18 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
+            double frameStartNow = platformGetTime();
+            runner->deltaTime = (frameStartNow - lastFrameStartTime) * 1000000.0;
+            lastFrameStartTime = frameStartNow;
+
             // Clear last frame's pressed/released state, then poll new input events
             RunnerKeyboard_beginFrame(runner->keyboard);
             RunnerGamepad_beginFrame(runner->gamepads);
+            RunnerMouse_beginFrame(runner->mouse);
             if (platformHandleEvents()) {
                 shouldWindowClose = true;
                 continue;
             }
-            platformGamepad_poll(runner->gamepads);
 
             // Debug key bindings
             if (runner->debugMode) {
@@ -1235,7 +1344,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Update audio system (gain fading, cleanup ended sounds)
-                float dt = (float) (platformGetTime() - lastFrameTime);
+                float dt = (float) (runner->deltaTime / 1000000.0);
                 if (0.0f > dt) dt = 0.0f;
                 if (dt > 0.1f) dt = 0.1f; // cap delta to avoid huge fades on lag spikes
                 runner->audioSystem->vtable->update(runner->audioSystem, dt);
@@ -1297,6 +1406,30 @@ int main(int argc, char* argv[]) {
                 int32_t gameW = runner->applicationWidth;
                 int32_t gameH = runner->applicationHeight;
 
+                // Widescreen hack: render into a surface grown toward the requested aspect to fake a different aspect
+                // ratio. The game's logical applicationWidth/Height is left untouched (so the reads above stay the real
+                // size and this never compounds frame-to-frame); only the local gameW/gameH used for the projection/FBO
+                // grow. A wider-than-native target grows width (reveal left/right); a taller one grows height (reveal
+                // top/bottom). Runner_drawViews reads widescreenExtraWidth/Height to expand each view to match.
+                runner->widescreenExtraWidth = 0;
+                runner->widescreenExtraHeight = 0;
+                if (args.widescreenAspect > 0.0f && runner->usingAppSurface && gameW > 0 && gameH > 0) {
+                    float nativeAspect = (float) gameW / (float) gameH;
+                    if (args.widescreenAspect > nativeAspect) {
+                        int32_t targetW = (int32_t) ((float) gameH * args.widescreenAspect + 0.5f);
+                        if (targetW > gameW) {
+                            runner->widescreenExtraWidth = targetW - gameW;
+                            gameW = targetW;
+                        }
+                    } else if (args.widescreenAspect < nativeAspect) {
+                        int32_t targetH = (int32_t) ((float) gameW / args.widescreenAspect + 0.5f);
+                        if (targetH > gameH) {
+                            runner->widescreenExtraHeight = targetH - gameH;
+                            gameH = targetH;
+                        }
+                    }
+                }
+
                 // The application surface (FBO) is sized to defaultWindowWidth x defaultWindowHeight.
                 // It is a bit hard to understand, but here's how it works:
                 // The Port X/Port Y controls the position of the game viewport within the application surface.
@@ -1308,6 +1441,28 @@ int main(int argc, char* argv[]) {
 
                 Runner_drawPre(runner, fbWidth, fbHeight);
                 Runner_computeViewDisplayScale(runner, gameW, gameH, &displayScaleX, &displayScaleY);
+
+                runner->renderGameW = gameW;
+                runner->renderGameH = gameH;
+
+                // Calculate viewport (letterboxing) in screen coordinates for mouse mapping
+                int32_t winW, winH, scaledW, scaledH;
+                platformGetScaledWindowSize(&winW, &winH);
+                if ((gameW * winH) / gameH < winW) {
+                    scaledW = (gameW * winH) / gameH;
+                    scaledH = winH;
+                } else {
+                    scaledW = winW;
+                    scaledH = (gameH * winW) / gameW;
+                }
+                runner->viewportX = (winW - scaledW) / 2;
+                runner->viewportY = (winH - scaledH) / 2;
+                runner->viewportW = scaledW;
+                runner->viewportH = scaledH;
+
+                double mx, my;
+                platformGetMousePos(&mx, &my);
+                Runner_updateMousePosition(runner, winW, winH, mx, my);
 
                 Runner_beginFrame(runner, gameW, gameH, fbWidth, fbHeight);
 
@@ -1399,10 +1554,8 @@ int main(int argc, char* argv[]) {
                 double targetFrameTime = 1.0 / (runner->currentRoom->speed * effectiveSpeed);
                 double nextFrameTime = lastFrameTime + targetFrameTime;
                 platformSleepUntil(nextFrameTime);
-                lastFrameTime = nextFrameTime;
-            } else {
-                lastFrameTime = platformGetTime();
             }
+            lastFrameTime = platformGetTime();
         }
 
         saveInputRecording();
@@ -1524,6 +1677,9 @@ int main(int argc, char* argv[]) {
             arrfree(newArguments);
         }
 
+#ifdef _WIN32
+        timeEndPeriod(1);
+#endif
         printf("Bye! :3\n");
     }
 }

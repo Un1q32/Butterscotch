@@ -400,45 +400,43 @@ int main(int argc, char* argv[]) {
     // ===[ Parse data.win ]===
     PS2Overlay_drawStatusScreen(nullptr, "Loading data.win...", false);
 
-    DataWin* dataWin = DataWin_parse(
-        dataWinPath,
-        (DataWinParserOptions) {
-            .parseGen8 = true,
-            .parseOptn = true,
-            .parseLang = true,
-            .parseExtn = false,
-            .parseSond = true,
-            .parseAgrp = true,
-            .parseSprt = true,
-            .parseBgnd = true,
-            .parsePath = true,
-            .parseScpt = true,
-            .parseGlob = true,
-            .parseShdr = true,
-            .parseFont = true,
-            .parseTmln = true,
-            .parseObjt = true,
-            .parseRoom = true,
-            .parseTpag = true,
-            .parseCode = true,
-            .parseVari = true,
-            .parseFunc = true,
-            .parseStrg = true,
-            .parseTxtr = false,
-            .parseAudo = false,
-            .skipLoadingPreciseMasksForNonPreciseSprites = true,
-            .lazyLoadRooms = lazyLoadRooms,
-            .eagerlyLoadedRooms = eagerRooms,
-            .progressCallback = PS2Overlay_statusScreenCallback,
-            .progressCallbackUserData = PS2Overlay_getCallbackData(),
-        }
-    );
+    DataWinParserOptions options = {0};
+    options.parseGen8 = true;
+    options.parseOptn = true;
+    options.parseLang = true;
+    options.parseExtn = true;
+    options.parseSond = true;
+    options.parseAgrp = true;
+    options.parseSprt = true;
+    options.parseBgnd = true;
+    options.parsePath = true;
+    options.parseScpt = true;
+    options.parseGlob = true;
+    options.parseShdr = true;
+    options.parseFont = true;
+    options.parseTmln = true;
+    options.parseObjt = true;
+    options.parseRoom = true;
+    options.parseTpag = true;
+    options.parseCode = true;
+    options.parseVari = true;
+    options.parseFunc = true;
+    options.parseStrg = true;
+    options.parseTxtr = false;
+    options.parseAudo = false;
+    options.skipLoadingPreciseMasksForNonPreciseSprites = true;
+    options.lazyLoadRooms = lazyLoadRooms;
+    options.eagerlyLoadedRooms = eagerRooms;
+    options.progressCallback = PS2Overlay_statusScreenCallback;
+    options.progressCallbackUserData = PS2Overlay_getCallbackData();
+    
+    DataWin* dataWin = DataWin_parse(dataWinPath, options);
     free(dataWinPath);
     shfree(eagerRooms);
 
     bool wadVersionSupported = false;
 #ifdef ENABLE_WAD14
-    if (dataWin->gen8.wadVersion == 13 || dataWin->gen8.wadVersion == 14) wadVersionSupported = true;
+    if (14 >= dataWin->gen8.wadVersion) wadVersionSupported = true;
 #endif
 #ifdef ENABLE_WAD16
     if (dataWin->gen8.wadVersion == 15 || dataWin->gen8.wadVersion == 16) wadVersionSupported = true;
@@ -554,8 +552,13 @@ int main(int argc, char* argv[]) {
     PS2Overlay_setDebugOverlayState(debugOverlayStartEnabled ? STATS_ENABLED : STATS_DISABLED, runner);
     uint16_t prevOverlayPadButtons = 0xFFFF;
 
+    u64 lastFrameStartTime = GetTimerSystemTime(); // for delta_time
     while (!runner->shouldExit) {
         u64 frameStartTime = GetTimerSystemTime();
+        u64 deltaTicks = frameStartTime - lastFrameStartTime;
+        runner->deltaTime = (double) (deltaTicks * 1000000ULL / (u64) kBUSCLK);
+        lastFrameStartTime = frameStartTime;
+
         // ===[ Poll Controller (always poll every vsync) ]===
         // NOTE: We do NOT call RunnerKeyboard_beginFrame here! Pressed/released edges accumulate across vsyncs so that quick taps on non-game-frame
         // vsyncs are not lost

@@ -26,6 +26,10 @@ bool platformGetWindowSize(int32_t* outW, int32_t* outH) {
     return true;
 }
 
+bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH) {
+    return platformGetWindowSize(outW, outH);
+}
+
 void platformSetWindowSize(int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return;
     fbWidth = width;
@@ -33,11 +37,20 @@ void platformSetWindowSize(int32_t width, int32_t height) {
     scr = SDL_SetVideoMode(width, height, 0, (gfx == SOFTWARE ? 0 : SDL_OPENGL) | SDL_RESIZABLE);
 }
 
+void platformGetMousePos(double *xPos, double *yPos) {
+    if (!xPos || !yPos) return;
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+
+    *xPos = (double)mx;
+    *yPos = (double)my;
+}
+
 static bool platformGetWindowFocus(void) {
     return SDL_GetAppState() & SDL_APPINPUTFOCUS;
 }
 
-bool platformInit(int reqW, int reqH, const char *title, bool headless) {
+bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) {
     if (headless && gfx != SOFTWARE) {
         fprintf(stderr, "Headless mode on SDL requires the software renderer!\n");
         return false;
@@ -52,8 +65,6 @@ bool platformInit(int reqW, int reqH, const char *title, bool headless) {
     fbWidth = reqW;
     fbHeight = reqH;
     if(!headless) {
-        if (gfx == LEGACY_GL || gfx == MODERN_GL)
-            SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, 0); // disable vsync
         scr = SDL_SetVideoMode(fbWidth, fbHeight, 0, (gfx == SOFTWARE ? 0 : SDL_OPENGL) | SDL_RESIZABLE);
         if (!scr && gfx == SOFTWARE) {
             SDL_Rect** modes = SDL_ListModes(NULL, SDL_FULLSCREEN);
@@ -71,6 +82,8 @@ bool platformInit(int reqW, int reqH, const char *title, bool headless) {
         }
     }
 
+    SDL_WM_SetCaption(title, NULL);
+
     SDL_EnableKeyRepeat(0, 0);
 
     return true;
@@ -82,9 +95,6 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
-    runner->setWindowTitle = platformSetWindowTitle;
-    runner->getWindowSize = platformGetWindowSize;
-    runner->setWindowSize = platformSetWindowSize;
     runner->windowHasFocus = platformGetWindowFocus;
 }
 
@@ -182,7 +192,6 @@ static int32_t SDLKeyToGml(int sdlkey) {
 }
 
 bool platformHandleEvents(void) {
-    bool should_exit = false;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch(e.type) {
@@ -204,14 +213,13 @@ bool platformHandleEvents(void) {
                 scr = SDL_SetVideoMode(fbWidth, fbHeight, 0, (gfx == SOFTWARE ? 0 : SDL_OPENGL) | SDL_RESIZABLE);
                 break;
             case SDL_QUIT:
-                should_exit = true;
-                break;
+                return true;
             default:
                 break;
         }
     }
 
-    return should_exit;
+    return false;
 }
 
 void platformSleepUntil(double time) {
@@ -222,8 +230,4 @@ void platformSleepUntil(double time) {
     while (platformGetTime() < time) {
         // Spin-wait for the remaining sub-millisecond
     }
-}
-
-void platformGamepad_poll(RunnerGamepadState* gp) {
-    (void)gp;
 }
