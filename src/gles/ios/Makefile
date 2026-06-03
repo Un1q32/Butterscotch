@@ -40,34 +40,7 @@ APPLICATION_NAME = Butterscotch
 # `--print` debug subcommand on desktop and pulls in dprintf-style
 # helpers we do not need on iOS.
 # -----------------------------------------------------------------------------
-BS_RUNTIME_FILES = \
-    ../../binary_reader.c \
-    ../../data_win.c \
-    ../../debug_overlay.c \
-    ../../event_table.c \
-    ../../gml_array.c \
-    ../../gml_method.c \
-    ../../ini.c \
-    ../../input_recording.c \
-    ../../instance.c \
-    ../../int_int_hashmap.c \
-    ../../int_rvalue_hashmap.c \
-    ../../json_reader.c \
-    ../../json_writer.c \
-    ../../noop_audio_system.c \
-    ../../noop_file_system.c \
-    ../../overlay_file_system.c \
-    ../../profiler.c \
-    ../../runner.c \
-    ../../runner_gamepad.c \
-    ../../runner_keyboard.c \
-    ../../spatial_grid.c \
-    ../../string_builder.c \
-    ../../vm.c \
-    ../../vm_builtins.c \
-    ../../../vendor/md5/md5.c \
-    ../../../vendor/sha1/sha1.c \
-    ../../../vendor/base64/base64.c
+BS_RUNTIME_FILES = $(wildcard ../../*.c) ../../../vendor/md5/md5.c ../../../vendor/sha1/sha1.c ../../../vendor/base64/base64.c
 
 # OpenAL-based audio system, used in place of NoopAudioSystem on iOS.
 # OpenAL is built into iOS as a system framework since iOS 2.0 and gives
