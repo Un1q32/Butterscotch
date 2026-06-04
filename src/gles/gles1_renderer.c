@@ -1172,7 +1172,7 @@ static bool gles1_resolveGlyph(GLES1Renderer* g, FontState* st, FontGlyph* glyph
 
 static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
                                    float x, float y, float xscale, float yscale, float angleDeg,
-                                   uint32_t color, float alpha) {
+                                   uint32_t color, float alpha, float lineSeparation) {
     DataWin* dw = g->base.dataWin;
     int32_t fontIndex = g->base.drawFont;
     if (fontIndex < 0 || (uint32_t) fontIndex >= dw->font.count) return;
@@ -1187,7 +1187,7 @@ static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
     int32_t textLen = (int32_t) strlen(text);
     int32_t lineCount = TextUtils_countLines(text, textLen);
     if (lineCount <= 0) return;
-    float lineStride = TextUtils_lineStride(font);
+    float lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font) : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
 
     float totalHeight = (float) lineCount * lineStride;
     float valignOffset = 0.0f;
@@ -1277,15 +1277,15 @@ static void gles1_drawTextInternal(GLES1Renderer* g, const char* text,
     glDisable(GL_TEXTURE_2D);
 }
 
-static void gles1_drawText(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang) {
-    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, r->drawColor, r->drawAlpha);
+static void gles1_drawText(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang, float lineSeparation) {
+    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, r->drawColor, r->drawAlpha, lineSeparation);
 }
 
 static void gles1_drawTextColor(Renderer* r, const char* text, float x, float y, float xs, float ys, float ang,
-                                int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha) {
+                                int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha, float lineSeparation) {
     (void) c2; (void) c3; (void) c4; 
     uint32_t bgr = (c1 >= 0) ? (uint32_t) c1 : r->drawColor;
-    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, bgr, alpha);
+    gles1_drawTextInternal(asGLES1(r), text, x, y, xs, ys, ang, bgr, alpha, lineSeparation);
 }
 
 static int32_t gles1_createSpriteFromSurface(Renderer* r, int32_t sid, int32_t x, int32_t y, int32_t w, int32_t h, bool removeback, bool smooth, int32_t xo, int32_t yo) { return -1; }
