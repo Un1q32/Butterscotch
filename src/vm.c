@@ -247,11 +247,11 @@ static Instance* findInstanceByTarget(VMContext* ctx, int32_t target);
 // The returned RValue is a weak view, callers that stash it must strengthen (incRef, strdup).
 static RValue VM_arrayReadAt(RValue* slot, int32_t index) {
     if (slot == nullptr || slot->type != RVALUE_ARRAY || slot->array == nullptr) {
-        return (RValue){ .type = RVALUE_UNDEFINED };
+        return RValue_makeUndefined();
     }
     RValue* cell = GMLArray_slot(slot->array, index);
     if (cell == nullptr) {
-        return (RValue){ .type = RVALUE_UNDEFINED };
+        return RValue_makeUndefined();
     }
     RValue result = *cell;
     result.ownsReference = false;
@@ -289,7 +289,7 @@ static void storeIntoArraySlot(RValue* slot, RValue val) {
 // Returns the (possibly newly-forked) GMLArray* now in *slot.
 static GMLArray* VM_arrayWriteAt(VMContext* ctx, RValue* slot, int32_t index, RValue val) {
     require(slot != nullptr);
-    requireMessageFormatted(index >= 0, "Trying to write to an array using a negative index! Index: %d", index);
+    requireMessageFormatted(__FILE__, __LINE__, index >= 0, "Trying to write to an array using a negative index! Index: %d", index);
 
     void* intendedOwner;
 #if IS_WAD17_OR_HIGHER_ENABLED
@@ -397,6 +397,7 @@ static const char* varTypeToString(uint8_t varType) {
 // for plain variable access.
 static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
     uint8_t varType = (varRef >> 24) & 0xF8;
+    ArrayAccess ret = {0};
     if (varType == VARTYPE_ARRAY) {
         // For array reads, GMS pushes: instanceType then arrayIndex (arrayIndex on top)
         int32_t arrayIndex = stackPopInt32(ctx);
@@ -408,7 +409,11 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
             instanceType = resolveInstanceStackTop(ctx);
         }
 
-        return (ArrayAccess){ .arrayIndex = arrayIndex, .instanceType = instanceType, .isArray = true, .hasInstanceType = true };
+        ret.arrayIndex = arrayIndex;
+        ret.instanceType = instanceType;
+        ret.isArray = true;
+        ret.hasInstanceType = true;
+        return ret;
     }
     if (varType == VARTYPE_STACKTOP) {
         int32_t instanceType = stackPopInt32(ctx);
@@ -418,22 +423,19 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
         if (IS_WAD17_OR_HIGHER(ctx) && instanceType == INSTANCE_STACKTOP) {
             instanceType = resolveInstanceStackTop(ctx);
         }
-        return (ArrayAccess){ .arrayIndex = -1, .isArray = false, .hasInstanceType = true, .instanceType = instanceType };
+        ret.arrayIndex = -1;
+        ret.isArray = false;
+        ret.hasInstanceType = true;
+        ret.instanceType = instanceType;
+        return ret;
     }
-    return (ArrayAccess){ .arrayIndex = -1, .isArray = false, .hasInstanceType = false };
+    ret.arrayIndex = -1;
+    ret.isArray = false;
+    ret.hasInstanceType = false;
+    return ret;
 }
 
 // ===[ Variable Resolution ]===
-static const char* instanceTypeName(int32_t instanceType) {
-    switch (instanceType) {
-        case INSTANCE_SELF: return "self";
-        case INSTANCE_OTHER: return "other";
-        case INSTANCE_GLOBAL: return "global";
-        case INSTANCE_LOCAL: return "local";
-        case INSTANCE_ARG: return "arg";
-        default: return "instance";
-    }
-}
 
 // Returns the object name for an instance, or "<global_scope>" for the global scope dummy instance
 static const char* instanceObjectName(VMContext* ctx, Instance* inst) {
@@ -458,7 +460,7 @@ static uint32_t growGlobalSlotSparse(VMContext* ctx, int32_t varKey) {
             ctx->globalVarCapacity = newCap;
         }
         for (uint32_t i = ctx->globalVarCount; slot >= i; i++) {
-            ctx->globalVars[i] = (RValue){ .type = RVALUE_UNDEFINED };
+            ctx->globalVars[i] = RValue_makeUndefined();
         }
         ctx->globalVarCount = slot + 1;
     }
@@ -496,7 +498,7 @@ static uint32_t resolveLocalSlot(VMContext* ctx, int32_t varID) {
     // Pre-existing entries can still be past ctx->localVarCount if a nested call to the same code extended the slot map while the outer frame was suspended (the outer frame's localVarCount is captured at call entry and doesn't follow later growth).
     if (slot >= ctx->localVarCount) {
         for (uint32_t i = ctx->localVarCount; slot >= i; i++) {
-            ctx->localVars[i] = (RValue){ .type = RVALUE_UNDEFINED };
+            ctx->localVars[i] = RValue_makeUndefined();
         }
         ctx->localVarCount = slot + 1;
     }
@@ -534,7 +536,7 @@ static inline bool tryFastVarRead(VMContext* ctx, int32_t instanceType, Variable
             Instance* inst = (Instance*) ctx->currentInstance;
             if (inst == nullptr) return false;
             RValue* slot = IntRValueHashMap_findSlot(&inst->selfVars, varDef->varID);
-            *out = (slot != nullptr) ? *slot : (RValue){ .type = RVALUE_UNDEFINED };
+            *out = (slot != nullptr) ? *slot : RValue_makeUndefined();
             out->ownsReference = false;
             return true;
         }
@@ -556,13 +558,80 @@ static inline bool tryFastVarRead(VMContext* ctx, int32_t instanceType, Variable
             Instance* inst = (Instance*) ctx->otherInstance;
             if (inst == nullptr) return false;
             RValue* slot = IntRValueHashMap_findSlot(&inst->selfVars, varDef->varID);
-            *out = (slot != nullptr) ? *slot : (RValue){ .type = RVALUE_UNDEFINED };
+            *out = (slot != nullptr) ? *slot : RValue_makeUndefined();
             out->ownsReference = false;
             return true;
         }
     }
     return false;
 }
+
+#if IS_WAD17_OR_HIGHER_ENABLED
+// Static variables: Each code index has its own "struct" for static variables.
+// Lazily create a struct for each codeIndex that needs a static variable.
+static Instance* getOrCreateStaticStruct(VMContext* ctx, int32_t codeIndex) {
+    if (ctx->staticStructs == nullptr || 0 > codeIndex || (uint32_t) codeIndex >= ctx->dataWin->code.count) return nullptr;
+    Instance* staticStruct = ctx->staticStructs[codeIndex];
+    if (staticStruct == nullptr) {
+        staticStruct = Runner_createStruct((Runner*) ctx->runner);
+        staticStruct->pinned = true;
+        ctx->staticStructs[codeIndex] = staticStruct;
+    }
+    return staticStruct;
+}
+
+// Used when the static variable could not be read from the original struct, walks through the chain to find who is the owner of the static variable.
+// Returns true and fills *out when found.
+static bool tryReadStaticFallback(VMContext* ctx, Instance* inst, int32_t varID, ArrayAccess* access, RValue* out) {
+    if (ctx->staticStructs == nullptr || inst == nullptr || inst->objectIndex != STRUCT_OBJECT_INDEX) return false;
+    if (0 > inst->constructorCodeIndex || (uint32_t) inst->constructorCodeIndex >= ctx->dataWin->code.count) return false;
+    Instance* staticStruct = ctx->staticStructs[inst->constructorCodeIndex];
+    int32_t depth = 0;
+    // Walk instance's static struct -> parent static -> ...
+    while (staticStruct != nullptr) {
+        requireMessage(64 > depth, "Try read static fallback chain is too deep! Bug?");
+        RValue* sslot = IntRValueHashMap_findSlot(&staticStruct->selfVars, varID);
+        if (sslot != nullptr) {
+            if (access->isArray) {
+                *out = VM_arrayReadAt(sslot, access->arrayIndex);
+            } else {
+                *out = *sslot;
+                out->ownsReference = false;
+            }
+            return true;
+        }
+        staticStruct = staticStruct->staticParent;
+
+        depth++;
+    }
+    return false;
+}
+
+// Links the current constructor's static struct to a parent constructor's static struct for static inheritance.
+void VM_copyStatic(VMContext* ctx, RValue* parentRef) {
+    if (ctx->staticStructs == nullptr) return;
+    // Resolve the parent constructor's code index (FUNC index -> name -> codeIndex), mirroring @@NewGMLObject@@.
+    int32_t parentCodeIndex = -1;
+    if (parentRef->type == RVALUE_METHOD && parentRef->method != nullptr) {
+        parentCodeIndex = parentRef->method->codeIndex;
+    } else {
+        int32_t rawArg = RValue_toInt32(*parentRef);
+        if (rawArg >= 0 && ctx->dataWin->func.functionCount > (uint32_t) rawArg) {
+            const char* funcName = ctx->dataWin->func.functions[rawArg].name;
+            if (funcName != nullptr) {
+                ptrdiff_t idx = shgeti(ctx->codeIndexByName, (char*) funcName);
+                if (idx >= 0) parentCodeIndex = ctx->codeIndexByName[idx].value;
+            }
+        }
+    }
+    if (0 > parentCodeIndex) return;
+    Instance* childStatic = getOrCreateStaticStruct(ctx, ctx->currentCodeIndex);
+    Instance* parentStatic = getOrCreateStaticStruct(ctx, parentCodeIndex);
+    if (childStatic != nullptr && parentStatic != nullptr && childStatic != parentStatic) {
+        childStatic->staticParent = parentStatic;
+    }
+}
+#endif
 
 static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t varRef) {
     Variable* varDef = resolveVarDef(ctx, varRef);
@@ -600,6 +669,11 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
         if (ctx->otherInstance != nullptr) {
             targetInstance = (Instance*) ctx->otherInstance;
         }
+#if IS_WAD17_OR_HIGHER_ENABLED
+    } else if (instanceType == INSTANCE_STATIC) {
+        // "static" scope: read from the current constructor's shared static struct via the normal slot path below.
+        targetInstance = getOrCreateStaticStruct(ctx, ctx->currentCodeIndex);
+#endif
     } else if (IS_WAD17_OR_HIGHER(ctx) && instanceType == INSTANCE_ARG) {
         // BC17: argument0..argument15 via INSTANCE_ARG instance type (builtinVarId pre-resolved at parse time)
         int16_t builtinVarId = varDef->builtinVarId;
@@ -678,15 +752,20 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             return RValue_makeMethod(codeIndex, -1);
         }
         // Then try registered built-ins
+        RValue rv = {0};
         ptrdiff_t bidx = shgeti(ctx->builtinMap, (char*) varDef->name);
         if (bidx >= 0) {
             BuiltinFunc bf = ctx->builtinMap[bidx].value;
-            RValue rv = { .type = RVALUE_METHOD, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
+            rv.type = RVALUE_METHOD;
+            rv.ownsReference = true;
+            rv.gmlStackType = GML_TYPE_VARIABLE;
             rv.method = GMLMethod_createBuiltin(bf, -1);
             return rv;
         }
         // Unresolved: return a method stub so CallV can log a single "unknown function" and return undefined instead of bailing out with a scary "unresolvable function reference" error.
-        RValue rv = { .type = RVALUE_METHOD, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
+        rv.type = RVALUE_METHOD;
+        rv.ownsReference = true;
+        rv.gmlStackType = GML_TYPE_VARIABLE;
         rv.method = GMLMethod_createUnresolved(varDef->name, -1);
         return rv;
     }
@@ -754,7 +833,14 @@ static RValue resolveVariableRead(VMContext* ctx, int32_t instanceType, uint32_t
             slot = IntRValueHashMap_findSlot(&inst->selfVars, varDef->varID);
             // sparse storage: nonexistent entry -> treat as undefined scalar (array reads fall through to VM_arrayReadAt returning undefined)
             if (slot == nullptr) {
-                return (RValue){ .type = RVALUE_UNDEFINED };
+#if IS_WAD17_OR_HIGHER_ENABLED
+                // Static variables: a struct field declared "static" lives on the constructor's shared static struct, not the instance.
+                RValue staticVal;
+                if (tryReadStaticFallback(ctx, inst, varDef->varID, &access, &staticVal)) {
+                    return staticVal;
+                }
+#endif
+                return RValue_makeUndefined();
             }
             break;
         }
@@ -913,6 +999,16 @@ static void resolveVariableWrite(VMContext* ctx, int32_t instanceType, uint32_t 
 #if IS_WAD17_OR_HIGHER_ENABLED
     if (IS_WAD17_OR_HIGHER(ctx) && !access.hasInstanceType && instanceType == INSTANCE_STACKTOP) {
         instanceType = resolveInstanceStackTop(ctx);
+    }
+
+    // "static" scope: write to the current constructor's shared static struct (runs once, guarded by isstaticok/setstatic).
+    if (instanceType == INSTANCE_STATIC) {
+        Instance* staticStruct = getOrCreateStaticStruct(ctx, ctx->currentCodeIndex);
+        if (staticStruct != nullptr) {
+            writeSingleInstanceVariable(ctx, staticStruct, varDef, &access, val);
+        }
+        RValue_free(&val);
+        return;
     }
 #endif
 
@@ -1558,7 +1654,7 @@ static void handleDiv(VMContext* ctx, uint32_t instr) {
     GMLReal divisor = RValue_toReal(b);
     // In GameMaker's native runner, ONLY integer/integer division throws a hard error on zero, float/variable types rely on IEEE 754 (produces NaN)
     if ((type1 == GML_TYPE_INT32 || type1 == GML_TYPE_INT64) && (type2 == GML_TYPE_INT32 || type2 == GML_TYPE_INT64)) {
-        requireMessageFormatted(divisor != 0.0, "VM: [%s] DoDiv :: Divide by zero", ctx->currentCodeName);
+        requireMessageFormatted(__FILE__, __LINE__, divisor != 0.0, "VM: [%s] DoDiv :: Divide by zero", ctx->currentCodeName);
     }
     GMLReal result = RValue_toReal(a) / divisor;
     RValue_free(&a);
@@ -1570,7 +1666,7 @@ static void handleRem(VMContext* ctx, uint32_t instr) {
     RValue b = stackPop(ctx);
     RValue a = stackPop(ctx);
     int64_t divisor = RValue_toInt64(b);
-    requireMessageFormatted(divisor != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
+    requireMessageFormatted(__FILE__, __LINE__, divisor != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
     int64_t result = RValue_toInt64(a) / divisor;
     RValue_free(&a);
     RValue_free(&b);
@@ -1581,7 +1677,7 @@ static void handleMod(VMContext* ctx, uint32_t instr) {
     RValue b = stackPop(ctx);
     RValue a = stackPop(ctx);
     GMLReal divisor = RValue_toReal(b);
-    requireMessageFormatted(divisor != 0.0, "VM: [%s] DoMod :: Divide by zero", ctx->currentCodeName);
+    requireMessageFormatted(__FILE__, __LINE__, divisor != 0.0, "VM: [%s] DoMod :: Divide by zero", ctx->currentCodeName);
     GMLReal result = GMLReal_fmod(RValue_toReal(a), divisor);
     RValue_free(&a);
     RValue_free(&b);
@@ -2099,6 +2195,22 @@ static void handleCallV(VMContext* ctx, uint32_t instr) {
         boundInstance = function.method->boundInstanceId;
         builtin = (BuiltinFunc) function.method->builtin;
         unresolvedName = function.method->unresolvedName;
+    } else if (DataWin_isVersionAtLeast(ctx->dataWin, 2, 3, 0, 0) && (function.type == RVALUE_INT32 || function.type == RVALUE_INT64 || function.type == RVALUE_REAL || function.type == RVALUE_BOOL)) {
+        // In GMS 2.3.0+: CALLV coerces any numeric operand to a script index and wraps it with method() before calling.
+        // Example: A button callback field assigned "field = some_script" without method().
+        int32_t rawArg = RValue_toInt32(function);
+        if (rawArg >= 0 && ctx->dataWin->func.functionCount > (uint32_t) rawArg) {
+            const char* funcName = ctx->dataWin->func.functions[rawArg].name;
+            if (funcName != nullptr) {
+                ptrdiff_t idx = shgeti(ctx->codeIndexByName, (char*) funcName);
+                if (idx >= 0) {
+                    codeIndex = ctx->codeIndexByName[idx].value;
+                } else {
+                    ptrdiff_t bidx = shgeti(ctx->builtinMap, (char*) funcName);
+                    if (bidx >= 0) builtin = ctx->builtinMap[bidx].value;
+                }
+            }
+        }
     }
 
     // Decide target self: prefer method's bound instance, else the stack-provided instance.
@@ -2147,6 +2259,19 @@ static void handleCallV(VMContext* ctx, uint32_t instr) {
 #endif
 
 // ===[ With-Statement Helpers (PushEnv/PopEnv) ]===
+
+// Resolves a collision/instance "target" argument by mapping the special INSTANCE_SELF and INSTANCE_OTHER to the concrete instance ID they refer to.
+int32_t VM_resolveInstanceTarget(VMContext* ctx, int32_t target) {
+    if (target == INSTANCE_SELF) {
+        Instance* self = (Instance*) ctx->currentInstance;
+        return self != nullptr ? (int32_t) self->instanceId : INSTANCE_NOONE;
+    }
+    if (target == INSTANCE_OTHER) {
+        Instance* other = (Instance*) ctx->otherInstance;
+        return other != nullptr ? (int32_t) other->instanceId : INSTANCE_NOONE;
+    }
+    return target;
+}
 
 // Checks if objectIndex is or inherits from targetObjectIndex by walking the parent chain.
 bool VM_isObjectOrDescendant(DataWin* dataWin, int32_t objectIndex, int32_t targetObjectIndex) {
@@ -2694,7 +2819,10 @@ static void handleBreakPushRef(VMContext* ctx, const uint8_t* extraData) {
                 stackPushTyped(ctx, RValue_makeMethod(cache->scriptCodeIndex, -1), GML_TYPE_VARIABLE);
                 return;
             }
-            RValue rv = { .type = RVALUE_METHOD, .ownsReference = true, .gmlStackType = GML_TYPE_VARIABLE };
+            RValue rv = {0};
+            rv.type = RVALUE_METHOD;
+            rv.ownsReference = true;
+            rv.gmlStackType = GML_TYPE_VARIABLE;
             if (cache->builtin != nullptr) {
                 rv.method = GMLMethod_createBuiltin((BuiltinFunc) cache->builtin, -1);
             } else {
@@ -2734,6 +2862,14 @@ static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr, cons
 
 #define VM_SYNC_IP()    do { ctx->ip = ip; } while (0)
 #define VM_RELOAD_IP()  do { ip = ctx->ip; } while (0)
+
+// Gets the value a code block returns when it ends without an explicit "return <value>"
+static inline RValue scriptFallthroughReturnValue(VMContext* ctx) {
+    if (DataWin_isVersionAtLeast(ctx->dataWin, 2, 3, 1, 0)) {
+        return RValue_makeUndefined();
+    }
+    return RValue_makeReal(0.0);
+}
 
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
@@ -3077,29 +3213,37 @@ static RValue executeLoop(VMContext* ctx) {
                         fastHit = true;
                         break;
                     case 0x45: // Variable -> Bool
-                        if (top->type == RVALUE_INT32) {
-                            top->int32 = top->int32 > 0 ? 1 : 0;
-                            top->type = RVALUE_BOOL;
-                            fastHit = true;
-                        } else if (top->type == RVALUE_BOOL) {
-                            // Already 0/1; nothing to do
-                            fastHit = true;
-                        } else if (top->type == RVALUE_REAL) {
-                            top->int32 = top->real > (GMLReal) 0.5 ? 1 : 0;
-                            top->type = RVALUE_BOOL;
-                            fastHit = true;
+                        switch (top->type) {
+                            case RVALUE_INT32:
+                                top->int32 = top->int32 > 0 ? 1 : 0;
+                                top->type = RVALUE_BOOL;
+                                fastHit = true;
+                                break;
+                            case RVALUE_BOOL:
+                                // Already 0/1; nothing to do
+                                fastHit = true;
+                                break;
+                            case RVALUE_REAL:
+                                top->int32 = top->real > (GMLReal) 0.5 ? 1 : 0;
+                                top->type = RVALUE_BOOL;
+                                fastHit = true;
+                                break;
                         }
                         break;
                     case 0x25: // Variable -> Int32
-                        if (top->type == RVALUE_INT32) {
-                            fastHit = true;
-                        } else if (top->type == RVALUE_BOOL) {
-                            top->type = RVALUE_INT32;
-                            fastHit = true;
-                        } else if (top->type == RVALUE_REAL) {
-                            top->int32 = (int32_t) top->real;
-                            top->type = RVALUE_INT32;
-                            fastHit = true;
+                        switch (top->type) {
+                            case RVALUE_INT32:
+                                fastHit = true;
+                                break;
+                            case RVALUE_BOOL:
+                                top->type = RVALUE_INT32;
+                                fastHit = true;
+                                break;
+                            case RVALUE_REAL:
+                                top->int32 = (int32_t) top->real;
+                                top->type = RVALUE_INT32;
+                                fastHit = true;
+                                break;
                         }
                         break;
                     case 0x02: // Int32 -> Double (Real)
@@ -3196,7 +3340,7 @@ static RValue executeLoop(VMContext* ctx) {
 
             // Exit (no return value)
             case OP_EXIT:
-                return RValue_makeUndefined();
+                return scriptFallthroughReturnValue(ctx);
 
             // Environment (with-statements)
             case OP_PUSHENV:
@@ -3223,7 +3367,7 @@ static RValue executeLoop(VMContext* ctx) {
         }
     }
 
-    return RValue_makeUndefined();
+    return scriptFallthroughReturnValue(ctx);
 }
 
 // Rewrites WAD 14 bytecode opcodes to use WAD 16 bytecode opcodes
@@ -3360,7 +3504,7 @@ VMContext* VM_create(DataWin* dataWin) {
     // Validate that no code entry exceeds MAX_CODE_LOCALS (the VM uses stack-allocated arrays of this size)
     repeat(dataWin->code.count, i) {
         CodeEntry* entry = &dataWin->code.entries[i];
-        requireMessageFormatted(MAX_CODE_LOCALS > entry->localsCount, "Code %s has too many locals!", entry->name);
+        requireMessageFormatted(__FILE__, __LINE__, MAX_CODE_LOCALS > entry->localsCount, "Code %s has too many locals!", entry->name);
     }
 
     VMBuiltins_checkIfBuiltinVarTableIsSorted();
@@ -3415,8 +3559,10 @@ VMContext* VM_create(DataWin* dataWin) {
     // V17+ static initialization tracking
     if (dataWin->gen8.wadVersion >= 17) {
         ctx->staticInitialized = safeCalloc(dataWin->code.count, sizeof(bool));
+        ctx->staticStructs = safeCalloc(dataWin->code.count, sizeof(Instance*));
     } else {
         ctx->staticInitialized = nullptr;
+        ctx->staticStructs = nullptr;
     }
     ctx->currentArrayOwner = nullptr;
     ctx->savearefBalance = 0;
@@ -3646,20 +3792,19 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
 
     // Save current frame
-    CallFrame frame = (CallFrame) {
-        .savedIP = ctx->ip,
-        .savedCodeEnd = ctx->codeEnd,
-        .savedBytecodeBase = ctx->bytecodeBase,
-        .savedLocals = ctx->localVars,
-        .savedLocalsCount = ctx->localVarCount,
-        .savedCodeName = ctx->currentCodeName,
-        .savedSavearefBalance = ctx->savearefBalance,
-        .savedCodeLocalsSlotMap = ctx->currentCodeLocalsSlotMap,
-        .savedScriptArgs = ctx->scriptArgs,
-        .savedScriptArgCount = ctx->scriptArgCount,
-        .savedCurrentCodeIndex = ctx->currentCodeIndex,
-        .parent = ctx->callStack,
-    };
+    CallFrame frame = {0};
+    frame.savedIP = ctx->ip;
+    frame.savedCodeEnd = ctx->codeEnd;
+    frame.savedBytecodeBase = ctx->bytecodeBase;
+    frame.savedLocals = ctx->localVars;
+    frame.savedLocalsCount = ctx->localVarCount;
+    frame.savedCodeName = ctx->currentCodeName;
+    frame.savedSavearefBalance = ctx->savearefBalance;
+    frame.savedCodeLocalsSlotMap = ctx->currentCodeLocalsSlotMap;
+    frame.savedScriptArgs = ctx->scriptArgs;
+    frame.savedScriptArgCount = ctx->scriptArgCount;
+    frame.savedCurrentCodeIndex = ctx->currentCodeIndex;
+    frame.parent = ctx->callStack;
     ctx->callStack = &frame;
     ctx->callDepth++;
 
@@ -4221,6 +4366,8 @@ void VM_buildCrossReferences(VMContext* ctx) {
     }
 }
 
+struct VMDisasOpcodeEntry { uint32_t key; bool value; };
+
 void VM_disassemble(VMContext* ctx, int32_t codeIndex) {
     DataWin* dw = ctx->dataWin;
     require(dw->code.count > (uint32_t) codeIndex);
@@ -4260,7 +4407,7 @@ void VM_disassemble(VMContext* ctx, int32_t codeIndex) {
     uint32_t codeLength = code->length;
 
     // Pass 1: collect branch targets for labels
-    struct { uint32_t key; bool value; }* branchTargets = nullptr;
+    struct VMDisasOpcodeEntry *branchTargets = nullptr;
     {
         uint32_t ip = 0;
         while (codeLength > ip) {
@@ -4410,6 +4557,7 @@ void VM_free(VMContext* ctx) {
 
     // Free V17+ static tracking
     free(ctx->staticInitialized);
+    free(ctx->staticStructs);
 
     // Free per-code varID -> slot maps (BC17+ only; nullptr otherwise).
     if (ctx->codeLocalsSlotMaps != nullptr) {

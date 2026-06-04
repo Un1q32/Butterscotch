@@ -235,6 +235,8 @@ if(PLATFORM STREQUAL "desktop")
     endif()
 
     if(DESKTOP_BACKEND STREQUAL "glfw3")
+        add_compile_definitions(USE_GLFW3)
+
         if(MINGW)
             find_package(glfw3 REQUIRED)
 
@@ -258,15 +260,27 @@ if(PLATFORM STREQUAL "desktop")
                 $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
         )
     elseif(DESKTOP_BACKEND STREQUAL "glfw2")
+        add_compile_definitions(USE_GLFW2)
+
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(GLFW2 REQUIRED libglfw)
         target_include_directories(butterscotch PRIVATE ${GLFW2_INCLUDE_DIRS})
         target_link_directories(butterscotch PRIVATE ${GLFW2_LIBRARY_DIRS})
         set(BACKEND_LIBRARIES ${GLFW2_LIBRARIES})
     elseif(DESKTOP_BACKEND STREQUAL "sdl1")
+        add_compile_definitions(USE_SDL1)
+
         find_package(SDL REQUIRED)
         target_include_directories(butterscotch PUBLIC ${SDL_INCLUDE_DIR})
         set(BACKEND_LIBRARIES ${SDL_LIBRARY})
+    elseif(DESKTOP_BACKEND STREQUAL "sdl2")
+        add_compile_definitions(USE_SDL2)
+
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(SDL2 REQUIRED sdl2)
+        target_include_directories(butterscotch PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_directories(butterscotch PRIVATE ${SDL2_LIBRARY_DIRS})
+        set(BACKEND_LIBRARIES ${SDL2_LIBRARIES})
     endif()
     target_link_libraries(butterscotch ${BACKEND_LIBRARIES} ${AUDIO_LIBRARIES} ${PLATFORM_LIBRARIES})
     target_sources(butterscotch PRIVATE src/desktop/backends/${DESKTOP_BACKEND}.c)

@@ -69,7 +69,10 @@ static InternalPathPoint* tempIntPoints = nullptr;
 static uint32_t tempIntPointCount = 0;
 
 static void addInternalPoint(float x, float y, float speed) {
-    InternalPathPoint pt = { .x = x, .y = y, .speed = speed, .l = 0.0 };
+    InternalPathPoint pt = {0};
+    pt.x = x;
+    pt.y = y;
+    pt.speed = speed;
     arrput(tempIntPoints, pt);
     tempIntPointCount++;
 }
@@ -170,7 +173,7 @@ void GamePath_computeInternal(GamePath* path) {
 
 // Get interpolated position at t in [0,1] (yyPath.js:362-409)
 PathPositionResult GamePath_getPosition(GamePath* path, float t) {
-    PathPositionResult result = { .x = 0.0f, .y = 0.0f, .speed = 0.0f };
+    PathPositionResult result = {0};
 
     if (path->internalPointCount == 0) return result;
 
@@ -457,9 +460,19 @@ static void parseLANG(BinaryReader* reader, DataWin* dw) {
     }
 }
 
+// Reads a uint32 at an absolute chunk offset (restoring the read cursor afterwards), or returns 0 if the offset would read past the chunk.
+static uint32_t peekUint32At(BinaryReader* reader, size_t absOffset, size_t chunkEnd) {
+    if (absOffset + 4 > chunkEnd) return 0;
+    size_t saved = BinaryReader_getPosition(reader);
+    BinaryReader_seek(reader, absOffset);
+    uint32_t value = BinaryReader_readUint32(reader);
+    BinaryReader_seek(reader, saved);
+    return value;
+}
+
 static void parseEXTN(BinaryReader* reader, DataWin* dw) {
-    // TODO: Update EXTN parser because it is broken for newer GM:S 2 versions
     Extn* e = &dw->extn;
+    size_t chunkEnd = reader->bufferBase + reader->bufferSize;
 
     uint32_t extCount;
     uint32_t* extPtrs = readPointerTable(reader, &extCount);
@@ -467,13 +480,37 @@ static void parseEXTN(BinaryReader* reader, DataWin* dw) {
 
     if (extCount == 0) { free(extPtrs); e->extensions = nullptr; return; }
 
+    int32_t extStringCount = 0;
+    if (dw->gen8.wadVersion >= 17) {
+        uint32_t firstExt = extPtrs[0];
+        // 2022.6: [folder][name][className][filesPtr][optionsPtr][files list...]; filesPtr == firstExt + 3*4 + 2*4
+        if (peekUint32At(reader, firstExt + 12, chunkEnd) == firstExt + 20) {
+            extStringCount = 3;
+
+        // 2023.4+: an extra Version string sits between name and className, shifting everything by 4 bytes
+        } else if (peekUint32At(reader, firstExt + 16, chunkEnd) == firstExt + 24) {
+            extStringCount = 4;
+        }
+    }
+
     e->extensions = safeMalloc(extCount * sizeof(Extension));
     repeat(extCount, i) {
         BinaryReader_seek(reader, extPtrs[i]);
         Extension* ext = &e->extensions[i];
         ext->folderName = readStringPtr(reader, dw);
         ext->name = readStringPtr(reader, dw);
+        // GM 2023.4+ inserts a Version string here.
+        if (extStringCount >= 4) BinaryReader_readUint32(reader);
         ext->className = readStringPtr(reader, dw);
+
+        // In the new format (GM 2022.6+) the header now holds a Files pointer and an Options pointer.
+        // Seek to the Files pointer to reach the actual list.
+        // In the old format the Files PointerList is inline right here.
+        if (extStringCount > 0) {
+            uint32_t filesPtr = BinaryReader_readUint32(reader);
+            BinaryReader_readUint32(reader); // optionsPtr (Extension options are not used by the runner)
+            BinaryReader_seek(reader, filesPtr);
+        }
 
         // Files PointerList
         uint32_t fileCount;
@@ -529,8 +566,7 @@ static void parseEXTN(BinaryReader* reader, DataWin* dw) {
     }
     free(extPtrs);
 
-    // Product ID data (16 bytes per extension, wadVersion >= 14)
-    // Skipped -- we seek to chunkEnd after parsing
+    // TODO: Product ID data (16 bytes per extension, wadVersion >= 14)
 }
 
 static void parseSOND(BinaryReader* reader, DataWin* dw) {
@@ -541,6 +577,33 @@ static void parseSOND(BinaryReader* reader, DataWin* dw) {
     s->count = count;
 
     if (count == 0) { free(ptrs); s->sounds = nullptr; return; }
+
+    if (DataWin_isVersionAtLeast(dw, 2023, 2, 0, 0) && !DataWin_isVersionAtLeast(dw, 2024, 6, 0, 0)) {
+        uint32_t soundPtrs[2];
+        uint32_t soundCount = 0;
+        repeat(count, i) {
+            if (ptrs[i] == 0)
+                continue;
+            soundPtrs[soundCount++] = ptrs[i];
+            if (soundCount >= 2)
+                break;
+        }
+
+        if (soundCount >= 2) {
+            if (soundPtrs[0] + (4 * 9) == soundPtrs[1] - 4) {
+                DataWin_bumpVersionTo(dw, 2024, 6, 0, 0);
+            }
+        } else if (soundCount == 1) {
+            size_t savedPos = BinaryReader_getPosition(reader);
+            size_t probe = (size_t) (soundPtrs[0] + (4 * 9));
+            requireMessageFormatted(__FILE__, __LINE__, (probe % 16) != 4, "parseSOND: unexpected SOND alignment at 0x%zx");
+            BinaryReader_seek(reader, probe);
+            if (BinaryReader_readUint32(reader) != 0) {
+                DataWin_bumpVersionTo(dw, 2024, 6, 0, 0);
+            }
+            BinaryReader_seek(reader, savedPos);
+        }
+    }
 
     s->sounds = safeCalloc(count, sizeof(Sound));
     repeat(count, i) {
@@ -674,6 +737,20 @@ static void parseSPRT(BinaryReader* reader, DataWin* dw, bool skipLoadingPrecise
         // Width in bytes = (spriteWidth + 7) / 8, total = widthInBytes * spriteHeight
         // After all masks, data is padded to 4-byte alignment
         // Zero-dimension sprites (placeholder/empty assets in test files) omit the mask block entirely
+        // GMS 2024.6+ stores collision masks at bounding-box dimensions (marginRight-marginLeft+1 by marginBottom-marginTop+1) instead of the full sprite size.
+        // Pre-2024.6 they cover the full sprite.
+        if (DataWin_isVersionAtLeast(dw, 2024, 6, 0, 0)) {
+            spr->maskWidth = (uint32_t) (spr->marginRight - spr->marginLeft + 1);
+            spr->maskHeight = (uint32_t) (spr->marginBottom - spr->marginTop + 1);
+            spr->maskOffsetX = spr->marginLeft;
+            spr->maskOffsetY = spr->marginTop;
+        } else {
+            spr->maskWidth = spr->width;
+            spr->maskHeight = spr->height;
+            spr->maskOffsetX = 0;
+            spr->maskOffsetY = 0;
+        }
+
         if (spr->width == 0 || spr->height == 0) {
             spr->maskCount = 0;
             spr->masks = nullptr;
@@ -681,9 +758,9 @@ static void parseSPRT(BinaryReader* reader, DataWin* dw, bool skipLoadingPrecise
         }
         uint32_t maskDataCount = BinaryReader_readUint32(reader);
         spr->maskCount = maskDataCount;
-        if (maskDataCount > 0 && spr->width > 0 && spr->height > 0) {
-            uint32_t bytesPerRow = (spr->width + 7) / 8;
-            uint32_t bytesPerMask = bytesPerRow * spr->height;
+        if (maskDataCount > 0 && spr->maskWidth > 0 && spr->maskHeight > 0) {
+            uint32_t bytesPerRow = (spr->maskWidth + 7) / 8;
+            uint32_t bytesPerMask = bytesPerRow * spr->maskHeight;
 
             if (spr->sepMasks == 1 || !skipLoadingPreciseMasksForNonPreciseSprites) {
                 spr->masks = safeMalloc(maskDataCount * sizeof(uint8_t*));
@@ -1340,7 +1417,7 @@ static void readRoomBackgrounds(BinaryReader* reader, Room* room) {
     free(bgPtrs);
 }
 
-static void readRoomViews(BinaryReader* reader, DataWin* dw, Room* room) {
+static void readRoomViews(BinaryReader* reader, Room* room) {
     uint32_t viewCount;
     uint32_t* viewPtrsArr = readPointerTable(reader, &viewCount);
     room->views = safeMalloc(8 * sizeof(RoomView));
@@ -1652,7 +1729,7 @@ static void readRoomPayload(BinaryReader* reader, DataWin* dw, Room* room) {
     readRoomBackgrounds(reader, room);
 
     BinaryReader_seek(reader, room->viewsFileOffset);
-    readRoomViews(reader, dw, room);
+    readRoomViews(reader, room);
 
     BinaryReader_seek(reader, room->gameObjectsFileOffset);
     readRoomGameObjects(reader, dw, room);
@@ -1837,35 +1914,94 @@ static void parseROOM(BinaryReader* reader, DataWin* dw, bool lazyLoadRooms, Str
     free(ptrs);
 }
 
+// Parses a TexturePageItem at the current reader position
+// If i = -1, a new item entry will be allocated AND will be marked as a WinPack WAD
+// Returns the index of the TPAG
+static int32_t parseTexturePageItem(BinaryReader* reader, DataWin* dw, int32_t i) {
+    int32_t position = i;
+    if (i == -1) {
+        fprintf(stderr, "DataWin: Allocated new TPAG! Was the WAD built with WinPack? (TranslaTale)\n");
+        uint32_t newCount = dw->tpag.count + 1;
+        TexturePageItem* newItems = safeCalloc(newCount, sizeof(TexturePageItem));
+        memcpy(newItems, dw->tpag.items, dw->tpag.count * sizeof(TexturePageItem));
+        free(dw->tpag.items);
+
+        dw->tpag.count = newCount;
+
+        dw->tpag.items = newItems;
+        position = (int32_t) newCount - 1;
+    }
+
+    TexturePageItem* item = &dw->tpag.items[position];
+    item->present = true;
+    item->sourceX = BinaryReader_readUint16(reader);
+    item->sourceY = BinaryReader_readUint16(reader);
+    item->sourceWidth = BinaryReader_readUint16(reader);
+    item->sourceHeight = BinaryReader_readUint16(reader);
+    item->targetX = BinaryReader_readUint16(reader);
+    item->targetY = BinaryReader_readUint16(reader);
+    item->targetWidth = BinaryReader_readUint16(reader);
+    item->targetHeight = BinaryReader_readUint16(reader);
+    item->boundingWidth = BinaryReader_readUint16(reader);
+    item->boundingHeight = BinaryReader_readUint16(reader);
+    item->texturePageId = BinaryReader_readInt16(reader);
+
+    if (i == -1) {
+        // WinPack texture pages are off by one, because uuhh... it seems that it considers the runner allocated 1x1 white texture for some reason?!
+        item->texturePageId -= 1;
+    }
+
+    return position;
+}
+
 // Sprite/Background/Font initially store an absolute file offset to their TexturePageItem (since SPRT/BGND/FONT are parsed before TPAG).
 // resolveAllTPAGReferences translates those offsets to TPAG indices once the table is known. ptrs[] is the TPAG pointer table in monotonically increasing file order, so we can binary search it.
 // Offsets that don't resolve (or are 0) become -1.
-static int32_t findTPAGIndexByOffset(uint32_t* ptrs, uint32_t count, uint32_t offset) {
-    if (offset == 0) return -1;
+static int32_t findTPAGIndexByOffset(BinaryReader* reader, DataWin* dw, uint32_t* ptrs, uint32_t count, uint32_t offset) {
+    if (offset == 0)
+        return -1;
+
     uint32_t lo = 0, hi = count;
     while (hi > lo) {
         uint32_t mid = (lo + hi) >> 1;
         uint32_t v = ptrs[mid];
-        if (v == offset) return (int32_t) mid;
-        if (offset > v) lo = mid + 1; else hi = mid;
+
+        if (v == offset)
+            return (int32_t) mid;
+
+        if (offset > v)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
+
+    // This is stupidly annoying
+    // WinPack (used by TranslaTale) stores TPAGs OUTSIDE of the IFF chunk and those entries are NOT present in the TPAG list
+    // So we need to manually read it
+    // The offset is an absolute position
+    if (reader->fileSize > offset) {
+        BinaryReader_seek(reader, offset);
+
+        return parseTexturePageItem(reader, dw, -1);
+    }
+
     return -1;
 }
 
-static void resolveAllTPAGReferences(DataWin* dw, uint32_t* ptrs, uint32_t count) {
+static void resolveAllTPAGReferences(BinaryReader* reader, DataWin* dw, uint32_t* ptrs, uint32_t count) {
     repeat(dw->sprt.count, i) {
         Sprite* spr = &dw->sprt.sprites[i];
         repeat(spr->textureCount, j) {
-            spr->tpagIndices[j] = findTPAGIndexByOffset(ptrs, count, (uint32_t) spr->tpagIndices[j]);
+            spr->tpagIndices[j] = findTPAGIndexByOffset(reader, dw, ptrs, count, (uint32_t) spr->tpagIndices[j]);
         }
     }
     repeat(dw->bgnd.count, i) {
         Background* bg = &dw->bgnd.backgrounds[i];
-        bg->tpagIndex = findTPAGIndexByOffset(ptrs, count, (uint32_t) bg->tpagIndex);
+        bg->tpagIndex = findTPAGIndexByOffset(reader, dw, ptrs, count, (uint32_t) bg->tpagIndex);
     }
     repeat(dw->font.count, i) {
         Font* fnt = &dw->font.fonts[i];
-        fnt->tpagIndex = findTPAGIndexByOffset(ptrs, count, (uint32_t) fnt->tpagIndex);
+        fnt->tpagIndex = findTPAGIndexByOffset(reader, dw, ptrs, count, (uint32_t) fnt->tpagIndex);
     }
 }
 
@@ -1882,22 +2018,10 @@ static void parseTPAG(BinaryReader* reader, DataWin* dw) {
     repeat(count, i) {
         if (ptrs[i] == 0) { t->items[i].texturePageId = -1; continue; }
         BinaryReader_seek(reader, ptrs[i]);
-        TexturePageItem* item = &t->items[i];
-        item->present = true;
-        item->sourceX = BinaryReader_readUint16(reader);
-        item->sourceY = BinaryReader_readUint16(reader);
-        item->sourceWidth = BinaryReader_readUint16(reader);
-        item->sourceHeight = BinaryReader_readUint16(reader);
-        item->targetX = BinaryReader_readUint16(reader);
-        item->targetY = BinaryReader_readUint16(reader);
-        item->targetWidth = BinaryReader_readUint16(reader);
-        item->targetHeight = BinaryReader_readUint16(reader);
-        item->boundingWidth = BinaryReader_readUint16(reader);
-        item->boundingHeight = BinaryReader_readUint16(reader);
-        item->texturePageId = BinaryReader_readInt16(reader);
+        parseTexturePageItem(reader, dw, i);
     }
 
-    resolveAllTPAGReferences(dw, ptrs, count);
+    resolveAllTPAGReferences(reader, dw, ptrs, count);
 
     free(ptrs);
 }
@@ -2239,6 +2363,16 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
 
     BinaryReader reader = BinaryReader_create(file, (size_t) fileSize);
 
+    // Some WAD files, such as ones made with https://github.com/AlexWaveDiver/TranslaTale (I think?) have pointers inside a chunk pointing to data in OTHER chunks
+    // The original runner doesn't care because it loads the entire file in memory up front, so we do the same if asked
+    // (we don't do that by default because some low end platforms would NOT be able to handle it)
+    uint8_t* wholeFileData = nullptr;
+    if (options.loadType == DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME) {
+        wholeFileData = safeMalloc((size_t) fileSize);
+        fread(wholeFileData, 1, (size_t) fileSize, file);
+        BinaryReader_setBuffer(&reader, wholeFileData, 0, (size_t) fileSize);
+    }
+
     // Validate FORM header
     char formMagic[4];
     BinaryReader_readBytes(&reader, formMagic, 4);
@@ -2351,7 +2485,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
 
         // Bulk-read the chunk data into memory for fast parsing
         uint8_t* chunkBuffer = nullptr;
-        if (shouldParse && chunkLength > 0) {
+        if (shouldParse && chunkLength > 0 && options.loadType != DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME) {
             chunkBuffer = safeMalloc(chunkLength);
             size_t read = fread(chunkBuffer, 1, chunkLength, reader.file);
             if (read != chunkLength) {
@@ -2437,7 +2571,11 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         }
 
         // Seek to chunk end (skip any unread data or trailing padding)
-        fseek(reader.file, (long) chunkEnd, SEEK_SET);
+        if (options.loadType == DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME) {
+            BinaryReader_seek(&reader, chunkEnd);
+        } else {
+            fseek(reader.file, (long) chunkEnd, SEEK_SET);
+        }
         chunkIndex++;
     }
 
@@ -2461,6 +2599,10 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         dw->lazyLoadFilePath = nullptr;
         dw->fileSize = 0;
         fclose(file);
+    }
+
+    if (wholeFileData != nullptr) {
+        free(wholeFileData);
     }
 
     return dw;
