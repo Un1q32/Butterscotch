@@ -1211,6 +1211,7 @@ int main(int argc, char* argv[]) {
         // Main loop
         bool debugPaused = false;
         bool debugShowCollisionMasks = false;
+        bool freeCamActive = false;
         bool actuallyShuttingDown = false;
         double lastFrameTime = platformGetTime();
         double lastFrameStartTime = platformGetTime(); // for delta_time
@@ -1323,6 +1324,34 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "Debug: Collision mask overlay %s!\n", debugShowCollisionMasks ? "enabled" : "disabled");
                 }
 
+                // Enable free cam
+                if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F3)) {
+                    runner->freeCamPanX = 0.0f;
+                    runner->freeCamPanY = 0.0f;
+                    runner->freeCamZoom = 1.0f;
+
+                    freeCamActive = !freeCamActive;
+                    fprintf(stderr, "Debug: Free cam %s!\n", freeCamActive ? "enabled" : "disabled");
+                }
+
+                if (freeCamActive) {
+                    if (RunnerKeyboard_check(runner->keyboard, VK_UP)) {
+                        runner->freeCamPanY -= (float) (0.000005f * runner->deltaTime);
+                    }
+
+                    if (RunnerKeyboard_check(runner->keyboard, VK_DOWN)) {
+                        runner->freeCamPanY += (float) (0.000005f * runner->deltaTime);
+                    }
+
+                    if (RunnerKeyboard_check(runner->keyboard, VK_LEFT)) {
+                        runner->freeCamPanX -= (float) (0.000005f * runner->deltaTime);
+                    }
+
+                    if (RunnerKeyboard_check(runner->keyboard, VK_RIGHT)) {
+                        runner->freeCamPanX += (float) (0.000005f * runner->deltaTime);
+                    }
+                }
+
                 // Reset global interact state because I HATE when I get stuck while moving through rooms
                 if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F10)) {
                     int32_t interactVarId = shget(runner->vmContext->globalVarNameMap, "interact");
@@ -1331,8 +1360,33 @@ int main(int argc, char* argv[]) {
                     printf("Changed global.interact [%d] value!\n", interactVarId);
                 }
 
+                bool* currentKeyDown = safeCalloc(GML_KEY_COUNT, sizeof(bool));
+                bool* currentKeyPressed = safeCalloc(GML_KEY_COUNT, sizeof(bool));
+                bool* currentKeyReleased = safeCalloc(GML_KEY_COUNT, sizeof(bool));
+
+                if (freeCamActive) {
+                    // THIS IS A HACK!! We don't want to pass keys to the runner, but we DO want to keep it so we can hold the arrow keys to move the camera
+                    memcpy(currentKeyDown, runner->keyboard->keyDown, sizeof(runner->keyboard->keyDown));
+                    memcpy(currentKeyPressed, runner->keyboard->keyPressed, sizeof(runner->keyboard->keyPressed));
+                    memcpy(currentKeyReleased, runner->keyboard->keyReleased, sizeof(runner->keyboard->keyReleased));
+
+                    memset(runner->keyboard->keyDown, 0, sizeof(runner->keyboard->keyDown));
+                    memset(runner->keyboard->keyPressed, 0, sizeof(runner->keyboard->keyPressed));
+                    memset(runner->keyboard->keyReleased, 0, sizeof(runner->keyboard->keyReleased));
+                }
+
                 // Run one game step (Begin Step, Keyboard, Alarms, Step, End Step, room transitions)
                 Runner_step(runner);
+
+                if (freeCamActive) {
+                    memcpy(runner->keyboard->keyDown, currentKeyDown, sizeof(runner->keyboard->keyDown));
+                    memcpy(runner->keyboard->keyPressed, currentKeyPressed, sizeof(runner->keyboard->keyPressed));
+                    memcpy(runner->keyboard->keyReleased, currentKeyReleased, sizeof(runner->keyboard->keyReleased));
+                }
+
+                free(currentKeyDown);
+                free(currentKeyPressed);
+                free(currentKeyReleased);
 
                 if (args.profilerFramesBetween > 0 && runner->frameCount > 0 && runner->frameCount % args.profilerFramesBetween == 0) {
                     char* profilerReport = Profiler_createReport(vm->profiler, 20, args.profilerFramesBetween);

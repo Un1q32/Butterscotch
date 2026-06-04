@@ -998,6 +998,25 @@ static void expandViewAxis(int32_t pos, int32_t size, int32_t surfaceSize, int32
     *outPos = center - *outSize / 2;
 }
 
+// Applies the visual-only free camera (pan + zoom) on top of a view rectangle, in place.
+static void applyFreeCamera(Runner* runner, int32_t* viewX, int32_t* viewY, int32_t* viewW, int32_t* viewH) {
+    float zoom = runner->freeCamZoom;
+    if (0.0f >= zoom) zoom = 1.0f;
+    if (zoom == 1.0f && runner->freeCamPanX == 0.0f && runner->freeCamPanY == 0.0f) return;
+
+    float baseW = (float) *viewW;
+    float baseH = (float) *viewH;
+    float zoomedW = baseW / zoom;
+    float zoomedH = baseH / zoom;
+    float centerX = (float) *viewX + baseW * 0.5f + runner->freeCamPanX * baseW;
+    float centerY = (float) *viewY + baseH * 0.5f + runner->freeCamPanY * baseH;
+
+    *viewW = (int32_t) zoomedW;
+    *viewH = (int32_t) zoomedH;
+    *viewX = (int32_t) (centerX - zoomedW * 0.5f);
+    *viewY = (int32_t) (centerY - zoomedH * 0.5f);
+}
+
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks) {
     Renderer* renderer = runner->renderer;
     Room* activeRoom = runner->currentRoom;
@@ -1019,6 +1038,7 @@ void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displa
             int32_t viewX, viewY, viewW, viewH;
             expandViewAxis(camera->viewX, camera->viewWidth, gameW, widescreenBaseW, &viewX, &viewW);
             expandViewAxis(camera->viewY, camera->viewHeight, gameH, widescreenBaseH, &viewY, &viewH);
+            applyFreeCamera(runner, &viewX, &viewY, &viewW, &viewH);
             int32_t portX = (int32_t) ((float) view->portX * displayScaleX + 0.5f);
             int32_t portY = (int32_t) ((float) view->portY * displayScaleY + 0.5f);
             int32_t portW = (int32_t) ((float) view->portWidth * displayScaleX + 0.5f);
@@ -1044,7 +1064,10 @@ void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displa
         runner->viewCurrent = 0;
         int32_t fullViewX = -(runner->widescreenExtraWidth / 2);
         int32_t fullViewY = -(runner->widescreenExtraHeight / 2);
-        renderer->vtable->beginView(renderer, fullViewX, fullViewY, gameW, gameH, 0, 0, gameW, gameH, 0.0f);
+        int32_t fullViewW = gameW;
+        int32_t fullViewH = gameH;
+        applyFreeCamera(runner, &fullViewX, &fullViewY, &fullViewW, &fullViewH);
+        renderer->vtable->beginView(renderer, fullViewX, fullViewY, fullViewW, fullViewH, 0, 0, gameW, gameH, 0.0f);
         Runner_draw(runner);
 
         if (debugShowCollisionMasks) DebugOverlay_drawCollisionMasks(runner);
@@ -1832,6 +1855,9 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     runner->oldApplicationHeight = runner->applicationHeight;
     runner->widescreenExtraWidth = 0;
     runner->widescreenExtraHeight = 0;
+    runner->freeCamPanX = 0.0f;
+    runner->freeCamPanY = 0.0f;
+    runner->freeCamZoom = 1.0f;
     runner->applicationSurfaceId = APPLICATION_SURFACE_ID;
     renderer->runner = runner;
     runner->viewportW = 1;

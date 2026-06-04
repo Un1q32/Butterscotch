@@ -447,6 +447,7 @@ struct Runner {
     int32_t oldApplicationHeight;
     int32_t widescreenExtraWidth;
     int32_t widescreenExtraHeight;
+    float freeCamPanX, freeCamPanY, freeCamZoom; // Visual-only free camera.
     // ID returned by renderer->vtable->ensureApplicationSurface each frame. Real surface ID on GL/GL-legacy,
     // APPLICATION_SURFACE_ID (-1) on PS2. This is what BUILTIN_VAR_APPLICATION_SURFACE returns to GML.
     int32_t applicationSurfaceId;
