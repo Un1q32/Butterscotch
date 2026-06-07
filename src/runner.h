@@ -366,6 +366,7 @@ typedef struct {
     TileLayerMapEntry* tileLayerMap; // stb_ds hashmap: depth -> tile layer state
     RuntimeLayer* runtimeLayers; // stb_ds array, index-parallel to currentRoom->layers
     RuntimeView views[MAX_VIEWS];
+    bool viewsEnabled;
     GMLCamera defaultCameras[MAX_DEFAULT_ROOM_CAMERAS]; // whole-array snapshot of Runner.defaultCameras (room-scoped)
 } SavedRoomState;
 
@@ -460,6 +461,7 @@ struct Runner {
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
     SavedRoomState* savedRoomStates; // array of size dataWin->room.count, for persistent room support
     int32_t viewCurrent; // index of the view currently being drawn (for view_current)
+    bool viewsEnabled;   // runtime-mutable global view system toggle (view_enabled); seeded from room->flags & 1 on room enter
     int32_t renderGameW; // FBO width used by the last frame (= max port bound), 0 if not yet rendered
     int32_t renderGameH; // FBO height used by the last frame (= max port bound), 0 if not yet rendered
     int32_t viewportX;   // X offset in window (letterboxing)
@@ -594,7 +596,7 @@ void Runner_drawPost(Runner* runner, int32_t windowW, int32_t windowH);
 void Runner_drawBackgrounds(Runner* runner, bool foreground);
 void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH, float* outScaleX, float* outScaleY);
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks);
-void Runner_updateMousePosition(Runner* runner, int32_t winW, int32_t winH, double mx, double my);
+void Runner_updateMousePosition(Runner* runner, int32_t windowWidth, int32_t windowHeight, double mouseXInWindow, double mouseYInWindow);
 // Converts the cached screen-space cursor (RunnerMouseState.screenX/screenY) to room/world coordinates using the LIVE camera/view state.
 void Runner_getMouseRoomPosition(Runner* runner, GMLReal* outX, GMLReal* outY);
 // Resolves a camera id (slot index) to its pool entry, or nullptr if out of range / not allocated.

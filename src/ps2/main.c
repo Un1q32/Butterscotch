@@ -30,6 +30,7 @@
 #include "utils.h"
 #include "../profiler.h"
 #include "ps2/ps2_overlay.h"
+#include "iopcontrol.h"
 
 #ifdef GPROF_PROFILING
 #include <ps2prof.h>
@@ -239,6 +240,12 @@ static unsigned int hidUsageToAsciiChar(uint8_t hid, bool shift) {
 int main(int argc, char* argv[]) {
     SifInitRpc(0);
     sbv_patch_enable_lmb();
+
+    // Reset IOP borrowed from uLaunchELF
+    while (!SifIopReset(NULL, 0)) {};
+    while (!SifIopSync()) {};
+
+    SifInitRpc(0);
 
     // Ask the kernel how much main RAM we actually have.
     MAX_MEMORY_BYTES = (int) GetMemorySize();
@@ -651,8 +658,8 @@ int main(int argc, char* argv[]) {
             uint8_t bgR = BGR_R(runner->backgroundColor);
             uint8_t bgG = BGR_G(runner->backgroundColor);
             uint8_t bgB = BGR_B(runner->backgroundColor);
-            uint8_t bgA = BGR_A(runner->backgroundColor);
-            u64 bgColor = GS_SETREG_RGBAQ(bgR, bgG, bgB, bgA, 0x00);
+            // Force opaque for the background to avoid PrimAlphaEnable causing issues.
+            u64 bgColor = GS_SETREG_RGBAQ(bgR, bgG, bgB, 0x80, 0x00);
             gsKit_prim_sprite(gsGlobal, 0, 0, 640, 448, 0, bgColor);
         }
 

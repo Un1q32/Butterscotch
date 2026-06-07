@@ -1277,7 +1277,9 @@ static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData,
                         break;
                     }
                     default: {
-                        Instance* inst = findInstanceByTarget(ctx, scope);
+                        // Negative pseudo-scopes not handled above resolve to the current instance, mirroring handlePushBltn.
+                        // Positive scopes are real instance IDs resolved by lookup.
+                        Instance* inst = (0 > scope) ? (Instance*) ctx->currentInstance : findInstanceByTarget(ctx, scope);
                         if (inst == nullptr) {
                             fprintf(stderr, "VM: ARRAYPUSHAF: no instance for scope %d varID=%d\n", scope, varDef->varID);
                             abort();
@@ -2863,6 +2865,14 @@ static void handleBreak(VMContext* ctx, uint32_t instr, uint32_t instrAddr, cons
 #define VM_SYNC_IP()    do { ctx->ip = ip; } while (0)
 #define VM_RELOAD_IP()  do { ip = ctx->ip; } while (0)
 
+// Gets the value a code block returns when it ends without an explicit "return <value>"
+static inline RValue scriptFallthroughReturnValue(VMContext* ctx) {
+    if (DataWin_isVersionAtLeast(ctx->dataWin, 2, 3, 1, 0)) {
+        return RValue_makeUndefined();
+    }
+    return RValue_makeReal(0.0);
+}
+
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
     // reload the values at the end of every iteration.
@@ -3332,7 +3342,7 @@ static RValue executeLoop(VMContext* ctx) {
 
             // Exit (no return value)
             case OP_EXIT:
-                return RValue_makeUndefined();
+                return scriptFallthroughReturnValue(ctx);
 
             // Environment (with-statements)
             case OP_PUSHENV:
@@ -3359,7 +3369,7 @@ static RValue executeLoop(VMContext* ctx) {
         }
     }
 
-    return RValue_makeUndefined();
+    return scriptFallthroughReturnValue(ctx);
 }
 
 // Rewrites WAD 14 bytecode opcodes to use WAD 16 bytecode opcodes

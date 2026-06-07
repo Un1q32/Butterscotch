@@ -12,6 +12,11 @@
 // Forward declaration for progress callback
 typedef struct DataWin DataWin;
 
+typedef enum {
+    DATAWINLOADTYPE_LOAD_PER_CHUNK,
+    DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME
+} DataWinLoadType;
+
 typedef struct {
     bool parseGen8;
     bool parseOptn;
@@ -53,6 +58,8 @@ typedef struct {
 
     // Same as skipLoadingTxtrBlobs but for AUDO (WAV/OGG audio blobs).
     bool skipLoadingAudoBlobs;
+
+    DataWinLoadType loadType;
 
     // Optional progress callback, called before each chunk is parsed.
     // chunkName: 4-character chunk name (e.g. "GEN8", "SPRT")
