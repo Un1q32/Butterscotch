@@ -332,6 +332,7 @@ static void glBeginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_
     // World -> clip transform for this view.
     Matrix4f projection;
     Matrix4f_viewProjection(&projection, (float) viewX, (float) viewY, (float) viewW, (float) viewH, viewAngle);
+    Matrix4f_flipClipY(&projection);
 
     glUseProgram(gl->shaderProgram);
     glUniformMatrix4fv(gl->uProjection, 1, GL_FALSE, projection.m);
@@ -354,9 +355,11 @@ static void glApplyProjection(Renderer* renderer, const Matrix4f* worldToClip) {
     GLRenderer* gl = (GLRenderer*) renderer;
     // Flush first so pending quads draw under the projection they were issued with.
     flushBatch(gl);
+    Matrix4f projection = *worldToClip;
+    Matrix4f_flipClipY(&projection);
     glUseProgram(gl->shaderProgram);
-    glUniformMatrix4fv(gl->uProjection, 1, GL_FALSE, worldToClip->m);
-    renderer->PreviousViewMatrix = *worldToClip;
+    glUniformMatrix4fv(gl->uProjection, 1, GL_FALSE, projection.m);
+    renderer->PreviousViewMatrix = projection;
 }
 
 static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) {

@@ -170,6 +170,7 @@ static void glBeginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_
     // World -> clip transform for this view.
     Matrix4f projection;
     Matrix4f_viewProjection(&projection, (float) viewX, (float) viewY, (float) viewW, (float) viewH, viewAngle);
+    Matrix4f_flipClipY(&projection);
 
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(projection.m);
@@ -186,11 +187,13 @@ static void glEndView(MAYBE_UNUSED Renderer* renderer) {
 
 // camera_apply: swap the active world->clip projection on the current target without touching its viewport.
 static void glApplyProjection(Renderer* renderer, const Matrix4f* worldToClip) {
+    Matrix4f projection = *worldToClip;
+    Matrix4f_flipClipY(&projection);
     glMatrixMode(GL_PROJECTION);
-    glLoadMatrixf(worldToClip->m);
+    glLoadMatrixf(projection.m);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    renderer->PreviousViewMatrix = *worldToClip;
+    renderer->PreviousViewMatrix = projection;
 }
 
 static void glBeginGUI(Renderer* renderer, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH) {
