@@ -371,6 +371,7 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "view_angle", BUILTIN_VAR_VIEW_ANGLE },
     { "view_camera", BUILTIN_VAR_CAMERA_VIEW },
     { "view_current", BUILTIN_VAR_VIEW_CURRENT },
+    { "view_enabled", BUILTIN_VAR_VIEW_ENABLED },
     { "view_hborder", BUILTIN_VAR_VIEW_HBORDER },
     { "view_hport", BUILTIN_VAR_VIEW_HPORT },
     { "view_hspeed", BUILTIN_VAR_VIEW_HSPEED },
@@ -725,8 +726,12 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
 
         // View properties
         case BUILTIN_VAR_VIEW_CURRENT:
-        case BUILTIN_VAR_CAMERA_VIEW:
             return RValue_makeReal((GMLReal) runner->viewCurrent);
+        case BUILTIN_VAR_VIEW_ENABLED:
+            return RValue_makeBool(runner->viewsEnabled);
+        case BUILTIN_VAR_CAMERA_VIEW:
+            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) return RValue_makeReal((GMLReal) runner->views[arrayIndex].cameraId);
+            return RValue_makeReal(-1.0);
         case BUILTIN_VAR_VIEW_XVIEW: {
             GMLCamera* camera = Runner_getCameraForView(runner, arrayIndex);
             if (camera != nullptr) return RValue_makeReal((GMLReal) camera->viewX);
@@ -1397,6 +1402,12 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
             return;
         case BUILTIN_VAR_VIEW_VISIBLE:
             if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) runner->views[arrayIndex].enabled = RValue_toBool(val);
+            return;
+        case BUILTIN_VAR_VIEW_ENABLED:
+            runner->viewsEnabled = RValue_toBool(val);
+            return;
+        case BUILTIN_VAR_CAMERA_VIEW:
+            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) runner->views[arrayIndex].cameraId = RValue_toInt32(val);
             return;
         case BUILTIN_VAR_VIEW_ANGLE: {
             GMLCamera* camera = Runner_getCameraForView(runner, arrayIndex);
@@ -10629,6 +10640,24 @@ static RValue builtin_action_draw_sprite(VMContext* ctx, RValue* args, MAYBE_UNU
     return RValue_makeUndefined();
 }
 
+// action_draw_variable(value, x, y) - draws the value as text at (x, y), respecting the relative flag.
+static RValue builtin_action_draw_variable(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    if (runner->renderer == nullptr) return RValue_makeUndefined();
+
+    char* str = RValue_toString(args[0]);
+    float x = (float) RValue_toReal(args[1]);
+    float y = (float) RValue_toReal(args[2]);
+
+    applyActionRelativeOffset(ctx, &x, &y);
+
+    PreprocessedText processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
+    runner->renderer->vtable->drawText(runner->renderer, processedText.text, x, y, 1.0f, 1.0f, 0.0f, -1.0f);
+    PreprocessedText_free(processedText);
+    free(str);
+    return RValue_makeUndefined();
+}
+
 // ===[ Tile Layer Functions ]===
 
 static TileLayerState* getOrCreateTileLayer(Runner* runner, int32_t depth) {
@@ -12635,6 +12664,17 @@ static RValue builtin_object_get_sprite(VMContext* ctx, RValue* args, int32_t ar
     return RValue_makeReal(ctx->dataWin->objt.objects[id].spriteId);
 }
 
+static RValue builtin_object_get_parent(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeReal(-1.0);
+
+    int32_t id = RValue_toInt32(args[0]);
+    if (0 > id || (uint32_t) id >= ctx->dataWin->objt.count) {
+        return RValue_makeReal(-1.0);
+    }
+
+    return RValue_makeReal(ctx->dataWin->objt.objects[id].parentId);
+}
+
 // Shared implementation for font_add_sprite and font_add_sprite_ext
 static RValue fontAddSpriteImpl(VMContext* ctx, int32_t spriteIndex, uint16_t* charCodes, uint32_t charCount, bool proportional, int32_t sep) {
     DataWin* dw = ctx->dataWin;
@@ -13765,6 +13805,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
         VM_registerBuiltin(ctx, "action_font", builtin_action_font);
         VM_registerBuiltin(ctx, "action_draw_text", builtin_action_draw_text);
         VM_registerBuiltin(ctx, "action_draw_sprite", builtin_action_draw_sprite);
+        VM_registerBuiltin(ctx, "action_draw_variable", builtin_action_draw_variable);
         VM_registerBuiltin(ctx, "action_change_object", builtin_instance_change);
         VM_registerBuiltin(ctx, "action_end_game", builtin_game_end);
         VM_registerBuiltin(ctx, "action_execute_script", builtin_script_execute); //It its right? i think
@@ -13785,6 +13826,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "font_get_name", builtin_font_get_name);
     VM_registerBuiltin(ctx, "object_exists", builtin_object_exists);
     VM_registerBuiltin(ctx, "object_get_sprite", builtin_object_get_sprite);
+    VM_registerBuiltin(ctx, "object_get_parent", builtin_object_get_parent);
     VM_registerBuiltin(ctx, "asset_get_index", builtin_asset_get_index);
     VM_registerBuiltin(ctx,"gpu_set_blendmode", builtin_gpu_set_blendmode);
     VM_registerBuiltin(ctx,"gpu_set_blendmode_ext", builtin_gpu_set_blendmode_ext);

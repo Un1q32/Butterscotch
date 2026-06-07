@@ -964,8 +964,7 @@ void Runner_computeViewDisplayScale(Runner* runner, int32_t gameW, int32_t gameH
     *outScaleX = 1.0f;
     *outScaleY = 1.0f;
 
-    Room* activeRoom = runner->currentRoom;
-    bool viewsEnabled = (activeRoom->flags & 1) != 0;
+    bool viewsEnabled = runner->viewsEnabled;
     if (viewsEnabled) {
         int32_t minLeft = INT32_MAX, minTop = INT32_MAX;
         int32_t maxRight = INT32_MIN, maxBottom = INT32_MIN;
@@ -1019,10 +1018,9 @@ static void applyFreeCamera(Runner* runner, int32_t* viewX, int32_t* viewY, int3
 
 void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displayScaleX, float displayScaleY, bool debugShowCollisionMasks) {
     Renderer* renderer = runner->renderer;
-    Room* activeRoom = runner->currentRoom;
     bool anyViewRendered = false;
 
-    bool viewsEnabled = (activeRoom->flags & 1) != 0;
+    bool viewsEnabled = runner->viewsEnabled;
 
     int32_t widescreenBaseW = gameW - runner->widescreenExtraWidth;
     int32_t widescreenBaseH = gameH - runner->widescreenExtraHeight;
@@ -1229,6 +1227,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
 
     runner->currentRoom = room;
     runner->currentRoomIndex = roomIndex;
+    runner->viewsEnabled = (room->flags & 1) != 0;
     // Tile set, runtime layers, and instance list all change when entering a room.
     runner->drawableListStructureDirty = true;
     // It could be the first time we are initializing the grid
@@ -1248,6 +1247,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
     // If this is a persistent room that was previously visited, restore saved state
     if (room->persistent && savedState->initialized) {
         memcpy(runner->views, savedState->views, sizeof(runner->views));
+        runner->viewsEnabled = savedState->viewsEnabled;
         // Restore the room-scoped default cameras (whole array); user cameras are global and left untouched.
         memcpy(runner->defaultCameras, savedState->defaultCameras, sizeof(runner->defaultCameras));
 
@@ -2106,6 +2106,9 @@ void Runner_initFirstRoom(Runner* runner) {
 
     int32_t firstRoomIndex = dataWin->gen8.roomOrder[0];
 
+    // Initialize the first room
+    initRoom(runner, firstRoomIndex);
+
     // Run global init scripts with the global scope instance as "self"
     // In GMS 2.3+ (BC17), GLOB scripts store function declarations on "self" via Pop.v.v
     runner->vmContext->currentInstance = runner->globalScopeInstance;
@@ -2140,10 +2143,7 @@ void Runner_initFirstRoom(Runner* runner) {
         }
     }
     runner->vmContext->currentInstance = nullptr;
-
-    // Initialize the first room
-    initRoom(runner, firstRoomIndex);
-
+    
     // Fire Game Start for all instances
     Runner_executeEventForAll(runner, EVENT_OTHER, OTHER_GAME_START);
     runner->gameStartFired = true;
@@ -2349,14 +2349,14 @@ static bool adaptPath(Runner* runner, Instance* inst) {
     return atPathEnd;
 }
 
-void Runner_updateMousePosition(Runner* runner, int32_t winW, int32_t winH, double mx, double my) {
-    if (winW <= 0 || winH <= 0 || runner->currentRoom == nullptr) return;
+void Runner_updateMousePosition(Runner* runner, int32_t windowWidth, int32_t windowHeight, double mouseXInWindow, double mouseYInWindow) {
+    if (windowWidth <= 0 || windowHeight <= 0 || runner->currentRoom == nullptr) return;
 
     int32_t gameW = runner->renderGameW > 0 ? runner->renderGameW : runner->currentRoom->width;
     int32_t gameH = runner->renderGameH > 0 ? runner->renderGameH : runner->currentRoom->height;
 
-    double fboX = ((mx - runner->viewportX) / runner->viewportW) * gameW;
-    double fboY = ((my - runner->viewportY) / runner->viewportH) * gameH;
+    double fboX = ((mouseXInWindow - runner->viewportX) / runner->viewportW) * gameW;
+    double fboY = ((mouseYInWindow - runner->viewportY) / runner->viewportH) * gameH;
 
     runner->mouse->screenX = fboX;
     runner->mouse->screenY = fboY;
@@ -2389,7 +2389,7 @@ void Runner_getMouseRoomPosition(Runner* runner, GMLReal* outX, GMLReal* outY) {
     // Native runner rule (GR_Window_Views_Convert): count enabled views that render directly to screen (view_surface_id == -1).
     // If any exist, map via the one whose port contains the cursor (or fall through to the last one tried).
     // If ALL enabled views have a surface bound, use room-space mapping, since the game is manually compositing those surfaces onto the window.
-    bool viewsEnabled = (runner->currentRoom->flags & 1) != 0;
+    bool viewsEnabled = runner->viewsEnabled;
     int32_t screenViewCount = 0;
     int32_t pickedViewIndex = -1;
     int32_t lastScreenViewIndex = -1;
@@ -2840,8 +2840,8 @@ static int32_t followAxis(int32_t viewPos, int32_t viewSize, int32_t targetPos, 
 }
 
 static void updateViews(Runner* runner) {
+    if (!runner->viewsEnabled) return;
     Room* room = runner->currentRoom;
-    if (!(room->flags & 1)) return;
 
     repeat(MAX_VIEWS, vi) {
         RuntimeView* view = &runner->views[vi];
@@ -2963,6 +2963,7 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
     // Save room visual state
     memcpy(state->backgrounds, runner->backgrounds, sizeof(runner->backgrounds));
     memcpy(state->views, runner->views, sizeof(runner->views));
+    state->viewsEnabled = runner->viewsEnabled;
     // Snapshot the room-scoped default cameras (whole array); user cameras are global and not snapshotted.
     memcpy(state->defaultCameras, runner->defaultCameras, sizeof(state->defaultCameras));
     state->backgroundColor = runner->backgroundColor;
