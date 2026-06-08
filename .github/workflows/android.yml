@@ -1,0 +1,176 @@
+name: Build Android .apk (armeabi-v7a, Android 2.3 Gingerbread)
+
+# Cross-compiles Butterscotch for the HTC Sensation XE (Adreno 220,
+# Android 2.3.4 = API 10) on ubuntu-latest. Two stages:
+#
+#   1. Native: NDK r10e (GCC 4.8, the last NDK with Gingerbread
+#      sysroots) builds libbutterscotch.so for armeabi-v7a — the full
+#      Butterscotch C runtime + GLES 1.1 renderer + miniaudio/OpenSL ES
+#      audio + the JNI bridge. This is the exact toolchain validated
+#      locally during development.
+#
+#   2. Package: rather than fight a decade-old Gradle/AGP that can still
+#      target minSdk 10, we assemble the APK directly with the SDK
+#      build-tools (aapt + javac + d8 + zipalign + apksigner). The app
+#      uses ZERO third-party/support libraries — only framework APIs —
+#      so this manual path is fully reproducible and needs no Gradle.
+#
+# Output: Butterscotch-<hash>-armeabi-v7a-gingerbread.apk, a debug-signed
+# APK that installs on Android 2.3.3+ (minSdkVersion 10).
+
+on:
+  push:
+    branches: [main, "devin/**"]
+    paths:
+      - "src/**"
+      - "vendor/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "vendor/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-android-gingerbread:
+    name: Build (NDK r10e / Android 2.3 / armeabi-v7a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      ANDROID_DIR: src/gles/android
+      PKG: com.mrpowergamerbr.butterscotch
+      MIN_SDK: "8"
+      # Compile/target against a modern platform (the framework APIs we
+      # use have existed since API 10; compiling against a recent
+      # android.jar is fine as long as we don't *call* newer APIs).
+      COMPILE_SDK: "34"
+      BUILD_TOOLS: "34.0.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Identify commit
+        id: commit-info
+        run: |
+          echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(git log -1 --format=%cd --date=short)" >> $GITHUB_OUTPUT
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ----------------------------------------------------------------
+      # Stage 1 — native libbutterscotch.so via NDK r10e
+      # ----------------------------------------------------------------
+      - name: Cache NDK r10e
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/android-ndk-r10e
+          key: ndk-r10e-linux-x86_64
+
+      - name: Download NDK r10e
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o /tmp/ndk-r10e.zip \
+            "https://dl.google.com/android/repository/android-ndk-r10e-linux-x86_64.zip"
+          unzip -q /tmp/ndk-r10e.zip -d "${{ github.workspace }}"
+          test -x "${{ github.workspace }}/android-ndk-r10e/ndk-build"
+
+      - name: Build native (armeabi-v7a)
+        working-directory: ${{ env.ANDROID_DIR }}/app/src/main
+        run: |
+          NDK="${{ github.workspace }}/android-ndk-r10e"
+          "$NDK/ndk-build" \
+            NDK_PROJECT_PATH=. \
+            APP_BUILD_SCRIPT=./jni/Android.mk \
+            NDK_APPLICATION_MK=./jni/Application.mk \
+            APP_ABI=armeabi-v7a \
+            -j"$(nproc)"
+          echo "== built .so =="
+          ls -la libs/armeabi-v7a/
+
+      # ----------------------------------------------------------------
+      # Stage 2 — assemble + sign the APK with SDK build-tools
+      # ----------------------------------------------------------------
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform + build-tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-${COMPILE_SDK}" "build-tools;${BUILD_TOOLS}"
+
+      - name: Assemble APK
+        working-directory: ${{ env.ANDROID_DIR }}
+        run: |
+          set -euxo pipefail
+          BT="$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS}"
+          ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-${COMPILE_SDK}/android.jar"
+          HASH="${{ steps.commit-info.outputs.hash }}"
+          APK_OUT="Butterscotch-${HASH}-armeabi-v7a-gingerbread.apk"
+
+          rm -rf build
+          mkdir -p build/gen build/obj build/lib/armeabi-v7a build/dex
+          cp app/src/main/libs/armeabi-v7a/libbutterscotch.so build/lib/armeabi-v7a/
+
+          # 1. R.java from resources.
+          "$BT/aapt" package -f -m \
+            -J build/gen \
+            -M app/src/main/AndroidManifest.xml \
+            -S app/src/main/res \
+            -I "$ANDROID_JAR"
+
+          # 2. Compile Java (framework + generated R) targeting 1.8 for d8.
+          find app/src/main/java build/gen -name "*.java" > build/sources.txt
+          javac -encoding UTF-8 -source 8 -target 8 \
+            -bootclasspath "$ANDROID_JAR" \
+            -classpath "$ANDROID_JAR" \
+            -d build/obj \
+            @build/sources.txt
+
+          # 3. Dex with d8 (minSdk 10).
+          CLASSES=$(find build/obj -name "*.class")
+          "$BT/d8" --min-api ${MIN_SDK} --lib "$ANDROID_JAR" --output build/dex $CLASSES
+
+          # 4. Package base APK (resources + manifest), then add dex + .so.
+          "$BT/aapt" package -f \
+            -M app/src/main/AndroidManifest.xml \
+            -S app/src/main/res \
+            -I "$ANDROID_JAR" \
+            -F build/app-unaligned.apk
+
+          (cd build && cp dex/classes.dex classes.dex && "$BT/aapt" add app-unaligned.apk classes.dex)
+          (cd build && "$BT/aapt" add app-unaligned.apk lib/armeabi-v7a/libbutterscotch.so)
+
+          # 5. Zipalign.
+          "$BT/zipalign" -f 4 build/app-unaligned.apk "build/$APK_OUT"
+
+          # 6. Debug-sign (generate a throwaway keystore).
+          keytool -genkeypair -dname "CN=Butterscotch CI" \
+            -alias bs -keystore build/debug.keystore \
+            -storepass android -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000
+          "$BT/apksigner" sign \
+            --ks build/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --min-sdk-version ${MIN_SDK} \
+            "build/$APK_OUT"
+          "$BT/apksigner" verify --min-sdk-version ${MIN_SDK} "build/$APK_OUT"
+
+          echo "APK_OUT=$APK_OUT" >> "$GITHUB_ENV"
+          ls -la "build/$APK_OUT"
+
+      - name: Upload .apk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Butterscotch-armeabi-v7a-gingerbread-${{ steps.commit-info.outputs.hash }}
+          path: ${{ env.ANDROID_DIR }}/build/*.apk
+          if-no-files-found: error
+          retention-days: 30
