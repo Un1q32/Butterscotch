@@ -74,7 +74,7 @@ static const char* fragmentShaderSource =
 
 // ===[ Shader Compilation ]===
 
-static GLuint compileShader(GLenum type, const char* source) {
+static GLuint compileShader(GLenum type, const char* source, bool* ok) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
@@ -85,8 +85,10 @@ static GLuint compileShader(GLenum type, const char* source) {
         char infoLog[512];
         glGetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
         fprintf(stderr, "GL: Shader compilation failed: %s\n", infoLog);
-        abort();
+        *ok = false;
+        return 0;
     }
+    *ok = true;
     return shader;
 }
 
@@ -125,7 +127,7 @@ static GLuint linkProgramCompat(GLuint vertShader, GLuint fragShader, bool *succ
         char infoLog[512];
         glGetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
         fprintf(stderr, "GL: %s Failed To Link: %s\n", shdr->name, infoLog);
-        abort();
+        success2 = false;
     } else {
         *success2 = true;
         fprintf(stderr, "GL: %s Linked!\n", shdr->name);
@@ -212,28 +214,43 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     renderer->dataWin = dataWin;
 
     //compile shaders
-    GLuint vertShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
-    GLuint fragShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
+    // If the default shaders fail we have bigger issues
+    bool vertexShaderOK = false;
+    GLuint vertShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource, &vertexShaderOK);
+    bool fragmentShaderOK = false;
+    if (!vertexShaderOK) {
+        fprintf(stderr, "Failed to compile default vertex shader!");
+        abort();
+    }
+    GLuint fragShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource, &fragmentShaderOK);
+    if (!vertexShaderOK) {
+        fprintf(stderr, "Failed to compile default fragment shader!");
+        abort();
+    }
     gl->shaderProgram = linkProgram(vertShader, fragShader);
     glDeleteShader(vertShader);
     glDeleteShader(fragShader);
     //yeah find the way to get the shaders here!!!
     gl->gmlShaderCompiled = safeMalloc(dataWin->shdr.count * sizeof(bool));
     fprintf(stderr, "GL: %u Shaders Found\n", dataWin->shdr.count);
+
     repeat(dataWin->shdr.count, i) {
         Shader* shdr = &dataWin->shdr.shaders[i];
         fprintf(stderr, "GL: Compiling %s Vertex Shader\n", shdr->name);
+        bool vertexShaderOK = false;
+        bool fragmentShaderOK = false;
 #ifdef ENABLE_GLES
-        GLuint vertShaderT = compileShader(GL_VERTEX_SHADER, shdr->glslES_Vertex);
+        GLuint vertShaderT = compileShader(GL_VERTEX_SHADER, shdr->glslES_Vertex, &vertexShaderOK);
 #else
-        GLuint vertShaderT = compileShader(GL_VERTEX_SHADER, shdr->glsl_Vertex);
+        GLuint vertShaderT = compileShader(GL_VERTEX_SHADER, shdr->glsl_Vertex, &vertexShaderOK);
 #endif
         fprintf(stderr, "GL: Compiling %s Fragment Shader\n", shdr->name);
 #ifdef ENABLE_GLES
-        GLuint fragShaderT = compileShader(GL_FRAGMENT_SHADER, shdr->glslES_Fragment);
+        GLuint fragShaderT = compileShader(GL_FRAGMENT_SHADER, shdr->glslES_Fragment, &fragmentShaderOK);
 #else
-        GLuint fragShaderT = compileShader(GL_FRAGMENT_SHADER, shdr->glsl_Fragment);
+        GLuint fragShaderT = compileShader(GL_FRAGMENT_SHADER, shdr->glsl_Fragment, &fragmentShaderOK);
 #endif
+
         gl->gmlShaderCount++;
         gl->gmlShaders = safeRealloc(gl->gmlShaders, gl->gmlShaderCount * sizeof(GLuint));
         gl->sampler2DLookUpTable = safeRealloc(gl->sampler2DLookUpTable, gl->gmlShaderCount * sizeof(int32_t*));
@@ -273,7 +290,7 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
         }
 
         free(UniformName);
-         
+
     }
 
     gl->uProjection = glGetUniformLocation(gl->shaderProgram, "uProjection");
