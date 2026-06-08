@@ -640,6 +640,7 @@ typedef struct {
     float firstFrame;
     float animSpeed;
     uint32_t animSpeedType;
+    int32_t imageIndex;
 } RoomLayerBackgroundData;
 
 typedef struct {
