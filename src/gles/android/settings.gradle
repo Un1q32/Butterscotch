@@ -1,0 +1,2 @@
+rootProject.name = "Butterscotch"
+include ":app"

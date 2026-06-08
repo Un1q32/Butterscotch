@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Butterscotch</string>
+    <string name="picker_title">Butterscotch</string>
+    <string name="picker_subtitle">Select a game</string>
+    <string name="picker_empty">No games found.\n\nCopy a game folder (containing data.win) into:\n/sdcard/Butterscotch/</string>
+    <string name="loading">Loading…</string>
+    <string name="btn_back">Back</string>
+</resources>

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Butterscotch Android manifest.
+
+  Targets HTC Sensation XE (Android 2.3.4 Gingerbread = API 10).
+  minSdkVersion 8 (Froyo 2.2) keeps a small compatibility cushion, but
+  the project is built/tested against API 10. targetSdkVersion is kept
+  low (10) on purpose so we keep the classic, non-scoped storage model
+  and the legacy permission semantics the runtime relies on.
+
+  OpenGL ES 1.1 is required (the renderer is fixed-function GLES1).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mrpowergamerbr.butterscotch"
+    android:versionCode="76"
+    android:versionName="0.7.6">
+
+    <uses-sdk
+        android:minSdkVersion="8"
+        android:targetSdkVersion="10" />
+
+    <!-- Game folders live on shared storage (/sdcard/Butterscotch/...). -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <!-- Fixed-function GLES 1.1 path. -->
+    <uses-feature
+        android:glEsVersion="0x00010001"
+        android:required="true" />
+    <!-- Touch screen is the only input device; no hard keyboard required. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="true" />
+
+    <application
+        android:label="Butterscotch"
+        android:icon="@mipmap/ic_launcher"
+        android:hardwareAccelerated="true"
+        android:allowBackup="true">
+
+        <!-- Game picker = launcher entry point. -->
+        <activity
+            android:name=".GamePickerActivity"
+            android:label="Butterscotch"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The running game. Landscape + fullscreen, like the iOS port. -->
+        <activity
+            android:name=".GameActivity"
+            android:label="Butterscotch"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|keyboardHidden|screenSize" />
+
+    </application>
+</manifest>

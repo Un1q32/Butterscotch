@@ -1,0 +1,69 @@
+// Butterscotch Android — app module.
+//
+// Builds an APK that installs and runs on Android 2.3 Gingerbread
+// (API 10, the HTC Sensation XE) while being compiled by a modern
+// Android Gradle Plugin on CI.
+//
+// Native strategy: the GitHub Actions workflow runs `ndk-build` with
+// NDK r10e BEFORE Gradle, emitting libbutterscotch.so into
+// app/src/main/libs/<abi>/. AGP does NOT invoke ndk-build itself
+// (modern AGP can't drive the ancient r10e layout cleanly); it simply
+// packages the prebuilt .so from jniLibs. This keeps the native build
+// pinned to the one toolchain that reliably targets Gingerbread while
+// letting a current AGP assemble + dex the Java side.
+
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.mrpowergamerbr.butterscotch'
+    compileSdkVersion 33
+    buildToolsVersion '33.0.2'
+
+    defaultConfig {
+        applicationId 'com.mrpowergamerbr.butterscotch'
+        minSdkVersion 8        // Froyo 2.2 — widest reach; OpenSL needs 9 at runtime.
+        targetSdkVersion 33
+        versionCode 1
+        versionName '0.7.6'    // mirror the iOS control/Info.plist version
+        // We ship a single armeabi-v7a .so (Sensation XE is ARMv7 Scorpion).
+        ndk {
+            abiFilters 'armeabi-v7a'
+        }
+    }
+
+    // ndk-build (run by CI) drops libbutterscotch.so here:
+    //   app/src/main/libs/armeabi-v7a/libbutterscotch.so
+    // Point jniLibs at that dir so AGP packages it into the APK.
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/libs']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildTypes {
+        debug {
+            // Debuggable APK for sideloading onto the device over adb.
+            debuggable true
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            // Unsigned release APK — CI signs with a debug key (see workflow)
+            // or you can wire a real keystore via secrets later.
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+    // No AppCompat / AndroidX — everything we use (Activity, GLSurfaceView,
+    // Canvas overlay) is in the base framework present on Gingerbread.
+}

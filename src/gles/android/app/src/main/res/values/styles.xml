@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Fullscreen, no title bar, landscape — the in-game look.
+      Based on the pre-Holo framework themes guaranteed present on
+      Gingerbread (API 10); no AppCompat needed.
+    -->
+    <style name="Theme.Butterscotch.Game" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
+    <!-- Picker: dark, titled, portrait. -->
+    <style name="Theme.Butterscotch.Picker" parent="@android:style/Theme.NoTitleBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

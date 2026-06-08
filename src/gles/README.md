@@ -7,7 +7,7 @@ platform-specific GUI wrappers built on top of it.
 src/gles/
   gles1_renderer.{h,c}     ← shared GLES 1.1 RendererVtable implementation
   ios/                     ← iOS UIKit wrapper (UIWindow + EAGLContext)
-  android/                 ← Android NativeActivity / JNI wrapper (skeleton)
+  android/                 ← Android GLSurfaceView / JNI wrapper (full port)
 ```
 
 ## Why GLES 1.1 specifically
@@ -33,5 +33,19 @@ make ipa             # repackages into a sideloadable .ipa
 
 ## Android build
 
-Skeleton only for now. Will use Android NDK r10e + `NativeActivity` on
-API 9+ (Android 2.3 Gingerbread).
+A full native port lives in `android/` (GLSurfaceView + JNI around the
+same GLES 1.1 renderer, miniaudio→OpenSL ES audio). It targets Android
+2.3 Gingerbread (API 10) and installs down to API 8.
+
+```bash
+cd src/gles/android/app/src/main
+# Needs NDK r10e (last NDK with Gingerbread sysroots):
+$NDK_R10E/ndk-build \
+    NDK_PROJECT_PATH=. \
+    APP_BUILD_SCRIPT=./jni/Android.mk \
+    NDK_APPLICATION_MK=./jni/Application.mk \
+    APP_ABI=armeabi-v7a
+```
+
+CI assembles + signs a full `.apk` on every push — see
+`.github/workflows/android.yml`. Full details in `android/README.md`.

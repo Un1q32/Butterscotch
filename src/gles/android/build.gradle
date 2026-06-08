@@ -1,0 +1,28 @@
+// Top-level Gradle build file for Butterscotch Android.
+//
+// We deliberately pin to an Android Gradle Plugin / Gradle pair that
+// still supports building APKs that run on API 10 (Gingerbread) while
+// being buildable on a modern CI runner. AGP 7.x with compileSdk 33 can
+// still produce minSdk 8 APKs, and its ndk-build integration drives our
+// jni/Android.mk unchanged.
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:7.4.2"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
