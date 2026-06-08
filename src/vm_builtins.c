@@ -3092,6 +3092,39 @@ static RValue builtin_camera_set_view_pos(VMContext* ctx, RValue* args, int32_t 
     return RValue_makeUndefined();
 }
 
+// TODO: We don't support the full matrix-based render pipeline yet, update this later!
+static RValue builtin_camera_set_view_mat(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    Runner* runner = ctx->runner;
+    GMLCamera* camera = Runner_getCameraById(runner, RValue_toInt32(args[0]));
+    if (camera == nullptr || !rvalueIsMatrix(args[1])) return RValue_makeUndefined();
+    Matrix4f m;
+    matrixFromGml(&m, args[1].array);
+    // For an axis-aligned 2D camera the view-matrix translation encodes -(camera center).
+    camera->viewMatCenterX = (int32_t) lround(-m.m[Matrix_getIndex(3, 0)]);
+    camera->viewMatCenterY = (int32_t) lround(-m.m[Matrix_getIndex(3, 1)]);
+    camera->viewX = camera->viewMatCenterX - camera->viewWidth / 2;
+    camera->viewY = camera->viewMatCenterY - camera->viewHeight / 2;
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_camera_set_proj_mat(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+    Runner* runner = ctx->runner;
+    GMLCamera* camera = Runner_getCameraById(runner, RValue_toInt32(args[0]));
+    if (camera == nullptr || !rvalueIsMatrix(args[1])) return RValue_makeUndefined();
+    Matrix4f m;
+    matrixFromGml(&m, args[1].array);
+    // Orthographic projection: m[0,0] = 2/width, m[1,1] = 2/height.
+    GMLReal m00 = m.m[Matrix_getIndex(0, 0)];
+    GMLReal m11 = m.m[Matrix_getIndex(1, 1)];
+    if (m00 != 0.0) camera->viewWidth = (int32_t) lround(GMLReal_fabs(2.0 / m00));
+    if (m11 != 0.0) camera->viewHeight = (int32_t) lround(GMLReal_fabs(2.0 / m11));
+    camera->viewX = camera->viewMatCenterX - camera->viewWidth / 2;
+    camera->viewY = camera->viewMatCenterY - camera->viewHeight / 2;
+    return RValue_makeUndefined();
+}
+
 static RValue builtin_camera_get_view_target(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(-1);
     Runner* runner = ctx->runner;
@@ -13146,6 +13179,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "camera_get_view_width", builtin_camera_get_view_width);
     VM_registerBuiltin(ctx, "camera_get_view_height", builtin_camera_get_view_height);
     VM_registerBuiltin(ctx, "camera_set_view_pos", builtin_camera_set_view_pos);
+    VM_registerBuiltin(ctx, "camera_set_view_mat", builtin_camera_set_view_mat);
+    VM_registerBuiltin(ctx, "camera_set_proj_mat", builtin_camera_set_proj_mat);
     VM_registerBuiltin(ctx, "camera_get_view_target", builtin_camera_get_view_target);
     VM_registerBuiltin(ctx, "camera_set_view_target", builtin_camera_set_view_target);
     VM_registerBuiltin(ctx, "camera_get_view_border_x", builtin_camera_get_view_border_x);
