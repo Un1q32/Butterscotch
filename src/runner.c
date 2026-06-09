@@ -315,6 +315,14 @@ const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype) {
                 case OTHER_USER0 + 13:      return "UserEvent13";
                 case OTHER_USER0 + 14:      return "UserEvent14";
                 case OTHER_USER0 + 15:      return "UserEvent15";
+                case OTHER_OUTSIDE_VIEW0:   return "OutsideView0";
+                case OTHER_OUTSIDE_VIEW1:   return "OutsideView1";
+                case OTHER_OUTSIDE_VIEW2:   return "OutsideView2";
+                case OTHER_OUTSIDE_VIEW3:   return "OutsideView3";
+                case OTHER_OUTSIDE_VIEW4:   return "OutsideView4";
+                case OTHER_OUTSIDE_VIEW5:   return "OutsideView5";
+                case OTHER_OUTSIDE_VIEW6:   return "OutsideView6";
+                case OTHER_OUTSIDE_VIEW7:   return "OutsideView7";
                 default:                    return "Other";
             }
         case EVENT_KEYPRESS:   return "KeyPress";
