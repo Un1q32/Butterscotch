@@ -571,8 +571,8 @@ static void glApplyProjection(Renderer* renderer, const Matrix4f* worldToClip) {
     flushBatch(gl);
     Matrix4f projection = *worldToClip;
     Matrix4f_flipClipY(&projection);
-    glUseProgram(gl->shaderProgram);
-    glUniformMatrix4fv(gl->uProjection, 1, GL_FALSE, projection.m);
+    renderer->gmlMatrices[MATRIX_WORLD_VIEW_PROJECTION] = projection;
+    glShaderSettingsRefresh(renderer);
     renderer->previousViewMatrix = projection;
 }
 
@@ -1496,6 +1496,8 @@ static int32_t glCreateSurface(Renderer* renderer, int32_t width, int32_t height
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glBindFramebuffer(GL_FRAMEBUFFER, gl->surfaces[surfaceIndex]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl->surfaceTexture[surfaceIndex], 0);
@@ -1563,6 +1565,8 @@ static void glSurfaceResize(Renderer* renderer, int32_t surfaceID, int32_t width
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glBindFramebuffer(GL_FRAMEBUFFER, gl->surfaces[surfaceID]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl->surfaceTexture[surfaceID], 0);
@@ -1958,11 +1962,29 @@ static uint32_t glSpriteGetTexture(Renderer* renderer, int32_t tpagIndex) {
     return (uint32_t) (tpagIndex + 1);
 }
 
-// Decode a texture handle produced by glSpriteGetTexture back into its page GL id and tpag.
+// Decode a texture handle produced by glSpriteGetTexture (sprite/tpag) or glSurfaceGetTexture (surface)
+// back into its GL id and pixel size. *outTpag is set to NULL for surface handles (no tpag sub-region).
 // Returns false for the 0 ("no texture") handle or an unresolvable one.
 static bool glResolveTextureHandle(GLRenderer* gl, uint32_t texHandle, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH) {
     if (texHandle == 0) return false;
+    if (texHandle & GL_SURFACE_TEXTURE_FLAG) {
+        uint32_t sid = texHandle & ~GL_SURFACE_TEXTURE_FLAG;
+        if (sid >= gl->surfaceCount || gl->surfaceTexture[sid] == 0) return false;
+        if (outTpag) *outTpag = nullptr;
+        *outTexId = gl->surfaceTexture[sid];
+        *outTexW = gl->surfaceWidth[sid];
+        *outTexH = gl->surfaceHeight[sid];
+        return true;
+    }
     return resolveSpriteTexture(gl, (int32_t) texHandle - 1, outTpag, outTexId, outTexW, outTexH);
+}
+
+// surface_get_texture: returns a handle that texture_get_texel_*/texture_get_uvs/texture_set_stage resolve.
+static uint32_t glSurfaceGetTexture(Renderer* renderer, int32_t surfaceID) {
+    GLRenderer* gl = (GLRenderer*) renderer;
+    if (surfaceID < 0 || (uint32_t) surfaceID >= gl->surfaceCount) return 0;
+    if (gl->surfaceTexture[surfaceID] == 0) return 0;
+    return GL_SURFACE_TEXTURE_FLAG | (uint32_t) surfaceID;
 }
 
 static void glTextureSetStage(Renderer* renderer, int32_t slot, uint32_t texHandle) {
@@ -2034,6 +2056,11 @@ static bool glTextureGetUVs(Renderer* renderer, uint32_t texHandle, float* outUV
     GLuint texId;
     int32_t width = 0, height = 0;
     if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height) || 0 >= width || 0 >= height) return false;
+    // Surface handles cover the whole texture (no tpag sub-region).
+    if (tpag == nullptr) {
+        outUVs[0] = 0.0f; outUVs[1] = 0.0f; outUVs[2] = 1.0f; outUVs[3] = 1.0f;
+        return true;
+    }
     float divW = 1.0f / (float) width;
     float divH = 1.0f / (float) height;
     outUVs[0] = (float) tpag->sourceX * divW;                              // left
@@ -2114,6 +2141,7 @@ Renderer* GLRenderer_create(void) {
     glVtable.shaderSetUniformF = glShaderSetUniformF,
     glVtable.shaderSetUniformI = glShaderSetUniformI,
     glVtable.spriteGetTexture = glSpriteGetTexture,
+    glVtable.surfaceGetTexture = glSurfaceGetTexture,
     glVtable.textureGetTexelWidth = glTextureGetTexelWidth,
     glVtable.textureGetTexelHeight = glTextureGetTexelHeight,
     glVtable.textureGetUVs = glTextureGetUVs,
