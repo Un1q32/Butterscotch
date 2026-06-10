@@ -3,8 +3,12 @@
 #include <math.h>
 #include "real_type.h"
 
-/* this header is for compatibility with systems that don't have full C99 math libraries */
+/* This header is for compatibility with systems that don't have full C99 math libraries. */
 
+/*
+ * This fmin and fmax don't handle some semantics with negative zero correctly.
+ * Handling them correctly would add complexity and hurt performance and it probably doesn't matter anyway.
+ */
 #ifdef NO_FMIN
 
 #undef GMLReal_fmin
