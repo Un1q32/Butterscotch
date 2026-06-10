@@ -93,10 +93,26 @@ if ! check 'if stdbool.h works'; then
 fi
 
 printf '%s' "\
+#include <stdint.h>
+int main(void){return 0;}
+" > tmp/test.c
+
+if ! check 'if stdint.h works'; then
+    config 'INCLUDES += -Icompat/stdint'
+    printf '%s' "\
+#include <sys/types.h>
+int main(void){return 0;}
+" > tmp/test.c
+    if check 'if sys/types.h works'; then
+        config 'DEFINES += -DHAVE_SYS_TYPES_H'
+    fi
+fi
+
+printf '%s' "\
 #include <stdio.h>
 int main(void){
-  puts(__func__);
-  return 0;
+    puts(__func__);
+    return 0;
 }
 " > tmp/test.c
 
@@ -206,9 +222,9 @@ fi
 printf '%s' "\
 #include <string.h>
 int main(void){
-  char *saveptr;
-  strtok_r(NULL, \"\", &saveptr);
-  return 0;
+    char *saveptr;
+    strtok_r(NULL, \"\", &saveptr);
+    return 0;
 }
 " > tmp/test.c
 
