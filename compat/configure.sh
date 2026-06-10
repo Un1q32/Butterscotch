@@ -104,4 +104,53 @@ if ! check 'if __func__ works'; then
     config 'DEFINES += -D__func__=\"unknown\"'
 fi
 
+printf '%s' "\
+#include <math.h>
+int main(void){return fmin(0,0);}
+" > tmp/test.c
+
+if ! check 'for fmin' -lm; then
+    config 'DEFINES += -DNO_FMIN'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return fmax(0,0);}
+" > tmp/test.c
+
+if ! check 'for fmax' -lm; then
+    config 'DEFINES += -DNO_FMAX'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return round(0);}
+" > tmp/test.c
+
+if ! check 'for round' -lm; then
+    config 'DEFINES += -DNO_ROUND'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return lround(0);}
+" > tmp/test.c
+
+if ! check 'for lround' -lm; then
+    config 'DEFINES += -DNO_LROUND'
+fi
+
+printf '%s' "\
+#include <string.h>
+int main(void){
+  char *saveptr;
+  strtok_r(NULL, \"\", &saveptr);
+  return 0;
+}
+" > tmp/test.c
+
+if ! check 'for strtok_r'; then
+    config 'DEFINES += -DNO_STRTOK_R'
+fi
+
 rm -f tmp/test.c tmp/a.out

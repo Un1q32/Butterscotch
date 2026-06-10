@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <math.h>
+#include "math_compat.h"
 
 #include "real_type.h"
 
