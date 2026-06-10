@@ -90,3 +90,13 @@ static float sinf(float x) { return sin(x); }
 static float cosf(float x) { return cos(x); }
 
 #endif
+
+#ifdef NO_ROUNDF
+
+static float roundf(float x) {
+    if (x >= 2147483648.0f || x <= -2147483648.0f) return x;
+    if (x >= 0.0f) return (float)((int32_t)(x + 0.5f));
+    else           return (float)((int32_t)(x - 0.5f));
+}
+
+#endif
