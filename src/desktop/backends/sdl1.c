@@ -10,6 +10,13 @@
 #include "desktop/platformdefs.h"
 #include "gettime.h"
 
+#ifndef SDL_BUTTON_WHEELUP
+#define SDL_BUTTON_WHEELUP 4
+#endif
+#ifndef SDL_BUTTON_WHEELDOWN
+#define SDL_BUTTON_WHEELDOWN 5
+#endif
+
 static Runner *g_runner;
 static int32_t fbWidth, fbHeight;
 static SDL_Surface* scr;
