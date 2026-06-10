@@ -21,7 +21,8 @@ check() {
     printf 'checking %s: ' "$1"
     printf 'checking %s:\n' "$1" >> tmp/config.log
     shift
-    if $CC tmp/test.c -o tmp/a.out "$@" >> tmp/config.log 2>&1; then
+    printf 'cmd: %s\n' "$CC $cflags tmp/test.c -o tmp/a.out $*" >> tmp/config.log
+    if $CC $cflags tmp/test.c -o tmp/a.out "$@" >> tmp/config.log 2>&1; then
         printf 'yes\n'
         printf 'result: yes\n' >> tmp/config.log
         return 0
@@ -49,6 +50,16 @@ else
     cross_compiling=1
 fi
 
+if check 'if the compiler supports -fno-builtin' -fno-builtin; then
+    # function tests might have false positives without this
+    cflags='-fno-builtin'
+fi
+
+if ! check 'if the compiler supports -MMD -MP -MF test.d' -MMD -MP -MF tmp/test.d; then
+    config 'DISABLE_MMD := 1'
+fi
+rm -f tmp/test.d
+
 if check 'for librt' -lrt; then
     # sometimes needed for clock_gettime
     config 'LIBS += -lrt'
@@ -58,11 +69,6 @@ if check 'for libdl' -ldl; then
     # sometimes needed for glad or miniaudio
     config 'LIBS += -ldl'
 fi
-
-if ! check 'if -MMD -MP -MF test.d works' -MMD -MP -MF tmp/test.d; then
-    config 'DISABLE_MMD := 1'
-fi
-rm -f tmp/test.d
 
 if [ -z "$cross_compiling" ]; then
     printf 'checking if /usr/X11R6/include exists: '
