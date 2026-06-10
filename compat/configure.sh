@@ -168,6 +168,24 @@ if ! check 'for fmodf' -lm; then
 fi
 
 printf '%s' "\
+#include <math.h>
+int main(void){return sinf(0);}
+" > tmp/test.c
+
+if ! check 'for sinf' -lm; then
+    config 'DEFINES += -DNO_SINF'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return cosf(0);}
+" > tmp/test.c
+
+if ! check 'for cosf' -lm; then
+    config 'DEFINES += -DNO_COSF'
+fi
+
+printf '%s' "\
 #include <string.h>
 int main(void){
   char *saveptr;

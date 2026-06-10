@@ -71,3 +71,15 @@ static float fmodf(float x, float y) {
 }
 
 #endif
+
+#ifdef NO_SINF
+
+static float sinf(float x) { return sin(x); }
+
+#endif
+
+#ifdef NO_COSF
+
+static float cosf(float x) { return cos(x); }
+
+#endif
