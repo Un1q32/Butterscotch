@@ -133,6 +133,15 @@ fi
 
 printf '%s' "\
 #include <math.h>
+int main(void){return log2(1);}
+" > tmp/test.c
+
+if ! check 'for log2' -lm; then
+    config 'DEFINES += -DNO_LOG2'
+fi
+
+printf '%s' "\
+#include <math.h>
 int main(void){return lround(0);}
 " > tmp/test.c
 

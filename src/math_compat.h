@@ -38,6 +38,13 @@ static GMLReal GMLReal_round(GMLReal x) {
 
 #endif
 
+#ifdef NO_LOG2
+
+#undef GMLReal_log2
+static GMLReal GMLReal_log2(GMLReal x) { return log(x) * 1.4426950408889634; }
+
+#endif
+
 #ifdef NO_LROUND
 
 static long lround(double x) {
