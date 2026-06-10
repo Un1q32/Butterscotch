@@ -141,6 +141,33 @@ if ! check 'for lround' -lm; then
 fi
 
 printf '%s' "\
+#include <math.h>
+int main(void){return sqrtf(0);}
+" > tmp/test.c
+
+if ! check 'for sqrtf' -lm; then
+    config 'DEFINES += -DNO_SQRTF'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return fabsf(0);}
+" > tmp/test.c
+
+if ! check 'for fabsf' -lm; then
+    config 'DEFINES += -DNO_FABSF'
+fi
+
+printf '%s' "\
+#include <math.h>
+int main(void){return fmodf(1,1);}
+" > tmp/test.c
+
+if ! check 'for fmodf' -lm; then
+    config 'DEFINES += -DNO_FMODF'
+fi
+
+printf '%s' "\
 #include <string.h>
 int main(void){
   char *saveptr;

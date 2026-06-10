@@ -47,3 +47,27 @@ static long lround(double x) {
 }
 
 #endif
+
+#ifdef NO_SQRTF
+
+static float sqrtf(float x) {
+    return sqrt(x);
+}
+
+#endif
+
+#ifdef NO_FABSF
+
+static float fabsf(float x) {
+    return fabs(x);
+}
+
+#endif
+
+#ifdef NO_FMODF
+
+static float fmodf(float x, float y) {
+    return fmod(x, y);
+}
+
+#endif
