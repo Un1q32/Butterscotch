@@ -1643,8 +1643,8 @@ static void swrDrawText(SWRenderer* swr, const char* text, float x, float y, flo
 						
 						// TODO: at 640x480, for some reason, without this fixup the
 						// letters in the "Name the fallen human." screen don't shake
-						dx = round(dx * 2) / 2;
-						dy = round(dy * 2) / 2;
+						dx = roundf(dx * 2) / 2;
+						dy = roundf(dy * 2) / 2;
 						
 						SWTexture* texture = swr->textures[pageId];
 						
