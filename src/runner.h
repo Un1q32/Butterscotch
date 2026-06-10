@@ -79,6 +79,14 @@
 #define OTHER_END_OF_PATH    8
 #define OTHER_NO_MORE_HEALTH 9
 #define OTHER_USER0          10
+#define OTHER_OUTSIDE_VIEW0  40
+#define OTHER_OUTSIDE_VIEW1  41
+#define OTHER_OUTSIDE_VIEW2  42
+#define OTHER_OUTSIDE_VIEW3  43
+#define OTHER_OUTSIDE_VIEW4  44
+#define OTHER_OUTSIDE_VIEW5  45
+#define OTHER_OUTSIDE_VIEW6  46
+#define OTHER_OUTSIDE_VIEW7  47
 #define OTHER_ASYNC_DIALOG   63
 #define OTHER_ASYNC_SAVE_LOAD 72
 #define OTHER_ASYNC_SYSTEM   75
@@ -572,6 +580,9 @@ struct Runner {
     // GameMaker launcher parameters
     // Just like the original runner, argv[0] is included in gameArgs
     char** gameArgs;
+
+    // Offset between game start time and nowNanos()
+    uint64_t gameStartTime;
 };
 
 const char* Runner_getEventName(int32_t eventType, int32_t eventSubtype);
