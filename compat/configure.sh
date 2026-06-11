@@ -238,4 +238,18 @@ if ! check 'for strtok_r'; then
     config 'DEFINES += -DNO_STRTOK_R'
 fi
 
+printf '%s' "\
+#include <getopt.h>
+int main(int argc,char *argv[]){
+    static struct option opts[]={{0,0,0,0}};
+    int idx=0;
+    getopt_long(argc,argv,"",opts,&idx);
+    return 0;
+}
+" > tmp/test.c
+
+if ! check 'for getopt_long'; then
+    config 'INCLUDES += -Icompat/getopt'
+fi
+
 rm -f tmp/test.c tmp/a.out
