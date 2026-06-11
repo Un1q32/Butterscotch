@@ -1044,6 +1044,29 @@ void Runner_drawViews(Runner* runner, int32_t gameW, int32_t gameH, float displa
             GMLCamera* camera = Runner_getCameraForView(runner, (int32_t) vi);
             if (camera == nullptr) continue;
 
+            bool toSurface = view->surfaceId != -1;
+
+            if (toSurface) {
+                // The surface is GONE, skip it!
+                if (!renderer->vtable->surfaceExists(renderer, view->surfaceId))
+                    continue;
+
+                Runner_surfaceSetTarget(runner, view->surfaceId);
+
+                Matrix4f proj;
+                Matrix4f_viewProjection(&proj, (float) camera->viewX, (float) camera->viewY, (float) camera->viewWidth, (float) camera->viewHeight, camera->viewAngle);
+                renderer->vtable->applyProjection(renderer, &proj);
+
+                runner->viewCurrent = (int32_t) vi;
+                Runner_draw(runner);
+
+                renderer->vtable->flush(renderer);
+
+                Runner_surfaceResetTarget(runner);
+                anyViewRendered = true;
+                continue;
+            }
+
             int32_t viewX, viewY, viewW, viewH;
             expandViewAxis(camera->viewX, camera->viewWidth, gameW, widescreenBaseW, &viewX, &viewW);
             expandViewAxis(camera->viewY, camera->viewHeight, gameH, widescreenBaseH, &viewY, &viewH);

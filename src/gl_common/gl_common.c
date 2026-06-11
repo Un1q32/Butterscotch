@@ -82,6 +82,11 @@ void GLCommon_surfaceBlit(GLuint* surfaces, int32_t* surfaceWidth, int32_t* surf
     if (!resolveSurfaceFBO(surfaces, surfaceWidth, surfaceHeight, count, dstId, &dstFbo, &dstFboW, &dstFboH))
         return;
 
+    int originalFramebufferBinding;
+
+    // Yes, in OpenGL you need to use _BINDING to query things
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &originalFramebufferBinding);
+
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
 
@@ -92,6 +97,8 @@ void GLCommon_surfaceBlit(GLuint* surfaces, int32_t* surfaceWidth, int32_t* surf
     } else {
         glBlitFramebuffer(0, 0, srcFboW, srcFboH, dstX, dstY, dstX + srcFboW, dstY + srcFboH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, originalFramebufferBinding);
 }
 
 bool GLCommon_surfaceGetPixels(GLuint* surfaces, int32_t* surfaceWidth, int32_t* surfaceHeight, uint32_t count, int32_t surfaceId, uint8_t* outRGBA) {
