@@ -202,18 +202,16 @@ ifndef DISABLE_MMD
 DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 endif
 
-FORCE:
+# trigger configure re-run if $(CC) changes
+_dummy := $(shell \
+	printf '$(CC)' > compat/tmp/cc-new; \
+	cmp -s compat/tmp/cc-new compat/tmp/cc || \
+	mv compat/tmp/cc-new compat/tmp/cc; \
+	rm -f compat/tmp/cc-new \
+)
 
 compat/config.mk: compat/configure.sh compat/tmp/cc
-	@$(MAKE) distclean > /dev/null
 	@CC="$(CC)" $(SHELL) compat/configure.sh
-	@$(MAKE)
-	@exit 0
-
-compat/tmp/cc: FORCE
-	@printf '$(CC)' > compat/tmp/cc-new
-	@cmp -s compat/tmp/cc-new compat/tmp/cc || mv compat/tmp/cc-new compat/tmp/cc
-	@rm -f compat/tmp/cc-new
 
 endif
 
@@ -228,4 +226,4 @@ clean:
 	rm -rf build
 
 distclean: clean
-	rm -f compat/config.mk
+	rm -f compat/config.mk compat/tmp/cc
