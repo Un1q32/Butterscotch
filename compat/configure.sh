@@ -243,7 +243,7 @@ printf '%s' "\
 int main(int argc,char *argv[]){
     static struct option opts[]={{0,0,0,0}};
     int idx=0;
-    getopt_long(argc,argv,"",opts,&idx);
+    getopt_long(argc,argv,\"\",opts,&idx);
     return 0;
 }
 " > tmp/test.c
