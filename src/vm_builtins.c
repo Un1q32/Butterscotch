@@ -798,7 +798,7 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
             return RValue_makeReal(0.0);
         }
         case BUILTIN_VAR_VIEW_SURFACE_ID:
-            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) return RValue_makeReal((GMLReal) runner->viewSurfaceIds[arrayIndex]);
+            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) return RValue_makeReal((GMLReal) runner->views[arrayIndex].surfaceId);
             return RValue_makeReal(-1.0);
 
         // Background properties
@@ -1444,7 +1444,7 @@ void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* na
             return;
         }
         case BUILTIN_VAR_VIEW_SURFACE_ID:
-            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) runner->viewSurfaceIds[arrayIndex] = RValue_toInt32(val);
+            if (arrayIndex >= 0 && MAX_VIEWS > arrayIndex) runner->views[arrayIndex].surfaceId = RValue_toInt32(val);
             return;
 
         // Background properties
@@ -3099,7 +3099,7 @@ static RValue builtin_view_get_surface_id(VMContext* ctx, RValue* args, int32_t 
     Runner* runner = ctx->runner;
     int32_t viewIndex = RValue_toInt32(args[0]);
     if (viewIndex >= 0 && MAX_VIEWS > viewIndex) {
-        return RValue_makeReal(runner->viewSurfaceIds[viewIndex]);
+        return RValue_makeReal(runner->views[viewIndex].surfaceId);
     }
     return RValue_makeReal(-1);
 }
@@ -3159,7 +3159,7 @@ static RValue builtin_view_set_surface_id(VMContext* ctx, RValue* args, int32_t 
     Runner* runner = ctx->runner;
     int32_t viewIndex = RValue_toInt32(args[0]);
     if (viewIndex >= 0 && MAX_VIEWS > viewIndex) {
-        runner->viewSurfaceIds[viewIndex] = RValue_toInt32(args[1]);
+        runner->views[viewIndex].surfaceId = RValue_toInt32(args[1]);
     }
     return RValue_makeUndefined();
 }

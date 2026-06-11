@@ -1304,6 +1304,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         copyRoomViewToRuntimeView(roomView, &runner->views[vi]);
         initDefaultCameraFromRoomView(&runner->defaultCameras[vi], roomView);
         runner->views[vi].cameraId = (int32_t) vi;
+        runner->views[vi].surfaceId = -1;
     }
 
     // Reset tile layer state for the new room
@@ -1868,9 +1869,6 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     runner->keyboard = RunnerKeyboard_create();
     runner->gamepads = RunnerGamepad_create();
     runner->mouse = RunnerMouse_create();
-    repeat(8, i) {
-        runner->viewSurfaceIds[i] = -1;
-    }
     runner->appSurfaceEnabled = true;
     runner->appSurfaceAutoDraw = true;
     runner->usingAppSurface = true;
@@ -2421,7 +2419,7 @@ void Runner_getMouseRoomPosition(Runner* runner, GMLReal* outX, GMLReal* outY) {
     if (viewsEnabled) {
         repeat(MAX_VIEWS, vi) {
             RuntimeView* v = &runner->views[vi];
-            if (!v->enabled || runner->viewSurfaceIds[vi] != -1) continue;
+            if (!v->enabled || v->surfaceId != -1) continue;
             screenViewCount++;
             lastScreenViewIndex = (int32_t) vi;
             int32_t portX = (int32_t) ((float) v->portX * displayScaleX + 0.5f);

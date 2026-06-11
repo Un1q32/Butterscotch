@@ -140,6 +140,7 @@ typedef struct {
     int32_t portWidth;
     int32_t portHeight;
     int32_t cameraId;
+    int32_t surfaceId;
 } RuntimeView;
 
 typedef struct {
@@ -480,7 +481,6 @@ struct Runner {
     int32_t viewportY;   // Y offset in window (letterboxing)
     int32_t viewportW;   // Scaled game width in window
     int32_t viewportH;   // Scaled game height in window
-    int32_t viewSurfaceIds[8]; // view_surface_id per view, -1 = default (render to screen), else surface index
     struct { char* key; int value; }* disabledObjects; // stb_ds string hashmap, nullptr = no filtering
     struct { int key; Instance* value; }* instancesById;
     bool forceDrawDepth;
