@@ -3738,6 +3738,13 @@ void VM_reset(VMContext* ctx) {
     ctx->currentCodeLocalsSlotMap = nullptr;
     ctx->actionRelativeFlag = false;
 
+    if (ctx->dataWin->gen8.wadVersion >= 17) {
+        free(ctx->staticInitialized);
+        free(ctx->staticStructs);
+        ctx->staticInitialized = safeCalloc(ctx->dataWin->code.count, sizeof(bool));
+        ctx->staticStructs = safeCalloc(ctx->dataWin->code.count, sizeof(Instance*));
+    }
+
     fprintf(stderr, "VM: Reset complete (%u global vars cleared)\n", ctx->globalVarCount);
 }
 
