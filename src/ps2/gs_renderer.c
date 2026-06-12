@@ -1,11 +1,15 @@
 #include "gs_renderer.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include <gsInline.h>
+#pragma GCC diagnostic pop
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <malloc.h>
 #include <kernel.h>
-#include <gsInline.h>
 
 #include "binary_reader.h"
 #include "binary_utils.h"
