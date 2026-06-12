@@ -2069,7 +2069,7 @@ static bool glShaderIsCompiled(Renderer* renderer, int32_t shaderID) {
     return gl->gmlShaderCompiled[shaderID];
 }
 
-static bool glShadersSupported(Renderer* renderer) {
+static bool glShadersSupported(void) {
     return true;
 }
 
