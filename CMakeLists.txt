@@ -131,6 +131,11 @@ endif()
 add_library(stb_ds INTERFACE)
 target_include_directories(stb_ds SYSTEM INTERFACE ${CMAKE_SOURCE_DIR}/vendor/stb/ds)
 
+# stb_vorbis
+add_library(stb_vorbis STATIC vendor/stb/vorbis/stb_vorbis.c)
+target_include_directories(stb_vorbis PUBLIC vendor/bzip2)
+target_compile_options(stb_vorbis PRIVATE -w)
+
 # RFC 1321 reference MD5 implementation
 target_sources(butterscotch PRIVATE vendor/md5/md5.c)
 target_include_directories(butterscotch PUBLIC vendor/md5)
@@ -220,10 +225,7 @@ if(PLATFORM STREQUAL "desktop")
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)
 
-    # stb_vorbis
-    target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
-
-    set(PLATFORM_LIBRARIES glad m bzip2 stb_ds sha1)
+    set(PLATFORM_LIBRARIES glad m bzip2 stb_ds sha1 stb_vorbis)
     if(MINGW)
         set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} opengl32 gdi32 winmm)
     elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "Haiku")
@@ -306,11 +308,8 @@ elseif(PLATFORM STREQUAL "web")
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)
 
-    # stb_vorbis (for miniaudio's OGG decoding)
-    target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
-
     # bzip2
-    target_link_libraries(butterscotch PRIVATE bzip2 stb_ds sha1)
+    target_link_libraries(butterscotch PRIVATE bzip2 stb_ds sha1 stb_vorbis)
 
     set_target_properties(butterscotch PROPERTIES SUFFIX ".mjs")
 
@@ -595,9 +594,6 @@ elseif(PLATFORM STREQUAL "ps3")
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)
 
-    # stb_vorbis
-    target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
-
     # Platform identifier for PS3-specific code paths
     add_compile_definitions(PLATFORM_PS3)
     add_compile_definitions(AL_LIBTYPE_STATIC)
@@ -606,7 +602,7 @@ elseif(PLATFORM STREQUAL "ps3")
 
     find_package(SDL2 REQUIRED)
     target_include_directories(butterscotch PRIVATE ${SDL2_INCLUDE_DIRS})
-    target_link_libraries(butterscotch PRIVATE ${SDL2_LIBRARIES} m gcm_sys rsx sysutil io audio rt lv2 io audio bzip2 stb_ds sha1 ps3gl mojoal)
+    target_link_libraries(butterscotch PRIVATE ${SDL2_LIBRARIES} m gcm_sys rsx sysutil io audio rt lv2 io audio bzip2 stb_ds sha1 ps3gl mojoal stb_vorbis)
 else()
     message(FATAL_ERROR "Unknown platform! ${PLATFORM}")
 endif()
