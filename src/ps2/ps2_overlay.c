@@ -112,6 +112,8 @@ void PS2Overlay_setDebugOverlayState(DebugOverlayState state, Runner* runner) {
     Profiler_setEnabled(&runner->vmContext->profiler, PS2Overlay_getDebugOverlayState() == STATS_ENABLED_WITH_PROFILER);
     gOverlay.profilerFramesInWindow = 0;
     gOverlay.profilerOverlayText[0] = '\0';
+#else
+    (void)runner;
 #endif
 }
 
