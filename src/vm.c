@@ -670,6 +670,8 @@ static bool tryReadInstanceVarOrStatic(VMContext* ctx, Instance* instance, int32
         *out = staticVal;
         return true;
     }
+#else
+    (void)ctx;
 #endif
     return false;
 }
