@@ -1411,7 +1411,7 @@ static inline RValue coerceIntStoreToReal(RValue val, uint8_t type2) {
     return val;
 }
 
-static void handlePop(VMContext* ctx, uint32_t instr, uint8_t type1, uint8_t type2, uint32_t varRef, uint8_t varType, int32_t instanceType) {
+static void handlePop(VMContext* ctx, uint8_t type1, uint8_t type2, uint32_t varRef, uint8_t varType, int32_t instanceType) {
     RValue val;
     int32_t arrayIndex = -1;
 
@@ -3068,7 +3068,7 @@ static RValue executeLoop(VMContext* ctx) {
                     val = coerceIntStoreToReal(val, type2);
                     resolveVariableWrite(ctx, instanceType, varRef, val);
                 } else {
-                    handlePop(ctx, instr, type1, type2, varRef, varType, instanceType);
+                    handlePop(ctx, type1, type2, varRef, varType, instanceType);
                 }
                 break;
             }
@@ -4005,7 +4005,7 @@ static void disasmFormatVar(VMContext* ctx, const uint8_t* extraData, const char
 }
 
 // Returns stack effect comment for a variable access instruction
-static void disasmFormatVarComment(VMContext* ctx, const uint8_t* extraData, bool isPop, char* buf, size_t bufSize) {
+static void disasmFormatVarComment(const uint8_t* extraData, bool isPop, char* buf, size_t bufSize) {
     uint32_t varRef = resolveVarOperand(extraData);
     uint8_t varType = (varRef >> 24) & 0xF8;
     if (isPop) {
@@ -4117,7 +4117,7 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
                 case GML_TYPE_VARIABLE:
                     snprintf(opcodeStr, opcodeSize, "Push.v");
                     disasmFormatVar(ctx, extraData, nullptr, (int32_t) instType, operandStr, operandSize);
-                    disasmFormatVarComment(ctx, extraData, false, commentStr, commentSize);
+                    disasmFormatVarComment(extraData, false, commentStr, commentSize);
                     break;
                 case GML_TYPE_INT16:
                     snprintf(opcodeStr, opcodeSize, "Push.e");
@@ -4136,17 +4136,17 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
         case OP_PUSHLOC:
             snprintf(opcodeStr, opcodeSize, "PushLoc.v");
             disasmFormatVar(ctx, extraData, "local", (int32_t) instType, operandStr, operandSize);
-            disasmFormatVarComment(ctx, extraData, false, commentStr, commentSize);
+            disasmFormatVarComment(extraData, false, commentStr, commentSize);
             break;
         case OP_PUSHGLB:
             snprintf(opcodeStr, opcodeSize, "PushGlb.v");
             disasmFormatVar(ctx, extraData, "global", (int32_t) instType, operandStr, operandSize);
-            disasmFormatVarComment(ctx, extraData, false, commentStr, commentSize);
+            disasmFormatVarComment(extraData, false, commentStr, commentSize);
             break;
         case OP_PUSHBLTN:
             snprintf(opcodeStr, opcodeSize, "PushBltn.v");
             disasmFormatVar(ctx, extraData, nullptr, (int32_t) instType, operandStr, operandSize);
-            disasmFormatVarComment(ctx, extraData, false, commentStr, commentSize);
+            disasmFormatVarComment(extraData, false, commentStr, commentSize);
             break;
 
         // PushI (int16 immediate)
@@ -4160,7 +4160,7 @@ static void formatInstruction(VMContext* ctx, const uint8_t* bytecodeBase, uint3
         case OP_POP:
             snprintf(opcodeStr, opcodeSize, "Pop.%c.%c", gmlTypeChar(type1), gmlTypeChar(type2));
             disasmFormatVar(ctx, extraData, nullptr, (int32_t) instType, operandStr, operandSize);
-            disasmFormatVarComment(ctx, extraData, true, commentStr, commentSize);
+            disasmFormatVarComment(extraData, true, commentStr, commentSize);
             break;
 
         // Unconditional branch

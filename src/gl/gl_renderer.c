@@ -403,12 +403,7 @@ static void glGpuSetShader(Renderer* renderer, int32_t ShaderIndex) {
     GLint gm_Matrices3 = glGetUniformLocation(Shader, "gm_Matrices[3]");
     GLint gm_Matrices4 = glGetUniformLocation(Shader, "gm_Matrices[4]");
 
-
-    GLint gm_FogStart = glGetUniformLocation(Shader, "gm_FogStart");
-    GLint gm_RcpFogRange = glGetUniformLocation(Shader, "gm_RcpFogRange");  
-    GLint gm_PS_FogEnabled = glGetUniformLocation(Shader, "gm_PS_FogEnabled");
     GLint gm_FogColour = glGetUniformLocation(Shader, "gm_FogColour");    
-    GLint gm_VS_FogEnabled = glGetUniformLocation(Shader, "gm_VS_FogEnabled");
 
     //Lights are for another time
 

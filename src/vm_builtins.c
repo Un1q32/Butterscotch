@@ -13223,7 +13223,7 @@ static RValue builtin_json_encode(VMContext* ctx, RValue* args, int32_t argCount
     Runner* runner = ctx->runner;
     int32_t mapIndex = RValue_toInt32(args[0]);
     // TODO: Implement prettify!
-    bool prettify = argCount == 2 ? RValue_toBool(args[1]) : false;
+    //bool prettify = argCount == 2 ? RValue_toBool(args[1]) : false;
     DsMapEntry** mapPtr = dsMapGet(runner, mapIndex);
     bool useFloatMarkers = DataWin_isVersionAtLeast(ctx->dataWin, 2023, 2, 0, 0);
 
