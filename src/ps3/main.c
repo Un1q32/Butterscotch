@@ -88,6 +88,8 @@ bool shouldExit = false;
 // ===[ MAIN ]===
 
 static void sys_callback(uint64_t status, uint64_t param, void* userdata) {
+    (void)param;
+    (void)userdata;
     switch (status) {
         case SYSUTIL_EXIT_GAME:
             shouldExit = true;
