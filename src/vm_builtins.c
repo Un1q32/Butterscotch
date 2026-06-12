@@ -13317,17 +13317,6 @@ static RValue builtin_object_get_sprite(VMContext* ctx, RValue* args, int32_t ar
     return RValue_makeReal(ctx->dataWin->objt.objects[id].spriteId);
 }
 
-static RValue builtin_object_get_visible(VMContext* ctx, RValue* args, int32_t argCount) {
-    if (1 > argCount) return RValue_makeBool(false);
-
-    int32_t id = RValue_toInt32(args[0]);
-    if (0 > id || (uint32_t) id >= ctx->dataWin->objt.count) {
-        return RValue_makeBool(false);
-    }
-
-    return RValue_makeBool(ctx->dataWin->objt.objects[id].visible);
-}
-
 static RValue builtin_object_get_depth(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeReal(0.0);
 
@@ -13784,7 +13773,7 @@ static RValue builtin_shader_get_name(VMContext* ctx, RValue* args, MAYBE_UNUSED
 }
 
 static RValue builtin_shaders_are_supported(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    return RValue_makeBool(ctx->runner->renderer->vtable->shadersSupported(ctx->runner->renderer));
+    return RValue_makeBool(ctx->runner->renderer->vtable->shadersSupported());
 }
 
 static RValue builtin_shader_get_uniform(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -13920,15 +13909,6 @@ static RValue builtin_font_get_uvs(VMContext* ctx, MAYBE_UNUSED RValue* args, MA
     *GMLArray_slot(out, 2) = RValue_makeReal(right);
     *GMLArray_slot(out, 3) = RValue_makeReal(bottom);
     return RValue_makeArray(out);
-}
-
-static RValue builtin_font_get_texture(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    //see if it works
-    int32_t fontIndex = (int32_t) RValue_toReal(args[0]);
-    Font* font = &ctx->runner->dataWin->font.fonts[fontIndex];
-    int32_t TpagIndex = font->tpagIndex;
-
-    return RValue_makeInt32(ctx->runner->renderer->vtable->spriteGetTexture(ctx->runner->renderer, TpagIndex));
 }
 
 static RValue builtin_texture_get_texel_width(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
