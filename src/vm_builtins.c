@@ -10579,9 +10579,9 @@ static RValue builtin_action_set_alarm(VMContext* ctx, MAYBE_UNUSED RValue* args
 
     if (ctx->currentInstance != nullptr) {
         Instance* inst = ctx->currentInstance;
-        Runner* runner = ctx->runner;
 
 #ifdef ENABLE_VM_TRACING
+        Runner* runner = ctx->runner;
         if (shgeti(ctx->alarmsToBeTraced, "*") != -1 || shgeti(ctx->alarmsToBeTraced, runner->dataWin->objt.objects[inst->objectIndex].name) != -1) {
             fprintf(stderr, "VM: [%s] Setting Alarm[%d] = %d (instanceId=%d)\n", runner->dataWin->objt.objects[inst->objectIndex].name, alarmIndex, steps, inst->instanceId);
         }
