@@ -32,6 +32,8 @@
 #include "base64.h"
 #include "gettime.h"
 
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
 #define MAX_BACKGROUNDS 8
 
 // ===[ STUBS MACROS ]===
