@@ -156,7 +156,8 @@ char *str_replace(char *orig, char *rep, char *with) {
 static char buffer[9999];
 int main(int argc, char* argv[]) {
     printf("%s\n", argv[0]);
-    strcpy(buffer, argv[0]);
+    if (argc > 0)
+        strcpy(buffer, argv[0]);
     char* tmp = str_replace(buffer, "butterscotch.elf", "");
 	char* tmp2 = str_replace(tmp, "butterscotch.self", "");
     char* tmp3 = str_replace(tmp2, "EBOOT.BIN", "");
