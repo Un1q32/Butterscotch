@@ -1812,7 +1812,7 @@ static void glGpuSetBlendEnable(Renderer* renderer, bool enable) {
 }
 
 static bool glGpuGetBlendEnable(Renderer* renderer) {
-
+    (void)renderer;
     return glIsEnabled(GL_BLEND);
 }
 
