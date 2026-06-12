@@ -441,10 +441,14 @@ static ArrayAccess popArrayAccess(VMContext* ctx, uint32_t varRef) {
 // ===[ Variable Resolution ]===
 
 // Returns the object name for an instance, or "<global_scope>" for the global scope dummy instance
+#ifdef ENABLE_VM_TRACING
+
 static const char* instanceObjectName(VMContext* ctx, Instance* inst) {
     if (inst->objectIndex == STRUCT_OBJECT_INDEX) return "<global_scope>";
     return ctx->dataWin->objt.objects[inst->objectIndex].name;
 }
+
+#endif
 
 static Variable* resolveVarDef(VMContext* ctx, uint32_t varRef) {
     uint32_t varIndex = varRef & 0x07FFFFFF;
