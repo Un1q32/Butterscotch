@@ -445,9 +445,113 @@ void VMBuiltins_checkIfBuiltinVarTableIsSorted(void) {
 #if defined(PLATFORM_PS3)
 #include <sys/systime.h>
 #endif
+// Indicates when a variable should be routed via structGet/structSet instead of resolving it using the default path.
+// See GameMaker-HTML5's "g_instance_names" table for reference (GameMaker-HTML5/scripts/yyVariable.js),
+static bool isInstanceScopedBuiltinVar(int16_t builtinVarId) {
+    switch (builtinVarId) {
+        case BUILTIN_VAR_X:
+        case BUILTIN_VAR_Y:
+        case BUILTIN_VAR_XPREVIOUS:
+        case BUILTIN_VAR_YPREVIOUS:
+        case BUILTIN_VAR_XSTART:
+        case BUILTIN_VAR_YSTART:
+        case BUILTIN_VAR_HSPEED:
+        case BUILTIN_VAR_VSPEED:
+        case BUILTIN_VAR_DIRECTION:
+        case BUILTIN_VAR_SPEED:
+        case BUILTIN_VAR_FRICTION:
+        case BUILTIN_VAR_GRAVITY:
+        case BUILTIN_VAR_GRAVITY_DIRECTION:
+        case BUILTIN_VAR_OBJECT_INDEX:
+        case BUILTIN_VAR_ID:
+        case BUILTIN_VAR_ALARM:
+        case BUILTIN_VAR_SOLID:
+        case BUILTIN_VAR_VISIBLE:
+        case BUILTIN_VAR_PERSISTENT:
+        case BUILTIN_VAR_DEPTH:
+        case BUILTIN_VAR_BBOX_LEFT:
+        case BUILTIN_VAR_BBOX_RIGHT:
+        case BUILTIN_VAR_BBOX_TOP:
+        case BUILTIN_VAR_BBOX_BOTTOM:
+        case BUILTIN_VAR_SPRITE_INDEX:
+        case BUILTIN_VAR_IMAGE_SINGLE:
+        case BUILTIN_VAR_IMAGE_NUMBER:
+        case BUILTIN_VAR_SPRITE_WIDTH:
+        case BUILTIN_VAR_SPRITE_HEIGHT:
+        case BUILTIN_VAR_SPRITE_XOFFSET:
+        case BUILTIN_VAR_SPRITE_YOFFSET:
+        case BUILTIN_VAR_IMAGE_XSCALE:
+        case BUILTIN_VAR_IMAGE_YSCALE:
+        case BUILTIN_VAR_IMAGE_ANGLE:
+        case BUILTIN_VAR_IMAGE_ALPHA:
+        case BUILTIN_VAR_IMAGE_BLEND:
+        case BUILTIN_VAR_IMAGE_SPEED:
+        case BUILTIN_VAR_IMAGE_INDEX:
+        case BUILTIN_VAR_MASK_INDEX:
+        case BUILTIN_VAR_PATH_INDEX:
+        case BUILTIN_VAR_PATH_POSITION:
+        case BUILTIN_VAR_PATH_POSITIONPREVIOUS:
+        case BUILTIN_VAR_PATH_SPEED:
+        case BUILTIN_VAR_PATH_SCALE:
+        case BUILTIN_VAR_PATH_ORIENTATION:
+        case BUILTIN_VAR_PATH_ENDACTION:
+        case BUILTIN_VAR_TIMELINE_INDEX:
+        case BUILTIN_VAR_TIMELINE_POSITION:
+        case BUILTIN_VAR_TIMELINE_SPEED:
+        case BUILTIN_VAR_TIMELINE_RUNNING:
+        case BUILTIN_VAR_TIMELINE_LOOP:
+        case BUILTIN_VAR_LAYER:
+        // case BUILTIN_VAR_MANAGED:
+        // case BUILTIN_VAR_IN_COLLISION_TREE:
+        // case BUILTIN_VAR_EVENT_DATA:
+        // case BUILTIN_VAR_IAP_DATA:
+        // case BUILTIN_VAR_PHY_ROTATION:
+        // case BUILTIN_VAR_PHY_POSITION_X:
+        // case BUILTIN_VAR_PHY_POSITION_Y:
+        // case BUILTIN_VAR_PHY_ANGULAR_VELOCITY:
+        // case BUILTIN_VAR_PHY_LINEAR_VELOCITY_X:
+        // case BUILTIN_VAR_PHY_LINEAR_VELOCITY_Y:
+        // case BUILTIN_VAR_PHY_SPEED_X:
+        // case BUILTIN_VAR_PHY_SPEED_Y:
+        // case BUILTIN_VAR_PHY_SPEED:
+        // case BUILTIN_VAR_PHY_ANGULAR_DAMPING:
+        // case BUILTIN_VAR_PHY_LINEAR_DAMPING:
+        // case BUILTIN_VAR_PHY_BULLET:
+        // case BUILTIN_VAR_PHY_FIXED_ROTATION:
+        // case BUILTIN_VAR_PHY_ACTIVE:
+        // case BUILTIN_VAR_PHY_MASS:
+        // case BUILTIN_VAR_PHY_INERTIA:
+        // case BUILTIN_VAR_PHY_COM_X:
+        // case BUILTIN_VAR_PHY_COM_Y:
+        // case BUILTIN_VAR_PHY_DYNAMIC:
+        // case BUILTIN_VAR_PHY_KINEMATIC:
+        // case BUILTIN_VAR_PHY_SLEEPING:
+        // case BUILTIN_VAR_PHY_POSITION_XPREVIOUS:
+        // case BUILTIN_VAR_PHY_POSITION_YPREVIOUS:
+        // case BUILTIN_VAR_PHY_COLLISION_POINTS:
+        // case BUILTIN_VAR_PHY_COLLISION_X:
+        // case BUILTIN_VAR_PHY_COLLISION_Y:
+        // case BUILTIN_VAR_PHY_COL_NORMAL_X:
+        // case BUILTIN_VAR_PHY_COL_NORMAL_Y:
+        // case BUILTIN_VAR_IN_SEQUENCE:
+        // case BUILTIN_VAR_SEQUENCE_INSTANCE:
+        // case BUILTIN_VAR_DRAWN_BY_SEQUENCE:
+        // case BUILTIN_VAR_DISPLAY_AA:
+        // case BUILTIN_VAR_WEBGL_ENABLED:
+            return true;
+        default:
+            return false;
+    }
+}
+
 RValue VMBuiltins_getVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId, const char* name, int32_t arrayIndex) {
     Runner* runner = ctx->runner;
     requireNotNull(runner);
+
+    // Structs: instance builtins are ordinary members.
+    if (inst != nullptr && inst->objectIndex == STRUCT_OBJECT_INDEX && isInstanceScopedBuiltinVar(builtinVarId)) {
+        return VM_structGet(ctx, inst, name, arrayIndex);
+    }
 
     // In the past Butterscotch used cascading ifs for this, which in my opinion looked nicer AND GCC was converting the ifs into a jump table, so it was all well...
     // ...until the code changed enough and the GCC heuristic thought "you know what? let's drop the jump table!"
@@ -1102,6 +1206,12 @@ void VMBuiltins_setVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId
     Runner* runner = requireNotNullMessage(ctx->runner, "VM: setVariable called but no runner!");
     requireNotNull(runner);
 
+    // Structs: instance builtins are ordinary members.
+    if (inst != nullptr && inst->objectIndex == STRUCT_OBJECT_INDEX && isInstanceScopedBuiltinVar(builtinVarId)) {
+        VM_structSet(ctx, inst, name, val, arrayIndex);
+        return;
+    }
+
     switch (builtinVarId) {
         // Per-instance properties
         case BUILTIN_VAR_IMAGE_SPEED:
@@ -1304,7 +1414,7 @@ void VMBuiltins_setVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId
                 int32_t newValue = RValue_toInt32(val);
 
 #ifdef ENABLE_VM_TRACING
-                if (shgeti(ctx->alarmsToBeTraced, "*") != -1 || shgeti(ctx->alarmsToBeTraced, runner->dataWin->objt.objects[inst->objectIndex].name) != -1) {
+                if (inst->objectIndex >= 0 && (shgeti(ctx->alarmsToBeTraced, "*") != -1 || shgeti(ctx->alarmsToBeTraced, runner->dataWin->objt.objects[inst->objectIndex].name) != -1)) {
                     fprintf(stderr, "VM: [%s] Setting Alarm[%d] = %d (instanceId=%d)\n", runner->dataWin->objt.objects[inst->objectIndex].name, arrayIndex, newValue, inst->instanceId);
                 }
 #endif
@@ -2829,44 +2939,44 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
     DataWin_loadRoomPayload(ctx->dataWin, roomId);
 
     Instance* ret = Runner_createStruct(ctx->runner);
-    VM_structSet(ctx, ret, "width", RValue_makeInt32((int32_t) room->width));
-    VM_structSet(ctx, ret, "height", RValue_makeInt32((int32_t) room->height));
-    VM_structSet(ctx, ret, "persistent", RValue_makeBool(room->persistent));
-    VM_structSet(ctx, ret, "colour", RValue_makeInt32((int32_t) room->backgroundColor));
-    VM_structSet(ctx, ret, "creationCode", RValue_makeInt32(room->creationCodeId));
-    VM_structSet(ctx, ret, "physicsWorld", RValue_makeBool(room->world));
+    VM_structSetAndFreeVal(ctx, ret, "width", RValue_makeInt32((int32_t) room->width), -1);
+    VM_structSetAndFreeVal(ctx, ret, "height", RValue_makeInt32((int32_t) room->height), -1);
+    VM_structSetAndFreeVal(ctx, ret, "persistent", RValue_makeBool(room->persistent), -1);
+    VM_structSetAndFreeVal(ctx, ret, "colour", RValue_makeInt32((int32_t) room->backgroundColor), -1);
+    VM_structSetAndFreeVal(ctx, ret, "creationCode", RValue_makeInt32(room->creationCodeId), -1);
+    VM_structSetAndFreeVal(ctx, ret, "physicsWorld", RValue_makeBool(room->world), -1);
     if (room->world) {
-        VM_structSet(ctx, ret, "physicsGravityX", RValue_makeReal(room->gravityX));
-        VM_structSet(ctx, ret, "physicsGravityY", RValue_makeReal(room->gravityY));
-        VM_structSet(ctx, ret, "physicsPixToMeters", RValue_makeReal(room->metersPerPixel));
+        VM_structSetAndFreeVal(ctx, ret, "physicsGravityX", RValue_makeReal(room->gravityX), -1);
+        VM_structSetAndFreeVal(ctx, ret, "physicsGravityY", RValue_makeReal(room->gravityY), -1);
+        VM_structSetAndFreeVal(ctx, ret, "physicsPixToMeters", RValue_makeReal(room->metersPerPixel), -1);
     }
-    VM_structSet(ctx, ret, "enableViews", RValue_makeBool((room->flags & 1) != 0));
-    VM_structSet(ctx, ret, "clearDisplayBuffer", RValue_makeBool(true));
-    VM_structSet(ctx, ret, "clearViewportBackground", RValue_makeBool(true));
+    VM_structSetAndFreeVal(ctx, ret, "enableViews", RValue_makeBool((room->flags & 1) != 0), -1);
+    VM_structSetAndFreeVal(ctx, ret, "clearDisplayBuffer", RValue_makeBool(true), -1);
+    VM_structSetAndFreeVal(ctx, ret, "clearViewportBackground", RValue_makeBool(true), -1);
 
     if (wantViews && room->views != nullptr) {
         GMLArray* views = GMLArray_create(MAX_VIEWS);
         repeat(MAX_VIEWS, i) {
             RoomView* v = &room->views[i];
             Instance* vs = Runner_createStruct(ctx->runner);
-            VM_structSet(ctx, vs, "visible", RValue_makeBool(v->enabled));
-            VM_structSet(ctx, vs, "xview", RValue_makeInt32(v->viewX));
-            VM_structSet(ctx, vs, "yview", RValue_makeInt32(v->viewY));
-            VM_structSet(ctx, vs, "wview", RValue_makeInt32(v->viewWidth));
-            VM_structSet(ctx, vs, "hview", RValue_makeInt32(v->viewHeight));
-            VM_structSet(ctx, vs, "xport", RValue_makeInt32(v->portX));
-            VM_structSet(ctx, vs, "yport", RValue_makeInt32(v->portY));
-            VM_structSet(ctx, vs, "wport", RValue_makeInt32(v->portWidth));
-            VM_structSet(ctx, vs, "hport", RValue_makeInt32(v->portHeight));
-            VM_structSet(ctx, vs, "hborder", RValue_makeInt32((int32_t) v->borderX));
-            VM_structSet(ctx, vs, "vborder", RValue_makeInt32((int32_t) v->borderY));
-            VM_structSet(ctx, vs, "hspeed", RValue_makeInt32(v->speedX));
-            VM_structSet(ctx, vs, "vspeed", RValue_makeInt32(v->speedY));
-            VM_structSet(ctx, vs, "object", RValue_makeInt32(v->objectId));
-            VM_structSet(ctx, vs, "cameraID", RValue_makeInt32(-1));
+            VM_structSetAndFreeVal(ctx, vs, "visible", RValue_makeBool(v->enabled), -1);
+            VM_structSetAndFreeVal(ctx, vs, "xview", RValue_makeInt32(v->viewX), -1);
+            VM_structSetAndFreeVal(ctx, vs, "yview", RValue_makeInt32(v->viewY), -1);
+            VM_structSetAndFreeVal(ctx, vs, "wview", RValue_makeInt32(v->viewWidth), -1);
+            VM_structSetAndFreeVal(ctx, vs, "hview", RValue_makeInt32(v->viewHeight), -1);
+            VM_structSetAndFreeVal(ctx, vs, "xport", RValue_makeInt32(v->portX), -1);
+            VM_structSetAndFreeVal(ctx, vs, "yport", RValue_makeInt32(v->portY), -1);
+            VM_structSetAndFreeVal(ctx, vs, "wport", RValue_makeInt32(v->portWidth), -1);
+            VM_structSetAndFreeVal(ctx, vs, "hport", RValue_makeInt32(v->portHeight), -1);
+            VM_structSetAndFreeVal(ctx, vs, "hborder", RValue_makeInt32((int32_t) v->borderX), -1);
+            VM_structSetAndFreeVal(ctx, vs, "vborder", RValue_makeInt32((int32_t) v->borderY), -1);
+            VM_structSetAndFreeVal(ctx, vs, "hspeed", RValue_makeInt32(v->speedX), -1);
+            VM_structSetAndFreeVal(ctx, vs, "vspeed", RValue_makeInt32(v->speedY), -1);
+            VM_structSetAndFreeVal(ctx, vs, "object", RValue_makeInt32(v->objectId), -1);
+            VM_structSetAndFreeVal(ctx, vs, "cameraID", RValue_makeInt32(-1), -1);
             *GMLArray_slot(views, i) = RValue_makeStructAndIncRef(vs);
         }
-        VM_structSet(ctx, ret, "views", RValue_makeArray(views));
+        VM_structSetAndFreeVal(ctx, ret, "views", RValue_makeArray(views), -1);
     }
 
     if (wantInsts) {
@@ -2875,22 +2985,22 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
         repeat(count, i) {
             RoomGameObject* go = &room->gameObjects[i];
             Instance* is = Runner_createStruct(ctx->runner);
-            VM_structSet(ctx, is, "x", RValue_makeInt32(go->x));
-            VM_structSet(ctx, is, "y", RValue_makeInt32(go->y));
+            VM_structSetAndFreeVal(ctx, is, "x", RValue_makeInt32(go->x), -1);
+            VM_structSetAndFreeVal(ctx, is, "y", RValue_makeInt32(go->y), -1);
             const char* objName = (go->objectDefinition >= 0 && (uint32_t) go->objectDefinition < ctx->dataWin->objt.count) ? ctx->dataWin->objt.objects[go->objectDefinition].name : "";
-            VM_structSet(ctx, is, "object_index", RValue_makeOwnedString(safeStrdup(objName)));
-            VM_structSet(ctx, is, "id", RValue_makeInt32((int32_t) go->instanceID));
-            VM_structSet(ctx, is, "angle", RValue_makeReal(go->rotation));
-            VM_structSet(ctx, is, "xscale", RValue_makeReal(go->scaleX));
-            VM_structSet(ctx, is, "yscale", RValue_makeReal(go->scaleY));
-            VM_structSet(ctx, is, "image_speed", RValue_makeReal(go->imageSpeed));
-            VM_structSet(ctx, is, "image_index", RValue_makeInt32(go->imageIndex));
-            VM_structSet(ctx, is, "colour", RValue_makeInt32((int32_t) go->color));
-            VM_structSet(ctx, is, "creation_code", RValue_makeInt32(go->creationCode));
-            VM_structSet(ctx, is, "pre_creation_code", RValue_makeInt32(go->preCreateCode));
+            VM_structSetAndFreeVal(ctx, is, "object_index", RValue_makeOwnedString(safeStrdup(objName)), -1);
+            VM_structSetAndFreeVal(ctx, is, "id", RValue_makeInt32((int32_t) go->instanceID), -1);
+            VM_structSetAndFreeVal(ctx, is, "angle", RValue_makeReal(go->rotation), -1);
+            VM_structSetAndFreeVal(ctx, is, "xscale", RValue_makeReal(go->scaleX), -1);
+            VM_structSetAndFreeVal(ctx, is, "yscale", RValue_makeReal(go->scaleY), -1);
+            VM_structSetAndFreeVal(ctx, is, "image_speed", RValue_makeReal(go->imageSpeed), -1);
+            VM_structSetAndFreeVal(ctx, is, "image_index", RValue_makeInt32(go->imageIndex), -1);
+            VM_structSetAndFreeVal(ctx, is, "colour", RValue_makeInt32((int32_t) go->color), -1);
+            VM_structSetAndFreeVal(ctx, is, "creation_code", RValue_makeInt32(go->creationCode), -1);
+            VM_structSetAndFreeVal(ctx, is, "pre_creation_code", RValue_makeInt32(go->preCreateCode), -1);
             *GMLArray_slot(insts, i) = RValue_makeStructAndIncRef(is);
         }
-        VM_structSet(ctx, ret, "instances", RValue_makeArray(insts));
+        VM_structSetAndFreeVal(ctx, ret, "instances", RValue_makeArray(insts), -1);
     }
 
     if (wantLayers && room->layers != nullptr) {
@@ -2899,15 +3009,15 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
         repeat(count, i) {
             RoomLayer* lay = &room->layers[i];
             Instance* ls = Runner_createStruct(ctx->runner);
-            VM_structSet(ctx, ls, "name", RValue_makeOwnedString(safeStrdup(lay->name != nullptr ? lay->name : "")));
-            VM_structSet(ctx, ls, "id", RValue_makeInt32((int32_t) lay->id));
-            VM_structSet(ctx, ls, "type", RValue_makeInt32((int32_t) lay->type));
-            VM_structSet(ctx, ls, "depth", RValue_makeInt32(lay->depth));
-            VM_structSet(ctx, ls, "xoffset", RValue_makeReal(lay->xOffset));
-            VM_structSet(ctx, ls, "yoffset", RValue_makeReal(lay->yOffset));
-            VM_structSet(ctx, ls, "hspeed", RValue_makeReal(lay->hSpeed));
-            VM_structSet(ctx, ls, "vspeed", RValue_makeReal(lay->vSpeed));
-            VM_structSet(ctx, ls, "visible", RValue_makeBool(lay->visible));
+            VM_structSetAndFreeVal(ctx, ls, "name", RValue_makeOwnedString(safeStrdup(lay->name != nullptr ? lay->name : "")), -1);
+            VM_structSetAndFreeVal(ctx, ls, "id", RValue_makeInt32((int32_t) lay->id), -1);
+            VM_structSetAndFreeVal(ctx, ls, "type", RValue_makeInt32((int32_t) lay->type), -1);
+            VM_structSetAndFreeVal(ctx, ls, "depth", RValue_makeInt32(lay->depth), -1);
+            VM_structSetAndFreeVal(ctx, ls, "xoffset", RValue_makeReal(lay->xOffset), -1);
+            VM_structSetAndFreeVal(ctx, ls, "yoffset", RValue_makeReal(lay->yOffset), -1);
+            VM_structSetAndFreeVal(ctx, ls, "hspeed", RValue_makeReal(lay->hSpeed), -1);
+            VM_structSetAndFreeVal(ctx, ls, "vspeed", RValue_makeReal(lay->vSpeed), -1);
+            VM_structSetAndFreeVal(ctx, ls, "visible", RValue_makeBool(lay->visible), -1);
 
             if (wantLayerEls) {
                 GMLArray* elements = nullptr;
@@ -2917,17 +3027,17 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
                         GMLArray_growTo(elements, 1);
                         Instance* es = Runner_createStruct(ctx->runner);
                         RoomLayerBackgroundData* bg = lay->backgroundData;
-                        VM_structSet(ctx, es, "type", RValue_makeInt32((int32_t) lay->type));
+                        VM_structSetAndFreeVal(ctx, es, "type", RValue_makeInt32((int32_t) lay->type), -1);
                         if (bg != nullptr) {
-                            VM_structSet(ctx, es, "visible", RValue_makeBool(bg->visible));
-                            VM_structSet(ctx, es, "foreground", RValue_makeBool(bg->foreground));
-                            VM_structSet(ctx, es, "sprite_index", RValue_makeInt32(bg->spriteIndex));
-                            VM_structSet(ctx, es, "htiled", RValue_makeBool(bg->hTiled));
-                            VM_structSet(ctx, es, "vtiled", RValue_makeBool(bg->vTiled));
-                            VM_structSet(ctx, es, "stretch", RValue_makeBool(bg->stretch));
-                            VM_structSet(ctx, es, "image_speed", RValue_makeReal(bg->animSpeed));
-                            VM_structSet(ctx, es, "image_index", RValue_makeReal(bg->firstFrame));
-                            VM_structSet(ctx, es, "speed_type", RValue_makeInt32((int32_t) bg->animSpeedType));
+                            VM_structSetAndFreeVal(ctx, es, "visible", RValue_makeBool(bg->visible), -1);
+                            VM_structSetAndFreeVal(ctx, es, "foreground", RValue_makeBool(bg->foreground), -1);
+                            VM_structSetAndFreeVal(ctx, es, "sprite_index", RValue_makeInt32(bg->spriteIndex), -1);
+                            VM_structSetAndFreeVal(ctx, es, "htiled", RValue_makeBool(bg->hTiled), -1);
+                            VM_structSetAndFreeVal(ctx, es, "vtiled", RValue_makeBool(bg->vTiled), -1);
+                            VM_structSetAndFreeVal(ctx, es, "stretch", RValue_makeBool(bg->stretch), -1);
+                            VM_structSetAndFreeVal(ctx, es, "image_speed", RValue_makeReal(bg->animSpeed), -1);
+                            VM_structSetAndFreeVal(ctx, es, "image_index", RValue_makeReal(bg->firstFrame), -1);
+                            VM_structSetAndFreeVal(ctx, es, "speed_type", RValue_makeInt32((int32_t) bg->animSpeedType), -1);
                         }
                         *GMLArray_slot(elements, 0) = RValue_makeStructAndIncRef(es);
                         break;
@@ -2939,8 +3049,8 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
                         if (ic > 0) GMLArray_growTo(elements, ic);
                         for (int32_t j = 0; ic > j; j++) {
                             Instance* es = Runner_createStruct(ctx->runner);
-                            VM_structSet(ctx, es, "type", RValue_makeInt32((int32_t) lay->type));
-                            VM_structSet(ctx, es, "inst_id", RValue_makeInt32((int32_t) id->instanceIds[j]));
+                            VM_structSetAndFreeVal(ctx, es, "type", RValue_makeInt32((int32_t) lay->type), -1);
+                            VM_structSetAndFreeVal(ctx, es, "inst_id", RValue_makeInt32((int32_t) id->instanceIds[j]), -1);
                             *GMLArray_slot(elements, j) = RValue_makeStructAndIncRef(es);
                         }
                         break;
@@ -2950,13 +3060,13 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
                         GMLArray_growTo(elements, 1);
                         Instance* es = Runner_createStruct(ctx->runner);
                         RoomLayerTilesData* td = lay->tilesData;
-                        VM_structSet(ctx, es, "type", RValue_makeInt32((int32_t) lay->type));
-                        VM_structSet(ctx, es, "x", RValue_makeInt32(0));
-                        VM_structSet(ctx, es, "y", RValue_makeInt32(0));
+                        VM_structSetAndFreeVal(ctx, es, "type", RValue_makeInt32((int32_t) lay->type), -1);
+                        VM_structSetAndFreeVal(ctx, es, "x", RValue_makeInt32(0), -1);
+                        VM_structSetAndFreeVal(ctx, es, "y", RValue_makeInt32(0), -1);
                         if (td != nullptr) {
-                            VM_structSet(ctx, es, "width", RValue_makeInt32((int32_t) td->tilesX));
-                            VM_structSet(ctx, es, "height", RValue_makeInt32((int32_t) td->tilesY));
-                            VM_structSet(ctx, es, "tileset_index", RValue_makeInt32(td->backgroundIndex));
+                            VM_structSetAndFreeVal(ctx, es, "width", RValue_makeInt32((int32_t) td->tilesX), -1);
+                            VM_structSetAndFreeVal(ctx, es, "height", RValue_makeInt32((int32_t) td->tilesY), -1);
+                            VM_structSetAndFreeVal(ctx, es, "tileset_index", RValue_makeInt32(td->backgroundIndex), -1);
                             if (wantTilemap && td->tileData != nullptr) {
                                 int32_t total = (int32_t) (td->tilesX * td->tilesY);
                                 GMLArray* tiles = GMLArray_create(total > 0 ? total : 1);
@@ -2964,7 +3074,7 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
                                 for (int32_t k = 0; total > k; k++) {
                                     *GMLArray_slot(tiles, k) = RValue_makeInt32((int32_t) td->tileData[k]);
                                 }
-                                VM_structSet(ctx, es, "tiles", RValue_makeArray(tiles));
+                                VM_structSetAndFreeVal(ctx, es, "tiles", RValue_makeArray(tiles), -1);
                             }
                         }
                         *GMLArray_slot(elements, 0) = RValue_makeStructAndIncRef(es);
@@ -2975,12 +3085,12 @@ static RValue builtin_room_get_info(VMContext* ctx, RValue* args, int32_t argCou
                         elements = GMLArray_create(1);
                         break;
                 }
-                if (elements != nullptr) VM_structSet(ctx, ls, "elements", RValue_makeArray(elements));
+                if (elements != nullptr) VM_structSetAndFreeVal(ctx, ls, "elements", RValue_makeArray(elements), -1);
             }
 
             *GMLArray_slot(layers, i) = RValue_makeStructAndIncRef(ls);
         }
-        VM_structSet(ctx, ret, "layers", RValue_makeArray(layers));
+        VM_structSetAndFreeVal(ctx, ret, "layers", RValue_makeArray(layers), -1);
     }
 
     return RValue_makeStructAndIncRef(ret);
@@ -3667,7 +3777,7 @@ static RValue builtin_variable_struct_get(VMContext* ctx, RValue* args, int32_t 
 
 static RValue builtin_variable_struct_set(VMContext* ctx, RValue* args, int32_t argCount) {
     if (3 > argCount || args[1].type != RVALUE_STRING) return RValue_makeUndefined();
-    // We can't use VM_structSet directly here because we DO NOT resolve builtin variables from VM_structSet
+    // We can't use VM_structSetAndFreeVal directly here because we DO NOT resolve builtin variables from VM_structSetAndFreeVal
     variableScopedSet(ctx, RValue_toInt32(args[0]), args[1].string, args[2], true, "variable_struct_set");
     return RValue_makeUndefined();
 }

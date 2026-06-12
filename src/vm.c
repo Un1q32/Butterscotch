@@ -364,11 +364,40 @@ int32_t VM_getOrAllocateSelfVarID(VMContext* ctx, const char* name) {
     return id;
 }
 
+// Plain member read on a struct.
+// Returns a weak view (or undefined when the member/element doesn't exist).
+RValue VM_structGet(VMContext* ctx, Instance* structInst, const char* name, int32_t arrayIndex) {
+    requireMessageFormatted(__FILE__, __LINE__, structInst->objectIndex == STRUCT_OBJECT_INDEX, "Trying to use VM_structGet on a instance that isn't a struct! objectIndex=%d", structInst->objectIndex);
+    ptrdiff_t nameSlot = shgeti(ctx->selfVarNameMap, (char*) name);
+    if (nameSlot >= 0) {
+        RValue* slot = IntRValueHashMap_findSlot(&structInst->selfVars, ctx->selfVarNameMap[nameSlot].value);
+        if (slot != nullptr) {
+            if (arrayIndex >= 0) return VM_arrayReadAt(slot, arrayIndex);
+            RValue result = *slot;
+            result.ownsReference = false;
+            return result;
+        }
+    }
+    return RValue_makeUndefined();
+}
+
 // Creates a copy of "name"
-// This does NOT resolve builtin variables!
-void VM_structSet(VMContext* ctx, Instance* structInst, const char* name, RValue val) {
+// This should ONLY be used for structs!
+void VM_structSet(VMContext* ctx, Instance* structInst, const char* name, RValue val, int32_t arrayIndex) {
+    requireMessageFormatted(__FILE__, __LINE__, structInst->objectIndex == STRUCT_OBJECT_INDEX, "Trying to use VM_structSet on a instance that isn't a struct! objectIndex=%d", structInst->objectIndex);
     int32_t varID = VM_getOrAllocateSelfVarID(ctx, name);
-    Instance_setSelfVar(structInst, varID, val);
+    if (arrayIndex >= 0) {
+        RValue* slot = IntRValueHashMap_getOrInsertUndefined(&structInst->selfVars, varID);
+        VM_arrayWriteAt(ctx, slot, arrayIndex, val);
+    } else {
+        Instance_setSelfVar(structInst, varID, val);
+    }
+}
+
+// Creates a copy of "name"
+// This should ONLY be used for structs!
+void VM_structSetAndFreeVal(VMContext* ctx, Instance* structInst, const char* name, RValue val, int32_t arrayIndex) {
+    VM_structSet(ctx, structInst, name, val, arrayIndex);
     RValue_free(&val);
 }
 
