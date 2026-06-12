@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
 
     fprintf(stderr, "Loaded FS drivers!\n");
 
-    const char* dataWinPath = PS2Utils_createDevicePath("DATA.WIN");
+    char* dataWinPath = PS2Utils_createDevicePath("DATA.WIN");
 
     printf("Butterscotch PS2 - Loading %s\n", dataWinPath);
 

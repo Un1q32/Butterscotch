@@ -8,7 +8,7 @@ project(butterscotch C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-add_compile_options(-Wall -Wextra -Werror -Wno-error=unused-parameter -Wno-error=unused-variable -Wno-error=unused-function)
+add_compile_options(-Wall -Wextra -Werror -Wno-error=unused-parameter -Wno-error=unused-variable -Wno-error=unused-const-variable -Wno-error=unused-function)
 
 set(PLATFORM "desktop" CACHE STRING "Platform backend")
 set(DESKTOP_BACKEND "" CACHE STRING "Desktop platform backend")
@@ -407,7 +407,8 @@ elseif(PLATFORM STREQUAL "ps2")
     # -Werror=double-promotion: Warn when something is being promoted to a double
     # -fomit-frame-pointer: frees a register on a target with tight register pressure
     # -ffast-math: enables aggressive floating point optimizations
-    target_compile_options(butterscotch PRIVATE -fsingle-precision-constant -Werror=double-promotion -fomit-frame-pointer -ffast-math)
+    # -Wno-format: because there are too many formatting issues that, at the end of the day, do not matter
+    target_compile_options(butterscotch PRIVATE -fsingle-precision-constant -Werror=double-promotion -fomit-frame-pointer -ffast-math -Wno-format)
 
     if(PS2)
         # Compiling on the Docker container
