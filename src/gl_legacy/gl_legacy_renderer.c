@@ -1326,7 +1326,8 @@ static void glGpuSetBlendModeExt(MAYBE_UNUSED Renderer* renderer, int32_t sfacto
     glBlendFunc(GLCommon_blendFactorToGL(sfactor), GLCommon_blendFactorToGL(dfactor));
 }
 
-static void glGpuSetBlendEnable(MAYBE_UNUSED Renderer* renderer, bool enable) {
+static void glGpuSetBlendEnable(Renderer* renderer, bool enable) {
+    (void)renderer;
     enable ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
 }
 
