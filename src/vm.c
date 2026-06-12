@@ -104,10 +104,14 @@ static int32_t stackPopInt32(VMContext* ctx) {
     return value;
 }
 
+#if IS_WAD17_OR_HIGHER_ENABLED
+
 static RValue* stackPeek(VMContext* ctx) {
     require(ctx->stack.top > 0);
     return &ctx->stack.slots[ctx->stack.top - 1];
 }
+
+#endif
 
 // ===[ Instruction Decoding ]===
 
@@ -295,6 +299,7 @@ static GMLArray* VM_arrayWriteAt(VMContext* ctx, RValue* slot, int32_t index, RV
 #if IS_WAD17_OR_HIGHER_ENABLED
     intendedOwner = IS_WAD17_OR_HIGHER(ctx) ? ctx->currentArrayOwner : (void*) slot;
 #else
+    (void)ctx;
     intendedOwner = (void*) slot;
 #endif
 
