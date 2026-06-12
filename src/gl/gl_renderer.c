@@ -1685,6 +1685,9 @@ static void glDrawSurface(Renderer* renderer, int32_t surfaceID, int32_t srcLeft
 }
 
 static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, int32_t x, int32_t y, int32_t w, int32_t h, bool removeback, bool smooth, int32_t xorig, int32_t yorig) {
+    // TODO: implement these
+    (void)smooth;
+    (void)removeback;
     GLRenderer* gl = (GLRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
 
