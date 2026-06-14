@@ -2072,6 +2072,7 @@ Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileS
     runner->gamepads = RunnerGamepad_create();
     runner->mouse = RunnerMouse_create();
     runner->appSurfaceEnabled = true;
+    runner->windowTitle = dataWin->gen8.displayName ? strdup(dataWin->gen8.displayName) : nullptr;
     runner->appSurfaceAutoDraw = true;
     runner->usingAppSurface = true;
     runner->applicationWidth = (int32_t) dataWin->gen8.defaultWindowWidth;

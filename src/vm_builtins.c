@@ -7270,13 +7270,23 @@ static RValue builtin_window_set_caption(VMContext* ctx, MAYBE_UNUSED RValue* ar
     char* val = RValue_toString(args[0]);
 
     Runner* runner = ctx->runner;
-    if (runner->setWindowTitle) {
-        runner->setWindowTitle(val);
-        printf("GL: Window title set to: %s\n", val);
+    bool changed = runner->windowTitle == nullptr || strcmp(runner->windowTitle, val) != 0;
+    if (changed) {
+        free(runner->windowTitle);
+        runner->windowTitle = strdup(val);
+        if (runner->setWindowTitle) {
+            runner->setWindowTitle(val);
+            printf("Runner: Window title set to: %s\n", val);
+        }
     }
 
     free(val);
     return RValue_makeUndefined();
+}
+
+static RValue builtin_window_get_caption(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    return RValue_makeOwnedString(strdup(runner->windowTitle ? runner->windowTitle : ""));
 }
 
 static RValue builtin_window_has_focus(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -15266,6 +15276,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "window_get_fullscreen", builtin_window_get_fullscreen);
     VM_registerBuiltin(ctx, "window_set_fullscreen", builtin_window_set_fullscreen);
     VM_registerBuiltin(ctx, "window_set_caption", builtin_window_set_caption);
+    VM_registerBuiltin(ctx, "window_get_caption", builtin_window_get_caption);
     VM_registerBuiltin(ctx, "window_get_width", builtin_window_get_width);
     VM_registerBuiltin(ctx, "window_get_height", builtin_window_get_height);
     VM_registerBuiltin(ctx, "window_set_size", builtin_window_set_size);

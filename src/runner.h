@@ -530,6 +530,7 @@ struct Runner {
     int32_t forcedDepth;
     // The time between the last frame and the current frame, stored in microseconds.
     double deltaTime;
+    char* windowTitle;
 
     // ===[ Builtin function state ]===
     DsMapEntry** dsMapPool; // stb_ds array of stb_ds hashmaps
