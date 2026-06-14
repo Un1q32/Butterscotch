@@ -53,10 +53,21 @@ static SoundInstance* findFreeSlot(MaAudioSystem* ma) {
 }
 
 static SoundInstance* findInstanceById(MaAudioSystem* ma, int32_t instanceId) {
-    int32_t slotIndex = instanceId - SOUND_INSTANCE_ID_BASE;
-    if (0 > slotIndex || slotIndex >= MAX_SOUND_INSTANCES) return nullptr;
+    int32_t slotIndex;
+
+    if (instanceId >= AUDIO_STREAM_INDEX_BASE) {
+        slotIndex = instanceId - AUDIO_STREAM_INDEX_BASE;
+    } else {
+        slotIndex = instanceId - SOUND_INSTANCE_ID_BASE;
+    }
+
+    if (0 > slotIndex || slotIndex >= MAX_SOUND_INSTANCES)
+        return nullptr;
+
     SoundInstance* inst = &ma->instances[slotIndex];
-    if (!inst->active || inst->instanceId != instanceId) return nullptr;
+    if (!inst->active || inst->instanceId != instanceId)
+        return nullptr;
+
     return inst;
 }
 
@@ -169,6 +180,8 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     bool isStream = (soundIndex >= AUDIO_STREAM_INDEX_BASE);
     Sound* sound = nullptr;
     char* streamPath = nullptr;
+    float streamPitch = 1.0f;
+    float streamGain = 1.0f;
 
     if (isStream) {
         int32_t streamSlot = soundIndex - AUDIO_STREAM_INDEX_BASE;
@@ -176,7 +189,10 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             fprintf(stderr, "Audio: Invalid stream index %d\n", soundIndex);
             return -1;
         }
-        streamPath = ma->streams[streamSlot].filePath;
+        AudioStreamEntry* stream = &ma->streams[streamSlot];
+        streamPath = stream->filePath;
+        streamPitch = stream->initialPitch;
+        streamGain = stream->initialGain;
     } else {
         DataWin* dw = ma->base.audioGroups[0]; // Audio Group 0 should always be data.win
         if (0 > soundIndex || (uint32_t) soundIndex >= dw->sond.count) {
@@ -252,8 +268,8 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     }
 
     // Apply properties
-    float volume = isStream ? 1.0f : sound->volume;
-    float pitch = isStream ? 1.0f : sound->pitch;
+    float volume = isStream ? streamGain : sound->volume;
+    float pitch = isStream ? streamPitch : sound->pitch;
     ma_sound_set_volume(&slot->maSound, volume);
     if (pitch != 1.0f) {
         ma_sound_set_pitch(&slot->maSound, pitch);
@@ -414,6 +430,18 @@ static void maResume(AudioSystem* audio) {
 static void maSetSoundGain(AudioSystem* audio, int32_t soundOrInstance, float gain, uint32_t timeMs) {
     MaAudioSystem* ma = (MaAudioSystem*) audio;
 
+    if (soundOrInstance >= AUDIO_STREAM_INDEX_BASE) {
+        int32_t streamSlot = soundOrInstance - AUDIO_STREAM_INDEX_BASE;
+
+        AudioStreamEntry* stream = &ma->streams[streamSlot];
+
+        if (stream != nullptr) {
+            stream->initialGain = gain;
+        }
+
+        // We want it to "fallthrough" to the check below so that any playing instances are updated
+    }
+
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
         if (inst != nullptr) {
@@ -452,6 +480,18 @@ static void maSetSoundGain(AudioSystem* audio, int32_t soundOrInstance, float ga
 static float maGetSoundGain(AudioSystem* audio, int32_t soundOrInstance) {
     MaAudioSystem* ma = (MaAudioSystem*) audio;
 
+    if (soundOrInstance >= AUDIO_STREAM_INDEX_BASE) {
+        int32_t streamSlot = soundOrInstance - AUDIO_STREAM_INDEX_BASE;
+
+        AudioStreamEntry* stream = &ma->streams[streamSlot];
+
+        if (stream != nullptr) {
+            return stream->initialGain;
+        }
+
+        // We want it to "fallthrough" to the check below so that any playing instances are retrieved
+    }
+
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
         if (inst != nullptr) return inst->currentGain;
@@ -468,6 +508,18 @@ static float maGetSoundGain(AudioSystem* audio, int32_t soundOrInstance) {
 
 static void maSetSoundPitch(AudioSystem* audio, int32_t soundOrInstance, float pitch) {
     MaAudioSystem* ma = (MaAudioSystem*) audio;
+
+    if (soundOrInstance >= AUDIO_STREAM_INDEX_BASE) {
+        int32_t streamSlot = soundOrInstance - AUDIO_STREAM_INDEX_BASE;
+
+        AudioStreamEntry* stream = &ma->streams[streamSlot];
+
+        if (stream != nullptr) {
+            stream->initialPitch = pitch;
+        }
+
+        // We want it to "fallthrough" to the check below so that any playing instances are updated
+    }
 
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
@@ -486,6 +538,18 @@ static void maSetSoundPitch(AudioSystem* audio, int32_t soundOrInstance, float p
 
 static float maGetSoundPitch(AudioSystem* audio, int32_t soundOrInstance) {
     MaAudioSystem* ma = (MaAudioSystem*) audio;
+
+    if (soundOrInstance >= AUDIO_STREAM_INDEX_BASE) {
+        int32_t streamSlot = soundOrInstance - AUDIO_STREAM_INDEX_BASE;
+
+        AudioStreamEntry* stream = &ma->streams[streamSlot];
+
+        if (stream != nullptr) {
+            return stream->initialPitch;
+        }
+
+        // We want it to "fallthrough" to the check below so that any playing instances are retrieved
+    }
 
     if (soundOrInstance >= SOUND_INSTANCE_ID_BASE) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
