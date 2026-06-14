@@ -15636,19 +15636,21 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "font_get_name", builtin_font_get_name);
     VM_registerBuiltin(ctx, "font_get_info", builtin_font_get_info);
     VM_registerBuiltin(ctx, "object_exists", builtin_object_exists);
-    VM_registerBuiltin(ctx, "object_get_depth", builtin_object_get_depth);
     VM_registerBuiltin(ctx, "object_get_name", builtin_object_get_name);
     VM_registerBuiltin(ctx, "object_name", builtin_object_get_name); // alias for pre-GMS 2.3
     VM_registerBuiltin(ctx, "object_get_parent", builtin_object_get_parent);
     VM_registerBuiltin(ctx, "object_get_persistent", builtin_object_get_persistent);
     VM_registerBuiltin(ctx, "object_get_solid", builtin_object_get_solid);
     VM_registerBuiltin(ctx, "object_get_sprite", builtin_object_get_sprite);
-    VM_registerBuiltin(ctx, "object_set_depth", builtin_object_set_depth);
     VM_registerBuiltin(ctx, "object_set_parent", builtin_object_set_parent);
     VM_registerBuiltin(ctx, "object_set_persistent", builtin_object_set_persistent);
     VM_registerBuiltin(ctx, "object_set_solid", builtin_object_set_solid);
     VM_registerBuiltin(ctx, "object_set_sprite", builtin_object_set_sprite);
     VM_registerBuiltin(ctx, "object_set_visible", builtin_object_set_visible);
+    if (!isGMS2) {
+        VM_registerBuiltin(ctx, "object_get_depth", builtin_object_get_depth);
+        VM_registerBuiltin(ctx, "object_set_depth", builtin_object_set_depth);
+    }
     VM_registerBuiltin(ctx, "object_is_ancestor", builtin_object_is_ancestor);
     VM_registerBuiltin(ctx, "asset_get_index", builtin_asset_get_index);
     VM_registerBuiltin(ctx,"gpu_set_blendmode", builtin_gpu_set_blendmode);
