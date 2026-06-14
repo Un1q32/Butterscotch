@@ -12727,7 +12727,7 @@ static int32_t coerceTileCellsToTilemapBoundsAndConvertToArrayIndex(RoomLayerTil
     int32_t coercedCellX = cellX;
     int32_t coercedCellY = cellY;
     coerceTileCellsToTilemapBounds(data, &coercedCellX, &coercedCellY);
-    return convertTileCellsToArrayIndex(data, cellX, cellY);
+    return convertTileCellsToArrayIndex(data, coercedCellX, coercedCellY);
 }
 
 // Maps a room-space pixel coordinate to a flat tileData cell index, applying the owning layer's draw offset.
