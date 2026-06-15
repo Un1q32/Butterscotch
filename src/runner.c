@@ -3017,7 +3017,8 @@ static void dispatchCollisionEvents(Runner* runner) {
                     // Because if we don't, the OTHER collision may never happen again because
                     // * GML code may have pushed it away
                     // * Solid collision resolution may have also pushed it away
-                    if (other->active && self->active) {
+                    // This ONLY happens if one of them was solid
+                    if (hadSolid && other->active && self->active) {
                         FlattenedCollisionEvent* reverseEvt = findSymmetricCollisionEvent(runner, other, self);
 #ifdef ENABLE_VM_TRACING
                         if (traceThisPair) {
