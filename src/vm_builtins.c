@@ -2604,11 +2604,31 @@ static RValue builtin_distance_to_object(VMContext* ctx, RValue* args, int32_t a
     return RValue_makeReal(GMLReal_sqrt(minDistSq));
 }
 
+// See GameMaker-HTML5's Function_Maths.js
 static RValue builtin_point_direction(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (4 > argCount) return RValue_makeReal(0.0);
-    GMLReal dx = RValue_toReal(args[2]) - RValue_toReal(args[0]);
-    GMLReal dy = RValue_toReal(args[3]) - RValue_toReal(args[1]);
-    return RValue_makeReal(GMLReal_atan2(-dy, dx) * (180.0 / M_PI));
+
+    GMLReal x1 = RValue_toReal(args[0]);
+    GMLReal y1 = RValue_toReal(args[1]);
+    GMLReal x2 = RValue_toReal(args[2]);
+    GMLReal y2 = RValue_toReal(args[3]);
+
+    GMLReal x = x2 - x1;
+    GMLReal y = y2 - y1;
+
+    if (x == 0) {
+        if (y > 0) return RValue_makeReal(270.0);
+        else if (y < 0) return RValue_makeReal(90.0);
+        else return RValue_makeReal(0.0);
+    } else {
+        GMLReal dd = 180.0 * GMLReal_atan2(y, x) / M_PI;
+        dd = GMLReal_round(dd * 1000000.0) / 1000000.0;
+        if (dd <= 0.0) {
+            return RValue_makeReal(-dd);
+        } else {
+            return RValue_makeReal(360.0 - dd);
+        }
+    }
 }
 
 static RValue builtin_angle_difference(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
