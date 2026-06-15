@@ -2036,6 +2036,7 @@ static RValue builtin_is_callable(MAYBE_UNUSED VMContext* ctx, RValue* args, int
 
     return RValue_makeBool(false);
 }
+#endif
 
 static RValue builtin_typeof(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) return RValue_makeUndefined();
@@ -2057,7 +2058,6 @@ static RValue builtin_typeof(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t 
         default: return RValue_makeString("default");
     }
 }
-#endif
 
 // ===[ STRING FUNCTIONS ]===
 
