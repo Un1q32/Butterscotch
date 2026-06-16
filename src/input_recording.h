@@ -5,20 +5,24 @@
 
 #include "runner_keyboard.h"
 
+typedef struct InputFrame {
+    int32_t* keysPressed;
+    int32_t* keysReleased;
+} InputFrame;
+
 typedef struct InputRecording {
     bool isRecording;
     bool isPlayback;
     bool filterDebugKeys;
     const char* recordFilePath;
 
-    // Recording: stb_ds array of stb_ds int32_t arrays (one per frame)
-    int32_t** recordedFrames;
+    // Recording: stb_ds array of stb_ds InputFrame arrays (one per frame)
+    InputFrame* recordedFrames;
 
     // Playback: same structure, loaded from JSON
-    int32_t** playbackFrames;
+    InputFrame* playbackFrames;
     int32_t playbackFrameCount;
     bool playbackEnded;
-    bool previousKeyDown[GML_KEY_COUNT];
 } InputRecording;
 
 // Create a recorder that snapshots keyboard state each frame
