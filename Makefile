@@ -19,8 +19,13 @@ INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/st
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
 SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
+ifeq ($(OS),DOS)
+DESKTOP_BACKEND := dos
+AUDIO_BACKEND := sb16
+else
 DESKTOP_BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
+endif
 
 ifdef BUTTERSCOTCH_COMMIT_DATE
 DEFINES += -DBUTTERSCOTCH_COMMIT_DATE=\"$(BUTTERSCOTCH_COMMIT_DATE)\"
@@ -43,6 +48,11 @@ endif
 
 ifndef DISABLE_WAD17
 DEFINES += -DENABLE_WAD17
+endif
+
+ifeq ($(DESKTOP_BACKEND),dos)
+DISABLE_LEGACY_GL := 1
+DISABLE_MODERN_GL := 1
 endif
 
 # TODO: add support for non-desktop backends
@@ -163,6 +173,12 @@ else
 LIBS += -lopenal
 endif
 endif
+ifeq ($(AUDIO_BACKEND),sb16)
+INCLUDES += -Isrc/audio/sb16
+DEFINES += -DUSE_SOUNDBLASTER
+SRCS += $(wildcard src/audio/sb16/*.c)
+HEADERS += $(wildcard src/audio/sb16/*.h)
+endif
 
 ifdef ENABLE_GLAD
 ifdef ENABLE_GLES
@@ -180,7 +196,7 @@ else
 ifeq ($(OS),Darwin)
 LIBS += -lobjc
 else
-ifneq ($(filter Linux Haiku %BSD Unix,$(OS)),) # OS is 'Linux', 'Haiku', '*BSD', or 'Unix'
+ifneq ($(filter Linux Haiku %BSD Unix DOS,$(OS)),) # OS is 'Linux', 'Haiku', '*BSD', 'Unix', or 'DOS'
 LIBS += -lm
 else
 $(error unknown OS '$(OS)', please manually set the OS variable)

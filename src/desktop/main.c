@@ -42,6 +42,8 @@
 #include "al_audio_system.h"
 #elif defined(USE_MINIAUDIO)
 #include "ma_audio_system.h"
+#elif defined(USE_SOUNDBLASTER)
+#include "sb_audio_system.h"
 #endif
 #include "noop_audio_system.h"
 #include "stb_ds.h"
@@ -1240,6 +1242,8 @@ int main(int argc, char* argv[]) {
             audioSystem = (AudioSystem*) AlAudioSystem_create();
 #elif defined(USE_MINIAUDIO)
             audioSystem = (AudioSystem*) MaAudioSystem_create(dataWin);
+#elif defined(USE_SOUNDBLASTER)
+            audioSystem = (AudioSystem*) SbAudioSystem_create();
 #else
             audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #endif
