@@ -36,7 +36,7 @@
 
 #define MAX_BACKGROUNDS 8
 
-// See GameMaker-HTML's Function_Layers.js
+// See GameMaker-HTML5's Function_Layers.js
 #define TILEINHERIT_SHIFT 31
 #define TILEFLIP_SHIFT 29
 #define TILEMIRROR_SHIFT 28
@@ -54,6 +54,14 @@
 #define TILEINDEX_SHIFT 0
 #define TILEINDEX_MASK (0x7ffff << TILEINDEX_SHIFT)
 #define TILEINDEX_SHIFTEDMASK (0x7ffff)
+
+// See GameMaker-HTML5's Function_YoYo.js
+#define DS_TYPE_MAP 1
+#define DS_TYPE_LIST 2
+#define DS_TYPE_STACK 3
+#define DS_TYPE_QUEUE 4
+#define DS_TYPE_GRID 5
+#define DS_TYPE_PRIORITY 6
 
 // ===[ STUBS MACROS ]===
 
@@ -4045,6 +4053,35 @@ static inline ptrdiff_t getValueIndexInMap(DsMapEntry** mapPtr, RValue keyRvalue
 
     return idx;
 }
+
+static RValue builtin_ds_exists(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    int32_t index = RValue_toInt32(args[0]);
+    int32_t dsType = RValue_toInt32(args[1]);
+
+    if (dsType == DS_TYPE_MAP && arrlen(runner->dsMapPool) > index && index > 0)
+        return RValue_makeBool(true);
+
+    if (dsType == DS_TYPE_LIST && arrlen(runner->dsListPool) > index && index > 0)
+        return RValue_makeBool(true);
+
+    if (dsType == DS_TYPE_STACK && arrlen(runner->dsStackPool) > index && index > 0)
+        return RValue_makeBool(true);
+
+    if (dsType == DS_TYPE_GRID) {
+        logStubbedFunction(ctx, "ds_exists");
+        return RValue_makeBool(false);
+    }
+
+    if (dsType == DS_TYPE_QUEUE && arrlen(runner->dsQueuePool) > index && index > 0)
+        return RValue_makeBool(true);
+
+    if (dsType == DS_TYPE_PRIORITY && arrlen(runner->dsPriorityPool) > index && index > 0)
+        return RValue_makeBool(true);
+
+    return RValue_makeBool(false);
+}
+
 
 static RValue builtin_ds_map_create(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
@@ -15109,6 +15146,9 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "xboxone_stats_add_user", builtin_xboxone_stats_add_user);
     VM_registerBuiltin(ctx, "xboxone_achievements_set_progress", builtin_xboxone_achievements_set_progress);
     VM_registerBuiltin(ctx, "environment_get_variable", builtin_environment_get_variable);
+
+    // General ds_* functions
+    VM_registerBuiltin(ctx, "ds_exists", builtin_ds_exists);
 
     // ds_map
     VM_registerBuiltin(ctx, "ds_map_create", builtin_ds_map_create);
