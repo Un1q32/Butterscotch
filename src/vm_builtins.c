@@ -12498,6 +12498,15 @@ static RValue builtin_layer_background_get_alpha(VMContext* ctx, RValue* args, M
     return RValue_makeReal(0.0);
 }
 
+static RValue builtin_layer_background_get_blend(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+    Runner* runner = ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    RuntimeBackgroundElement* bg = findBackgroundElement(runner, id);
+    if (bg != nullptr)
+        return RValue_makeReal(bg->blend);
+    return RValue_makeReal(0.0);
+}
+
 static RValue builtin_layer_tile_alpha(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     RuntimeLayerElement* el = Runner_findLayerElementById(runner, RValue_toInt32(args[0]), nullptr);
@@ -15759,6 +15768,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "layer_background_change", builtin_layer_background_sprite);
     VM_registerBuiltin(ctx, "layer_background_get_id", builtin_layer_background_get_id);
     VM_registerBuiltin(ctx, "layer_background_get_alpha", builtin_layer_background_get_alpha);
+    VM_registerBuiltin(ctx, "layer_background_get_blend", builtin_layer_background_get_blend);
     VM_registerBuiltin(ctx, "layer_background_index", builtin_layer_background_index);
     VM_registerBuiltin(ctx, "layer_tile_alpha", builtin_layer_tile_alpha);
     VM_registerBuiltin(ctx, "layer_tile_x", builtin_layer_tile_x);
