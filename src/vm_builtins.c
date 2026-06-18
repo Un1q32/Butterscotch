@@ -3692,7 +3692,7 @@ static void variableInstanceSetOn(VMContext* ctx, Instance* target, const char* 
     ptrdiff_t slot = shgeti(ctx->varNameMap, (char*) name);
     if (0 > slot) {
         // Not on the slot, register manually
-        int32_t dynamicallyAllocatedVarID = VM_getOrAllocateSelfVarID(ctx, name);
+        int32_t dynamicallyAllocatedVarID = VM_getOrAllocateVarID(ctx, name);
         Instance_setSelfVar(target, dynamicallyAllocatedVarID, val);
         return;
     }

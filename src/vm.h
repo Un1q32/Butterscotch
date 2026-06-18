@@ -233,7 +233,7 @@ struct VMContext {
     IntIntHashMap* codeLocalsSlotMaps;
     // varName -> varID hash map for self/instance-scoped variables (stb_ds).
     struct { char* key; int32_t value; }* varNameMap;
-    int32_t nextDynamicSelfVarID;
+    int32_t nextDynamicVarID;
     // "codeName\tfuncName" -> true, for deduplicating unknown function warnings
     StringBooleanEntry* loggedUnknownFuncs;
     // "codeName\tfuncName" -> true, for deduplicating stubbed function warnings
@@ -304,7 +304,7 @@ void VM_structSetAndFreeVal(VMContext* ctx, Instance* structInst, const char* na
 void VM_copyStatic(VMContext* ctx, RValue* parentRef);
 
 // Look up the varID for a self-scoped variable name, allocating a fresh synthetic ID if absent.
-int32_t VM_getOrAllocateSelfVarID(VMContext* ctx, const char* name);
+int32_t VM_getOrAllocateVarID(VMContext* ctx, const char* name);
 
 // Writes to the VMContext's scriptArgs, resizing the underlying array if needed
 // The "val" will be RValue_makeIndependent(val), it won't be freed

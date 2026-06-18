@@ -304,10 +304,10 @@ static GMLArray* VM_arraySetWithCoW(VMContext* ctx, RValue* slot, int32_t index,
 }
 
 // Creates a copy of "name"
-int32_t VM_getOrAllocateSelfVarID(VMContext* ctx, const char* name) {
+int32_t VM_getOrAllocateVarID(VMContext* ctx, const char* name) {
     ptrdiff_t slot = shgeti(ctx->varNameMap, name);
     if (slot >= 0) return ctx->varNameMap[slot].value;
-    int32_t id = ctx->nextDynamicSelfVarID++;
+    int32_t id = ctx->nextDynamicVarID++;
     shput(ctx->varNameMap, safeStrdup(name), id);
     return id;
 }
@@ -349,7 +349,7 @@ RValue VM_structGetVariableByVarName(VMContext* ctx, Instance* structInst, const
 // This should ONLY be used for structs!
 void VM_structSet(VMContext* ctx, Instance* structInst, const char* name, RValue val, int32_t arrayIndex) {
     requireMessageFormatted(__FILE__, __LINE__, structInst->objectIndex == STRUCT_OBJECT_INDEX, "Trying to use VM_structSet on a instance that isn't a struct! objectIndex=%d", structInst->objectIndex);
-    int32_t varID = VM_getOrAllocateSelfVarID(ctx, name);
+    int32_t varID = VM_getOrAllocateVarID(ctx, name);
     if (arrayIndex >= 0) {
         RValue* slot = IntRValueHashMap_getOrInsertUndefined(&structInst->selfVars, varID);
         VM_arraySetWithCoW(ctx, slot, arrayIndex, val);
@@ -3433,14 +3433,23 @@ VMContext* VM_create(DataWin* dataWin) {
     ctx->varNameMap = nullptr;
     int32_t maxSelfVarID = 0;
     forEach(Variable, variable, dataWin->vari.variables, dataWin->vari.variableCount) {
-        ptrdiff_t existing = shgeti(ctx->varNameMap, (char*) variable->name);
-        if (0 > existing) {
-            shput(ctx->varNameMap, (char*) safeStrdup(variable->name), variable->varID);
+        if (variable->varID >= 0) {
+            ptrdiff_t existing = shgeti(ctx->varNameMap, (char*) variable->name);
+            fprintf(stderr, "%s (%d)\n", variable->name, variable->varID);
+            if (0 > existing) {
+                shput(ctx->varNameMap, (char*) safeStrdup(variable->name), variable->varID);
+            } else {
+                fprintf(stderr, "%s (%d) already exists!!\n", variable->name, variable->varID);
+
+                if (shget(ctx->varNameMap, variable->name) != variable->varID) {
+                    fprintf(stderr, "whoops!\n");
+                }
+            }
+            if (variable->varID > maxSelfVarID)
+                maxSelfVarID = variable->varID;
         }
-        if (variable->varID > maxSelfVarID)
-            maxSelfVarID = variable->varID;
     }
-    ctx->nextDynamicSelfVarID = maxSelfVarID + 1;
+    ctx->nextDynamicVarID = maxSelfVarID + 1;
 
     // Build funcName -> codeIndex hash map from SCPT chunk
     ctx->codeIndexByName = nullptr;
