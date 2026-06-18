@@ -3435,15 +3435,8 @@ VMContext* VM_create(DataWin* dataWin) {
     forEach(Variable, variable, dataWin->vari.variables, dataWin->vari.variableCount) {
         if (variable->varID >= 0) {
             ptrdiff_t existing = shgeti(ctx->varNameMap, (char*) variable->name);
-            fprintf(stderr, "%s (%d)\n", variable->name, variable->varID);
             if (0 > existing) {
                 shput(ctx->varNameMap, (char*) safeStrdup(variable->name), variable->varID);
-            } else {
-                fprintf(stderr, "%s (%d) already exists!!\n", variable->name, variable->varID);
-
-                if (shget(ctx->varNameMap, variable->name) != variable->varID) {
-                    fprintf(stderr, "whoops!\n");
-                }
             }
             if (variable->varID > maxSelfVarID)
                 maxSelfVarID = variable->varID;
