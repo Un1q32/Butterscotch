@@ -3633,6 +3633,7 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     ctx->localVarCount = 0;
 
     // Reset all values in the stack (see issue #137)
+    // Keep in mind that recent GameMaker versions do seem to emit Pop/Popz when exiting loops (example: when using a repeat + return) but older versions DO need it
     repeat(ctx->stack.top, i) {
         RValue_free(&ctx->stack.slots[i]);
     }
@@ -3742,6 +3743,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     ctx->callDepth--;
 
     // Reset all values in the stack (see issue #137)
+    // Keep in mind that recent GameMaker versions do seem to emit Pop/Popz when exiting loops (example: when using a repeat + return) but older versions DO need it
     repeat(ctx->stack.top - storedStackTop, i) {
         RValue_free(&ctx->stack.slots[storedStackTop + i]);
     }
