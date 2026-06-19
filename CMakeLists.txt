@@ -161,6 +161,18 @@ add_library(bzip2 STATIC
 target_include_directories(bzip2 PUBLIC vendor/bzip2)
 target_compile_options(bzip2 PRIVATE -w)
 
+# Spatial grid logs
+option(ENABLE_SPATIAL_GRID_LOGS "Enable Spatial Grid logs" OFF)
+if(ENABLE_SPATIAL_GRID_LOGS)
+    add_compile_definitions(ENABLE_SPATIAL_GRID_LOGS)
+endif()
+
+# VM Exceptions logs
+option(ENABLE_VM_EXCEPTIONS_LOGS "Enable VM Exceptions logs" OFF)
+if(ENABLE_VM_EXCEPTIONS_LOGS)
+    add_compile_definitions(ENABLE_VM_EXCEPTIONS_LOGS)
+endif()
+
 if(PLATFORM STREQUAL "desktop")
     # Matches the GitHub Actions container flags (FORTIFY requires building with optimizations enabled!)
     target_compile_options(butterscotch PRIVATE "$<$<CONFIG:Release,RelWithDebInfo>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=2>")
@@ -197,12 +209,6 @@ if(PLATFORM STREQUAL "desktop")
     option(ENABLE_VM_OPCODE_PROFILER "Enable Butterscotch VM opcode count profiler" ON)
     if(ENABLE_VM_OPCODE_PROFILER)
         add_compile_definitions(ENABLE_VM_OPCODE_PROFILER)
-    endif()
-
-    # Spatial grid logs
-    option(ENABLE_SPATIAL_GRID_LOGS "Enable Spatial Grid logs" OFF)
-    if(ENABLE_SPATIAL_GRID_LOGS)
-        add_compile_definitions(ENABLE_SPATIAL_GRID_LOGS)
     endif()
 
     # VM unknown/stubbed function logs

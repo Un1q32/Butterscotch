@@ -2122,6 +2122,9 @@ static void handleCallV(VMContext* ctx, uint32_t instr) {
         result = RValue_makeUndefined();
     } else {
         fprintf(stderr, "VM: [%s] CALLV with unresolvable function reference (type=%d, codeIndex=%d)\n", ctx->currentCodeName, function.type, codeIndex);
+        VMException* exception = safeCalloc(1, sizeof(VMException));
+        exception->message = safeStrdup("CALLV with unresolvable function reference");
+        ctx->exception = exception;
         result = RValue_makeUndefined();
     }
 
@@ -2752,6 +2755,14 @@ static inline RValue scriptFallthroughReturnValue(VMContext* ctx) {
     return RValue_makeReal(0.0);
 }
 
+// Unwinds and frees the VMStack down to the newStackTop
+static void unwindVMStack(VMContext* ctx, int32_t newStackTop) {
+    repeat(ctx->stack.top - newStackTop, i) {
+        RValue_free(&ctx->stack.slots[i + newStackTop]);
+    }
+    ctx->stack.top = newStackTop;
+}
+
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
     // reload the values at the end of every iteration.
@@ -2764,6 +2775,53 @@ static RValue executeLoop(VMContext* ctx) {
     // Some opcodes have their handler or parts of their handler inlined
     // Those are opcodes that during real gameplay (using "--profile-opcodes") shown that, with inlining and keeping only the frequently called handle parts, we could squeeze MORE performance from the interpreter!
     while (codeEnd > ip) {
+#ifdef ENABLE_WAD17
+        if (ctx->exception != nullptr) {
+#ifdef ENABLE_VM_EXCEPTIONS_LOGS
+            fprintf(stderr, "VM: Exception thrown! Stack Top is %d\n", ctx->exceptionHandlerStackTop);
+#endif
+            // TODO: Handle it gracefully
+            requireMessage(ctx->exceptionHandlerStackTop != 0, "Exception handled stack top is 0! This would've technically crashed the game in the original runner... or we aren't handling exceptions correctly");
+
+            // Restore caller frame
+            ExceptionHandlerFrame* exceptionHandlerFrame = &ctx->exceptionHandlerFrameStack[ctx->exceptionHandlerStackTop - 1];
+
+            // Not for us, propagate the exception!
+            if (exceptionHandlerFrame->boundToCallDepth != ctx->callDepth) {
+#ifdef ENABLE_VM_EXCEPTIONS_LOGS
+                fprintf(stderr, "VM: We wanted %d but we are %d - Propagating...\n", exceptionHandlerFrame->boundToCallDepth, ctx->callDepth);
+#endif
+                return RValue_makeUndefined();
+            }
+
+            // We DO NOT want to pop the handler, it will be popped by @@try_unhook@@
+            bool isException = exceptionHandlerFrame->jumpToOnException != -1;
+            ip = isException ? exceptionHandlerFrame->jumpToOnException : exceptionHandlerFrame->jumpToOnSuccess;
+            unwindVMStack(ctx, exceptionHandlerFrame->stackTop);
+
+            VM_SYNC_IP();
+
+#ifdef ENABLE_VM_EXCEPTIONS_LOGS
+            fprintf(stderr, "VM: Jumped to %d due to exception handler, is this a exception? %d\n", ip, isException);
+#endif
+
+            if (isException) {
+                // On a exception, GameMaker pops the struct and stores it in the variable of the "catch (_nameOfTheExceptionHere) {"
+                Instance* gmlStruct = Runner_createStruct(ctx->runner);
+                // TODO: longMessage/script/stacktrace
+                VM_structSet(ctx, gmlStruct, "message", RValue_makeOwnedString(ctx->exception->message), -1);
+                stackPush(ctx, RValue_makeStructAndIncRef(gmlStruct));
+                free(ctx->exception->message);
+                free(ctx->exception);
+            } else {
+                // Will be unparked by finish_finally
+                ctx->parkedException = ctx->exception;
+            }
+
+            ctx->exception = nullptr;
+        }
+#endif
+
 #ifdef ENABLE_VM_GML_PROFILER
         if (ctx->profiler != nullptr)
             Profiler_tickInstruction(ctx->profiler);
@@ -2826,9 +2884,9 @@ static RValue executeLoop(VMContext* ctx) {
                 char* stackBuf = formatStackContents(ctx);
 
                 if (operandStr[0] != '\0') {
-                    fprintf(stderr, "VM: [%s] @%04X [0x%08X] %s %s [stack=%d] %s\n", ctx->currentCodeName, instrAddr, instr, opcodeStr, operandStr, ctx->stack.top, stackBuf);
+                    fprintf(stderr, "VM: [%s] @%04X (%d) [0x%08X] %s %s [stack=%d] %s\n", ctx->currentCodeName, instrAddr, instrAddr, instr, opcodeStr, operandStr, ctx->stack.top, stackBuf);
                 } else {
-                    fprintf(stderr, "VM: [%s] @%04X [0x%08X] %s [stack=%d] %s\n", ctx->currentCodeName, instrAddr, instr, opcodeStr, ctx->stack.top, stackBuf);
+                    fprintf(stderr, "VM: [%s] @%04X (%d) [0x%08X] %s [stack=%d] %s\n", ctx->currentCodeName, instrAddr, instrAddr, instr, opcodeStr, ctx->stack.top, stackBuf);
                 }
                 free(stackBuf);
             }
@@ -3634,9 +3692,8 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
 
     // Reset all values in the stack (see issue #137)
     // Keep in mind that recent GameMaker versions do seem to emit Pop/Popz when exiting loops (example: when using a repeat + return) but older versions DO need it
-    repeat(ctx->stack.top, i) {
-        RValue_free(&ctx->stack.slots[i]);
-    }
+    unwindVMStack(ctx, 0);
+
     ctx->stack.top = 0;
 
     return result;
@@ -3744,10 +3801,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
 
     // Reset all values in the stack (see issue #137)
     // Keep in mind that recent GameMaker versions do seem to emit Pop/Popz when exiting loops (example: when using a repeat + return) but older versions DO need it
-    repeat(ctx->stack.top - storedStackTop, i) {
-        RValue_free(&ctx->stack.slots[storedStackTop + i]);
-    }
-    ctx->stack.top = storedStackTop;
+    unwindVMStack(ctx, storedStackTop);
 
     return result;
 }
@@ -4308,9 +4362,9 @@ void VM_disassemble(VMContext* ctx, int32_t codeIndex) {
 
         // Print the formatted line
         if (commentStr[0] != '\0') {
-            printf("%*s%04X: [0x%08X] %-16s %-45s %s\n", indent, "", instrAddr, instr, opcodeStr, operandStr, commentStr);
+            printf("%*s%04X (%6d): [0x%08X] %-16s %-45s %s\n", indent, "", instrAddr, instrAddr, instr, opcodeStr, operandStr, commentStr);
         } else {
-            printf("%*s%04X: [0x%08X] %-16s %s\n", indent, "", instrAddr, instr, opcodeStr, operandStr);
+            printf("%*s%04X (%6d): [0x%08X] %-16s %s\n", indent, "", instrAddr, instrAddr, instr, opcodeStr, operandStr);
         }
 
         // PushEnv increases depth after printing

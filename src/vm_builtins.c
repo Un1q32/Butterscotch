@@ -13549,6 +13549,60 @@ static RValue builtin_GetInstance(VMContext* ctx, RValue* args, int32_t argCount
     }
     return RValue_makeInt32(INSTANCE_NOONE);
 }
+
+// @@try_hook@@ - takes an object index and returns the first active instance's ID.
+static RValue builtin_try_hook(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (argCount > 2) return RValue_makeUndefined();
+    requireMessageFormatted(__FILE__, __LINE__, ctx->exceptionHandlerStackTop != VM_EXCEPTION_HANDLER_FRAME_STACK_SIZE, "Exception handler stack too deep!");
+
+    int32_t jumpToOnException = RValue_toInt32(args[0]);
+    int32_t jumpToOnSuccess = RValue_toInt32(args[1]);
+
+    ExceptionHandlerFrame* exceptionStackHandler = &ctx->exceptionHandlerFrameStack[ctx->exceptionHandlerStackTop++];
+    exceptionStackHandler->jumpToOnSuccess = jumpToOnSuccess;
+    exceptionStackHandler->jumpToOnException = jumpToOnException;
+    exceptionStackHandler->boundToCallDepth = ctx->callDepth;
+    exceptionStackHandler->stackTop = ctx->stack.top;
+
+#ifdef ENABLE_VM_EXCEPTIONS_LOGS
+    fprintf(stderr, "VM: Configured exception handler for jump on exception: %d, jump on success: %d\n", jumpToOnException, jumpToOnSuccess);
+#endif
+
+    return RValue_makeUndefined();
+}
+
+// @@try_unhook@@ - pops the current exception handler
+static RValue builtin_try_unhook(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    ctx->exceptionHandlerStackTop--;
+    return RValue_makeUndefined();
+}
+
+// @@finish_finally@@ - unparks a parked exception if present
+static RValue builtin_finish_finally(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->parkedException == nullptr) return RValue_makeUndefined();
+    ctx->exception = ctx->parkedException;
+    ctx->parkedException = nullptr;
+    return RValue_makeUndefined();
+}
+
+// @@finish_catch@@ - discards a parked exception
+static RValue builtin_finish_catch(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (ctx->exception != ctx->parkedException) {
+        free(ctx->parkedException);
+        free(ctx->parkedException);
+    }
+    ctx->parkedException = nullptr;
+    return RValue_makeUndefined();
+}
+
+// @@throw@@ - throws a custom exception
+static RValue builtin_throw(VMContext* ctx, RValue* args, int32_t argCount) {
+    char* message = RValue_toString(args[0]);
+    VMException* exception = safeCalloc(1, sizeof(VMException));
+    exception->message = message;
+    ctx->exception = exception;
+    return RValue_makeUndefined();
+}
 #endif
 
 // ===[ PATH FUNCTIONS ]===
@@ -16153,6 +16207,11 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "@@CopyStatic@@", builtin_CopyStatic);
     VM_registerBuiltin(ctx, "@@SetStatic@@", builtin_SetStatic);
     VM_registerBuiltin(ctx, "@@GetInstance@@", builtin_GetInstance);
+    VM_registerBuiltin(ctx, "@@try_hook@@", builtin_try_hook);
+    VM_registerBuiltin(ctx, "@@try_unhook@@", builtin_try_unhook);
+    VM_registerBuiltin(ctx, "@@finish_catch@@", builtin_finish_catch);
+    VM_registerBuiltin(ctx, "@@finish_finally@@", builtin_finish_finally);
+    VM_registerBuiltin(ctx, "@@throw@@", builtin_throw);
 #endif
 
     // Path
