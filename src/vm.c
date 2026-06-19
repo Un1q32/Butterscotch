@@ -3637,8 +3637,10 @@ void VM_reset(VMContext* ctx) {
         free(ctx->parkedException->message);
         free(ctx->parkedException);
     }
-    free(ctx->exception->message);
-    free(ctx->exception);
+    if (ctx->exception != nullptr) {
+        free(ctx->exception->message);
+        free(ctx->exception);
+    }
 #endif
 
     fprintf(stderr, "VM: Reset complete\n");
