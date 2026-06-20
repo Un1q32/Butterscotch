@@ -14,6 +14,7 @@
 #include "math_compat.h"
 
 #include "debug_overlay.h"
+#include "gettime.h"
 #include "stb_ds.h"
 
 // ===[ Runtime Layer Teardown Helpers ]===
@@ -2417,6 +2418,8 @@ void Runner_initFirstRoom(Runner* runner) {
     require(dataWin->gen8.roomOrderCount > 0);
 
     int32_t firstRoomIndex = dataWin->gen8.roomOrder[0];
+
+    runner->gameStartTime = nowNanos();
 
     // Run global init scripts with the global scope instance as "self"
     // In GMS 2.3+ (BC17), GLOB scripts store function declarations on "self" via Pop.v.v

@@ -1389,7 +1389,6 @@ int main(int argc, char* argv[]) {
         bool actuallyShuttingDown = false;
         uint64_t lastFrameTime = nowNanos();
         uint64_t lastFrameStartTime = lastFrameTime; // for delta_time
-        runner->gameStartTime = lastFrameTime;
         bool shouldWindowClose = false;
         while (true) {
             if (runner->shouldExit || shouldWindowClose) {

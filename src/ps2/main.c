@@ -488,7 +488,6 @@ int main(int argc, char* argv[]) {
 
     PS2Overlay_drawStatusScreen(dataWin->gen8.displayName, "Creating runner...", true);
     Runner* runner = Runner_create(dataWin, vm, renderer, fileSystem, audioSystem);
-    runner->gameStartTime = nowNanos();
 
     // Parse disabledObjects from CONFIG.JSN
     JsonValue* disabledObjectsArr = JsonReader_getJsonValueByKey(configRoot, "disabledObjects");
