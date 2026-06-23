@@ -155,7 +155,6 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
 void platformSwapBuffers(void) {
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE && nextFb) {
-        glBindFramebufferOES(GL_FRAMEBUFFER_OES, framebuffer);
         glBindTexture(GL_TEXTURE_2D, fbtexture);
         glTexImage2D(
             GL_TEXTURE_2D,
@@ -211,6 +210,7 @@ void platformSwapBuffers(void) {
     //glClearColor(color, color, color, 1.0f);
     //glClear(GL_COLOR_BUFFER_BIT);
     [glcontext presentRenderbuffer:GL_RENDERBUFFER_OES];
+    glBindFramebufferOES(GL_FRAMEBUFFER_OES, framebuffer);
 }
 
 void *platformGetProcAddress(const char *name) {
