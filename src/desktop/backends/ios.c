@@ -94,6 +94,20 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
         return false;
     }
 
+    return true;
+}
+
+void platformExit(void) {
+    [EAGLContext setCurrentContext:glcontext];
+    if (framebuffer) glDeleteFramebuffersOES(1, &framebuffer);
+    if (renderbuffer) glDeleteRenderbuffersOES(1, &renderbuffer);
+    [glcontext release];
+}
+
+void platformInitFunctions(Runner *runner) {
+    g_runner = runner;
+
+    /* this can't be in platformInit because glad hasn't initialized yet */
     glGenFramebuffersOES(1, &framebuffer);
     glGenRenderbuffersOES(1, &renderbuffer);
 
@@ -115,18 +129,6 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
                                  GL_RENDERBUFFER_OES,
                                  renderbuffer);
 
-    return true;
-}
-
-void platformExit(void) {
-    [EAGLContext setCurrentContext:glcontext];
-    if (framebuffer) glDeleteFramebuffersOES(1, &framebuffer);
-    if (renderbuffer) glDeleteRenderbuffersOES(1, &renderbuffer);
-    [glcontext release];
-}
-
-void platformInitFunctions(Runner *runner) {
-    g_runner = runner;
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE) {
         glGenTextures(1, &fbtexture);
