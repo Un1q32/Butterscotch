@@ -19,8 +19,15 @@ INCLUDES := -I. -Isrc -Ivendor/stb/ds -Isrc/image -Ivendor/stb/image -Ivendor/st
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
 SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
+ifeq ($(OS),iOS)
+DESKTOP_BACKEND := ios
+AUDIO_BACKEND := openal
+ENABLE_GLES := 1
+DISABLE_LEGACY_GL := 1
+else
 DESKTOP_BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
+endif
 
 ifdef BUTTERSCOTCH_COMMIT_DATE
 DEFINES += -DBUTTERSCOTCH_COMMIT_DATE=\"$(BUTTERSCOTCH_COMMIT_DATE)\"
@@ -46,7 +53,7 @@ DEFINES += -DENABLE_WAD17
 endif
 
 # TODO: add support for non-desktop backends
-SRCS += $(wildcard src/desktop/*.c) $(wildcard src/desktop/backends/$(DESKTOP_BACKEND).c)
+SRCS += $(wildcard src/desktop/*.c) src/desktop/backends/$(DESKTOP_BACKEND).c
 ifeq ($(OS),Windows)
 PKG_CONFIG_FLAGS := --static
 endif
@@ -84,7 +91,10 @@ SDL3_LIBS += $(shell pkg-config $(PKG_CONFIG_FLAGS) --libs sdl3)
 LIBS += $(SDL3_LIBS)
 DEFINES += -DUSE_SDL3
 endif
-
+ifeq ($(DESKTOP_BACKEND),ios)
+LIBS += -framework Foundation -framework UIKit -framework OpenGLES -framework QuartzCore
+DEFINES += -DUSE_IOS
+endif
 
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
 ifndef DISABLE_LEGACY_GL
@@ -157,7 +167,7 @@ INCLUDES += -Isrc/audio/openal
 DEFINES += -DUSE_OPENAL
 SRCS += $(wildcard src/audio/openal/*.c)
 HEADERS += $(wildcard src/audio/openal/*.h)
-ifeq ($(OS),Darwin)
+ifneq ($(filter Darwin iOS,$(OS)),) # OS is 'Darwin' or 'iOS'
 LIBS += -framework OpenAL
 else
 LIBS += -lopenal
@@ -177,7 +187,7 @@ endif
 ifeq ($(OS),Windows)
 LIBS += -static -lwinmm
 else
-ifeq ($(OS),Darwin)
+ifneq ($(filter Darwin iOS,$(OS)),) # OS is 'Darwin' or 'iOS'
 LIBS += -lobjc
 else
 ifneq ($(filter Linux Haiku %BSD Unix,$(OS)),) # OS is 'Linux', 'Haiku', '*BSD', or 'Unix'

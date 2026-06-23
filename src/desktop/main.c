@@ -51,13 +51,15 @@
 #include "profiler.h"
 #include "gettime.h"
 
-/* For SDL_main */
+/* For main function overrides */
 #if defined(USE_SDL1)
 #include <SDL/SDL_main.h>
 #elif defined(USE_SDL2)
 #include <SDL2/SDL_main.h>
 #elif defined(USE_SDL3)
 #include <SDL3/SDL_main.h>
+#elif defined(USE_IOS)
+#define main game_main
 #endif
 
 enum GraphicsAPI gfx;
@@ -427,7 +429,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->loadType = DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME;
     // TODO: detect available driver features
     // at runtime to improve defaults.
-#if defined(ENABLE_MODERN_GL) && (defined(USE_GLFW3) || defined(USE_SDL2) || defined(USE_SDL3))
+#if defined(ENABLE_MODERN_GL) && (defined(USE_GLFW3) || defined(USE_SDL2) || defined(USE_SDL3) || defined(USE_IOS))
     args->renderer = "modern-gl";
 #elif defined(ENABLE_LEGACY_GL)
     args->renderer = "legacy-gl";
@@ -1175,15 +1177,15 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER) )
-#if defined(USE_GLFW3) || defined(USE_GLFW2)
+#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)) && defined(ENABLE_SW_RENDERER) )
+#if defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)
             if (gfx == LEGACY_GL || gfx == MODERN_GL || gfx == SOFTWARE) {
 #else
             if (gfx == LEGACY_GL || gfx == MODERN_GL) {
 #endif
                 // Load OpenGL function pointers via GLAD
 #ifdef ENABLE_GLES
-                if (!gladLoadGLES2Loader((GLADloadproc)platformGetProcAddress)) {
+                if (!(gfx == SOFTWARE ? gladLoadGLES1Loader((GLADloadproc)platformGetProcAddress) : gladLoadGLES2Loader((GLADloadproc)platformGetProcAddress))) {
 #else
                 if (!gladLoadGLLoader((GLADloadproc)platformGetProcAddress)) {
 #endif
