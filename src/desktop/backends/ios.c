@@ -4,7 +4,6 @@
 
 #include <UIKit/UIKit.h>
 #include <objc/message.h>
-#include <OpenGLES/ES1/glext.h>
 #include <OpenGLES/EAGL.h>
 #include <QuartzCore/CAEAGLLayer.h>
 
@@ -163,7 +162,7 @@ void platformSwapBuffers(void) {
             fbWidth,
             fbHeight,
             0,
-            GL_BGRA,
+            GL_BGRA_EXT,
             GL_UNSIGNED_BYTE,
             nextFb
         );
