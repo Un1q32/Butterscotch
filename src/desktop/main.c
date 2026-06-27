@@ -63,10 +63,9 @@
 #endif
 
 enum GraphicsAPI gfx;
-bool wantGLES;
 
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER))
-int platformInitGlad(GLADloadproc load) {
+static int platformInitGlad(GLADloadproc load) {
     glGetString = (PFNGLGETSTRINGPROC)load("glGetString");
     const char *version;
     if (glGetString) {
