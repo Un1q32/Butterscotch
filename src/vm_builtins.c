@@ -9774,10 +9774,10 @@ static RValue builtin_draw_text_color(VMContext* ctx, RValue* args, MAYBE_UNUSED
     float x = (float) RValue_toReal(args[0]);
     float y = (float) RValue_toReal(args[1]);
     char* str = RValue_toString(args[2]);
-    int32_t c1 = (float) RValue_toInt32(args[3]);
-    int32_t c2 = (float) RValue_toInt32(args[4]);
-    int32_t c3 = (float) RValue_toInt32(args[5]);
-    int32_t c4 = (float) RValue_toInt32(args[6]);
+    int32_t c1 = RValue_toInt32(args[3]);
+    int32_t c2 = RValue_toInt32(args[4]);
+    int32_t c3 = RValue_toInt32(args[5]);
+    int32_t c4 = RValue_toInt32(args[6]);
     float alpha = (float) RValue_toReal(args[7]);
 
     PreprocessedText processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
@@ -9797,10 +9797,10 @@ static RValue builtin_draw_text_color_transformed(VMContext* ctx, RValue* args, 
     float xscale = (float) RValue_toReal(args[3]);
     float yscale = (float) RValue_toReal(args[4]);
     float angle = (float) RValue_toReal(args[5]);
-    int32_t c1 = (float) RValue_toInt32(args[6]);
-    int32_t c2 = (float) RValue_toInt32(args[7]);
-    int32_t c3 = (float) RValue_toInt32(args[8]);
-    int32_t c4 = (float) RValue_toInt32(args[9]);
+    int32_t c1 = RValue_toInt32(args[6]);
+    int32_t c2 = RValue_toInt32(args[7]);
+    int32_t c3 = RValue_toInt32(args[8]);
+    int32_t c4 = RValue_toInt32(args[9]);
     float alpha = (float) RValue_toReal(args[10]);
 
     PreprocessedText processedText = TextUtils_preprocessGmlTextIfNeeded(runner, str);
@@ -9832,10 +9832,10 @@ static RValue builtin_draw_text_color_ext(VMContext* ctx, RValue* args, MAYBE_UN
     char* str = RValue_toString(args[2]);
     int32_t separation = RValue_toInt32(args[3]);
     int32_t width = RValue_toInt32(args[4]);
-    int32_t c1 = (float) RValue_toInt32(args[5]);
-    int32_t c2 = (float) RValue_toInt32(args[6]);
-    int32_t c3 = (float) RValue_toInt32(args[7]);
-    int32_t c4 = (float) RValue_toInt32(args[8]);
+    int32_t c1 = RValue_toInt32(args[5]);
+    int32_t c2 = RValue_toInt32(args[6]);
+    int32_t c3 = RValue_toInt32(args[7]);
+    int32_t c4 = RValue_toInt32(args[8]);
     float alpha = (float) RValue_toReal(args[9]);
 
     drawTextColorExtCommon(runner, str, x, y, 1.0f, 1.0f, 0.0f, separation, width, c1, c2, c3, c4, alpha);
@@ -9855,10 +9855,10 @@ static RValue builtin_draw_text_color_ext_transformed(VMContext* ctx, RValue* ar
     float xscale = (float) RValue_toReal(args[5]);
     float yscale = (float) RValue_toReal(args[6]);
     float angle = (float) RValue_toReal(args[7]);
-    int32_t c1 = (float) RValue_toInt32(args[8]);
-    int32_t c2 = (float) RValue_toInt32(args[9]);
-    int32_t c3 = (float) RValue_toInt32(args[10]);
-    int32_t c4 = (float) RValue_toInt32(args[11]);
+    int32_t c1 = RValue_toInt32(args[8]);
+    int32_t c2 = RValue_toInt32(args[9]);
+    int32_t c3 = RValue_toInt32(args[10]);
+    int32_t c4 = RValue_toInt32(args[11]);
     float alpha = (float) RValue_toReal(args[12]);
 
     drawTextColorExtCommon(runner, str, x, y, xscale, yscale, angle, separation, width, c1, c2, c3, c4, alpha);
