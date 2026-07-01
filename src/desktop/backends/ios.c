@@ -2,8 +2,10 @@
 #include <stdio.h>
 #include <time.h>
 #include <dlfcn.h>
+#include "math_compat.h"
 
 #include <UIKit/UIKit.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <objc/message.h>
 #include <OpenGLES/EAGL.h>
 #include <QuartzCore/CAEAGLLayer.h>
@@ -25,6 +27,7 @@
  */
 
 static atomic_bool needsResize = false;
+static atomic_bool quitRequested = false;
 
 static Runner *g_runner;
 
@@ -34,6 +37,128 @@ static GLuint renderbuffer;
 static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
+
+/* w/h of the game's requested resolution. Used only for layout decisions;
+ * the renderer itself already letterboxes/pillarboxes to this ratio
+ * regardless of the actual framebuffer size we hand it. */
+static float g_aspectRatio = 1.0f;
+
+/* The window/overlay are created on the main thread before platformInit()
+ * (which runs on the game thread) knows the real aspect ratio, so the
+ * initial layout uses the g_aspectRatio default of 1.0. These let us force
+ * a relayout once the real value is known, instead of waiting for the
+ * first rotation to happen to trigger one. */
+static UIView *g_glView = nil;
+static UIView *g_overlayView = nil;
+
+static void bsRequestRelayout(void) {
+    if (g_glView) {
+        [g_glView performSelectorOnMainThread:@selector(setNeedsLayout) withObject:nil waitUntilDone:YES];
+        [g_glView performSelectorOnMainThread:@selector(layoutIfNeeded) withObject:nil waitUntilDone:YES];
+    }
+    if (g_overlayView) {
+        [g_overlayView performSelectorOnMainThread:@selector(setNeedsLayout) withObject:nil waitUntilDone:YES];
+        [g_overlayView performSelectorOnMainThread:@selector(layoutIfNeeded) withObject:nil waitUntilDone:YES];
+        [g_overlayView performSelectorOnMainThread:@selector(setNeedsDisplay) withObject:nil waitUntilDone:YES];
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Touch control layout
+ *
+ * Portrait: game view anchored to the top of the screen, dpad + z/x/c
+ * strip along the bottom (gameboy-ish). Landscape: game view centered,
+ * dpad on the left, z/x/c on the right. If the requested aspect ratio
+ * needs more space than what's left after reserving the control strip,
+ * the game view is allowed to grow into the control area rather than
+ * get squashed -- the controls are translucent, so this is fine.
+ * ------------------------------------------------------------------- */
+
+#define BS_CONTROL_STRIP_PORTRAIT_H   160.0f
+#define BS_CONTROL_STRIP_LANDSCAPE_W  120.0f
+#define BS_QUIT_BUTTON_SIZE           22.0f
+#define BS_QUIT_BUTTON_MARGIN         8.0f
+#define BS_GAME_TOP_PADDING           (BS_QUIT_BUTTON_MARGIN + BS_QUIT_BUTTON_SIZE + 4.0f)
+
+typedef struct {
+    CGRect gameFrame;
+    CGRect dpadFrame;
+    CGRect buttonsFrame;
+    CGRect quitFrame;
+    bool   portrait;
+} BSLayout;
+
+static BSLayout computeLayout(CGSize screen) {
+    BSLayout layout;
+    layout.portrait = screen.height >= screen.width;
+
+    if (layout.portrait) {
+        CGFloat neededH = screen.width / g_aspectRatio;
+        CGFloat gameH = fminf(neededH, screen.height - BS_GAME_TOP_PADDING);
+        layout.gameFrame = CGRectMake(0, BS_GAME_TOP_PADDING, screen.width, gameH);
+
+        CGFloat stripY = screen.height - BS_CONTROL_STRIP_PORTRAIT_H;
+        layout.dpadFrame    = CGRectMake(16, stripY + 10, 130, 130);
+        layout.buttonsFrame = CGRectMake(screen.width - 16 - 150, stripY + 30, 150, 50);
+    } else {
+        CGFloat neededW = screen.height * g_aspectRatio;
+        CGFloat gameW = fminf(neededW, screen.width);
+        CGFloat gameX = (screen.width - gameW) / 2.0f;
+        layout.gameFrame = CGRectMake(gameX, 0, gameW, screen.height);
+
+        layout.dpadFrame    = CGRectMake(10, (screen.height - 130) / 2.0f + 35, 110, 130);
+        layout.buttonsFrame = CGRectMake(screen.width - 10 - 170, (screen.height - 130) / 2.0f + 60, 170, 60);
+    }
+
+    layout.quitFrame = CGRectMake(screen.width - BS_QUIT_BUTTON_MARGIN - BS_QUIT_BUTTON_SIZE,
+                                   BS_QUIT_BUTTON_MARGIN, BS_QUIT_BUTTON_SIZE, BS_QUIT_BUTTON_SIZE);
+    return layout;
+}
+
+static void dpadArmRects(CGRect dpad, CGRect *up, CGRect *down, CGRect *left, CGRect *right) {
+    CGFloat cx = dpad.origin.x + dpad.size.width  / 2.0f;
+    CGFloat cy = dpad.origin.y + dpad.size.height / 2.0f;
+    CGFloat armW = dpad.size.width  / 3.0f;
+    CGFloat armH = dpad.size.height / 3.0f;
+    *up    = CGRectMake(cx - armW / 2.0f, dpad.origin.y, armW, armH);
+    *down  = CGRectMake(cx - armW / 2.0f, dpad.origin.y + dpad.size.height - armH, armW, armH);
+    *left  = CGRectMake(dpad.origin.x, cy - armH / 2.0f, armW, armH);
+    *right = CGRectMake(dpad.origin.x + dpad.size.width - armW, cy - armH / 2.0f, armW, armH);
+}
+
+/* 8-way split around the dpad's center so a single touch can express
+ * diagonals (e.g. up+left) without needing two fingers. */
+static void dpadDirectionsForPoint(CGRect dpad, CGPoint p, bool *up, bool *down, bool *left, bool *right) {
+    CGFloat cx = dpad.origin.x + dpad.size.width  / 2.0f;
+    CGFloat cy = dpad.origin.y + dpad.size.height / 2.0f;
+    CGFloat dx = p.x - cx;
+    CGFloat dy = p.y - cy;
+    CGFloat deadzone = fminf(dpad.size.width, dpad.size.height) * 0.15f;
+
+    *up = *down = *left = *right = false;
+    if (fabsf(dx) < deadzone && fabsf(dy) < deadzone) return;
+
+    CGFloat deg = atan2f(dy, dx) * 180.0f / (CGFloat)M_PI; /* 0 = right, 90 = down (screen coords) */
+    if (deg < 0) deg += 360.0f;
+
+    if      (deg >= 337.5f || deg < 22.5f) { *right = true; }
+    else if (deg < 67.5f)                  { *right = true; *down = true; }
+    else if (deg < 112.5f)                 { *down = true; }
+    else if (deg < 157.5f)                 { *down = true; *left = true; }
+    else if (deg < 202.5f)                 { *left = true; }
+    else if (deg < 247.5f)                 { *left = true; *up = true; }
+    else if (deg < 292.5f)                 { *up = true; }
+    else                                    { *up = true; *right = true; }
+}
+
+static void actionButtonRects(CGRect bf, CGRect out[3]) {
+    CGFloat btnSize = fminf(bf.size.height, bf.size.width / 3.0f) - 8.0f;
+    for (int i = 0; i < 3; i++) {
+        out[i] = CGRectMake(bf.origin.x + i * (bf.size.width / 3.0f) + 4.0f,
+                             bf.origin.y + (bf.size.height - btnSize) / 2.0f,
+                             btnSize, btnSize);
+    }
+}
 
 void platformSetWindowTitle(const char* title) {
     (void)title;
@@ -72,8 +197,10 @@ void platformGetMousePos(double *xPos, double *yPos) {
 }
 
 bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) {
-    (void)reqW; (void)reqH;
     (void)title; (void)headless;
+
+    g_aspectRatio = (reqH > 0) ? ((float)reqW / (float)reqH) : 1.0f;
+    bsRequestRelayout();
 
 #ifdef ENABLE_MODERN_GL
     if (gfx == MODERN_GL)
@@ -113,8 +240,10 @@ static void resizeFramebuffer(void) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
+#ifdef ENABLE_MODERN_GL
     if (g_runner && g_runner->renderer)
         ((GLRenderer *)g_runner->renderer)->hostFramebuffer = framebuffer;
+#endif
 
     glViewport(0, 0, fbWidth, fbHeight);
 }
@@ -141,6 +270,8 @@ void *platformGetProcAddress(const char *name) {
 bool platformHandleEvents(void) {
     if (atomic_exchange(&needsResize, false))
         resizeFramebuffer();
+    if (atomic_load(&quitRequested))
+        return true;
     return false;
 }
 
@@ -172,7 +303,9 @@ void platformSleepUntil(uint64_t time) {
     if ((self = [super initWithFrame:frame])) {
         layer = (CAEAGLLayer *)self.layer;
         layer.opaque = YES;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        /* Frame is fully recomputed in -layoutSubviews on every layout pass
+         * (rotation, first layout, etc), so we don't rely on autoresizing. */
+        self.autoresizingMask = UIViewAutoresizingNone;
 
         UIScreen *screen = [UIScreen mainScreen];
         CGFloat scale = 1.0f; /* pre-iOS 4: no retina, 1x is correct */
@@ -190,10 +323,213 @@ void platformSleepUntil(uint64_t time) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    if (self.superview) {
+        BSLayout bsLayout = computeLayout(self.superview.bounds.size);
+        self.frame = bsLayout.gameFrame;
+    }
     atomic_store(&needsResize, true);
 }
 
 - (void)dealloc {
+    [super dealloc];
+}
+
+@end
+
+/* ---------------------------------------------------------------------
+ * On-screen touch controls: dpad + z/x/c + quit. Sits as a sibling of
+ * GLView, sized to the full screen (so it can draw controls in the area
+ * outside the game view, and translucently over it when the game view
+ * grows into that area).
+ * ------------------------------------------------------------------- */
+
+@interface BSTouchOverlay : UIView {
+    UITouch *dpadTouch;
+    int32_t  dpadKeysDown[4]; /* up, down, left, right */
+    UITouch *buttonTouches[3]; /* z, x, c */
+    UITouch *quitTouch;
+}
+@end
+
+@implementation BSTouchOverlay
+
+- (id)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.backgroundColor = [UIColor clearColor];
+        self.opaque = NO;
+        self.multipleTouchEnabled = YES;
+        self.userInteractionEnabled = YES;
+        self.autoresizingMask = UIViewAutoresizingNone;
+        dpadTouch = nil;
+        quitTouch = nil;
+        for (int i = 0; i < 4; i++) dpadKeysDown[i] = 0;
+        for (int i = 0; i < 3; i++) buttonTouches[i] = nil;
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (self.superview) {
+        self.frame = self.superview.bounds;
+    }
+    [self setNeedsDisplay];
+}
+
+static void drawTranslucentCircle(CGContextRef ctx, CGRect frame, BOOL highlighted) {
+    CGFloat alpha = highlighted ? 0.55f : 0.30f;
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, alpha);
+    CGContextFillEllipseInRect(ctx, frame);
+    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
+    CGContextStrokeEllipseInRect(ctx, frame);
+}
+
+static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
+    CGSize size = [text sizeWithFont:font];
+    CGPoint pt = CGPointMake(rect.origin.x + (rect.size.width  - size.width)  / 2.0f,
+                              rect.origin.y + (rect.size.height - size.height) / 2.0f);
+    [[UIColor whiteColor] set];
+    [text drawAtPoint:pt withFont:font];
+}
+
+- (void)drawRect:(CGRect)rect {
+    (void)rect;
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    BSLayout bsLayout = computeLayout(self.bounds.size);
+
+    CGRect up, down, left, right;
+    dpadArmRects(bsLayout.dpadFrame, &up, &down, &left, &right);
+
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[0] ? 0.55f : 0.28f);
+    CGContextFillRect(ctx, up);
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[1] ? 0.55f : 0.28f);
+    CGContextFillRect(ctx, down);
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[2] ? 0.55f : 0.28f);
+    CGContextFillRect(ctx, left);
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[3] ? 0.55f : 0.28f);
+    CGContextFillRect(ctx, right);
+
+    CGRect actionRects[3];
+    actionButtonRects(bsLayout.buttonsFrame, actionRects);
+    NSString *actionLabels[3] = { @"Z", @"X", @"C" };
+    UIFont *actionFont = [UIFont boldSystemFontOfSize:18.0f];
+    for (int i = 0; i < 3; i++) {
+        drawTranslucentCircle(ctx, actionRects[i], buttonTouches[i] != nil);
+        drawCenteredLabel(actionLabels[i], actionRects[i], actionFont);
+    }
+
+    drawTranslucentCircle(ctx, bsLayout.quitFrame, quitTouch != nil);
+    drawCenteredLabel(@"X", bsLayout.quitFrame, [UIFont boldSystemFontOfSize:14.0f]);
+}
+
+- (void)updateDpadUp:(bool)up down:(bool)down left:(bool)left right:(bool)right {
+    bool newState[4] = { up, down, left, right };
+    int32_t keys[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
+    for (int i = 0; i < 4; i++) {
+        if (newState[i] && !dpadKeysDown[i]) {
+            if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, keys[i]);
+        } else if (!newState[i] && dpadKeysDown[i]) {
+            if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, keys[i]);
+        }
+        dpadKeysDown[i] = newState[i] ? 1 : 0;
+    }
+}
+
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    (void)event;
+    BSLayout bsLayout = computeLayout(self.bounds.size);
+    CGRect actionRects[3];
+    actionButtonRects(bsLayout.buttonsFrame, actionRects);
+
+    for (UITouch *touch in touches) {
+        CGPoint p = [touch locationInView:self];
+
+        if (!quitTouch && CGRectContainsPoint(CGRectInset(bsLayout.quitFrame, -6, -6), p)) {
+            quitTouch = [touch retain];
+            [self setNeedsDisplay];
+            continue;
+        }
+
+        if (!dpadTouch && CGRectContainsPoint(CGRectInset(bsLayout.dpadFrame, -20, -20), p)) {
+            dpadTouch = [touch retain];
+            bool up, down, left, right;
+            dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
+            [self updateDpadUp:up down:down left:left right:right];
+            [self setNeedsDisplay];
+            continue;
+        }
+
+        for (int i = 0; i < 3; i++) {
+            if (!buttonTouches[i] && CGRectContainsPoint(CGRectInset(actionRects[i], -6, -6), p)) {
+                buttonTouches[i] = [touch retain];
+                int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
+                if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, vk);
+                [self setNeedsDisplay];
+                break;
+            }
+        }
+    }
+}
+
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    (void)event;
+    if (!dpadTouch) return;
+    BSLayout bsLayout = computeLayout(self.bounds.size);
+    for (UITouch *touch in touches) {
+        if (touch == dpadTouch) {
+            CGPoint p = [touch locationInView:self];
+            bool up, down, left, right;
+            dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
+            [self updateDpadUp:up down:down left:left right:right];
+            [self setNeedsDisplay];
+            break;
+        }
+    }
+}
+
+- (void)handleTouchEnd:(NSSet *)touches {
+    for (UITouch *touch in touches) {
+        if (touch == dpadTouch) {
+            [self updateDpadUp:false down:false left:false right:false];
+            [dpadTouch release];
+            dpadTouch = nil;
+            [self setNeedsDisplay];
+            continue;
+        }
+        if (touch == quitTouch) {
+            [quitTouch release];
+            quitTouch = nil;
+            atomic_store(&quitRequested, true);
+            [self setNeedsDisplay];
+            continue;
+        }
+        for (int i = 0; i < 3; i++) {
+            if (touch == buttonTouches[i]) {
+                int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
+                if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, vk);
+                [buttonTouches[i] release];
+                buttonTouches[i] = nil;
+                [self setNeedsDisplay];
+                break;
+            }
+        }
+    }
+}
+
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    (void)event;
+    [self handleTouchEnd:touches];
+}
+
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
+    (void)event;
+    [self handleTouchEnd:touches];
+}
+
+- (void)dealloc {
+    if (dpadTouch) [dpadTouch release];
+    if (quitTouch) [quitTouch release];
+    for (int i = 0; i < 3; i++) if (buttonTouches[i]) [buttonTouches[i] release];
     [super dealloc];
 }
 
@@ -216,6 +552,12 @@ void platformSleepUntil(uint64_t time) {
     return YES;
 }
 
+/* Pre-iOS-7: without this, the view is offset 20pt down to make room for
+ * the status bar, even though we hide the status bar at launch. */
+- (BOOL)wantsFullScreenLayout {
+    return YES;
+}
+
 @end
 
 extern int game_main(int argc, char *argv[]);
@@ -223,6 +565,8 @@ extern int game_main(int argc, char *argv[]);
 @interface AppDelegate : NSObject <UIApplicationDelegate> {
     UIWindow *window;
     GLView *view;
+    BSTouchOverlay *overlay;
+    UIView *rootView;
 }
 @end
 
@@ -234,23 +578,35 @@ extern int game_main(int argc, char *argv[]);
     static char arg0[] = "butterscotch";
     static char arg1[] = "/var/mobile/Documents/Butterscotch/undertale/data.win";
     char *argv[] = { arg0, arg1, NULL };
-    game_main(2, argv);
+    exit(game_main(2, argv));
 
     [pool release];
 }
 
 - (void)applicationDidFinishLaunching:(UIApplication *)application {
+    [application setStatusBarHidden:YES];
+
     CGRect bounds = [[UIScreen mainScreen] bounds];
+    BSLayout bsLayout = computeLayout(bounds.size);
 
     window = [[UIWindow alloc] initWithFrame:bounds];
-    view = [[GLView alloc] initWithFrame:bounds];
+    view = [[GLView alloc] initWithFrame:bsLayout.gameFrame];
+    overlay = [[BSTouchOverlay alloc] initWithFrame:bounds];
+    g_glView = view;
+    g_overlayView = overlay;
 
     if ([window respondsToSelector:@selector(setRootViewController:)]) {
+        rootView = [[UIView alloc] initWithFrame:bounds];
+        rootView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [rootView addSubview:view];
+        [rootView addSubview:overlay]; /* on top, so controls are visible over the game */
+
         UIViewController *vc = [[BSViewController alloc] init];
-        vc.view = view;
+        vc.view = rootView;
         [window performSelector:@selector(setRootViewController:) withObject:vc];
     } else {
         [window addSubview:view];
+        [window addSubview:overlay];
     }
     [window makeKeyAndVisible];
 
@@ -258,6 +614,10 @@ extern int game_main(int argc, char *argv[]);
 }
 
 - (void)dealloc {
+    g_glView = nil;
+    g_overlayView = nil;
+    [overlay release];
+    [rootView release];
     [view release];
     [window release];
     [super dealloc];

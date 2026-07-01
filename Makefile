@@ -109,7 +109,7 @@ LIBS += $(SDL3_LIBS)
 DEFINES += $(DEFINE)USE_SDL3
 endif
 ifeq ($(DESKTOP_BACKEND),ios)
-LIBS += -framework Foundation -framework UIKit -framework OpenGLES -framework QuartzCore
+LIBS += -framework Foundation -framework UIKit -framework OpenGLES -framework QuartzCore -framework CoreGraphics
 DEFINES += -DUSE_IOS
 endif
 
