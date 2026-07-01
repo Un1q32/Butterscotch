@@ -227,7 +227,6 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
 }
 
 void platformExit(void) {
-    [EAGLContext setCurrentContext:glcontext];
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
     [glcontext release];
