@@ -125,6 +125,7 @@ elif $CC tmp/test.c -o tmp/a.out >> tmp/config.log 2>&1; then
     config 'CFLAGS := -O2 -DNDEBUG'
     config 'INCLUDE := -I'
     config 'DEFINE := -D'
+    [ "$OS" = 'iOS' ] && config "_CC := \$(CC) -ObjC"
 else
     printred 'unknown'
     printf 'unable to find a working compiler syntax, this is probably because your compiler is broken.\n'
