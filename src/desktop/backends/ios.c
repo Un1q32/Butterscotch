@@ -25,6 +25,7 @@ static Runner *g_runner;
 static EAGLContext *glcontext;
 static GLuint framebuffer;
 static GLuint renderbuffer;
+static GLuint depthRenderbuffer;
 static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
@@ -72,6 +73,8 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
 #ifdef ENABLE_MODERN_GL
     if (gfx == MODERN_GL)
         glcontext = [[EAGLContext alloc] initWithAPI:3];
+        if (!glcontext)
+            glcontext = [[EAGLContext alloc] initWithAPI:2];
 #endif
 
     if (!glcontext) {
@@ -100,35 +103,37 @@ void platformInitFunctions(Runner *runner) {
     /* this can't be in platformInit because glad hasn't initialized yet */
     glGenFramebuffers(1, &framebuffer);
     glGenRenderbuffers(1, &renderbuffer);
+    glGenRenderbuffers(1, &depthRenderbuffer);
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    // Color renderbuffer — sized by the drawable
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+
+    // Depth/stencil renderbuffer — sized to match
+    glBindRenderbuffer(GL_RENDERBUFFER, depthRenderbuffer);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8_OES, fbWidth, fbHeight);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
+
+    // IMPORTANT: presentRenderbuffer: presents whatever is bound to
+    // GL_RENDERBUFFER at call time, not a framebuffer attachment.
+    // Leave the *color* renderbuffer bound, not the depth one.
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
-    [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
-
-    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
-                                     GL_RENDERBUFFER_WIDTH,
-                                     &fbWidth);
-
-    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
-                                     GL_RENDERBUFFER_HEIGHT,
-                                     &fbHeight);
-
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER,
-                                 GL_COLOR_ATTACHMENT0,
-                                 GL_RENDERBUFFER,
-                                 renderbuffer);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "iOS framebuffer incomplete: 0x%x\n", status);
+    }
 }
 
 void platformSwapBuffers(void) {
-    static float color = 1.0f;
-    color -= 0.01f;
-    if (color < 0.0f)
-        color = 1.0f;
-    glClearColor(color, color, color, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    [glcontext presentRenderbuffer:GL_RENDERBUFFER];
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    [glcontext presentRenderbuffer:GL_RENDERBUFFER];
 }
 
 void *platformGetProcAddress(const char *name) {
