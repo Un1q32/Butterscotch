@@ -60,6 +60,8 @@ include() {
 check() {
     configlog "checking $1"
     shift
+    output="$output_exe"
+    [ -n "$nolink" ] && output="$compile_obj $output_obj" && unset nolink
     printf 'cmd: %s\n' "$CC $cflags tmp/test.c ${output}tmp/a.out $*" >> tmp/config.log
     if $CC $cflags tmp/test.c ${output}tmp/a.out "$@" >> tmp/config.log 2>&1; then
         printyes
@@ -80,27 +82,25 @@ if $CC /nologo tmp/test.c /Fe:tmp/a.out >> tmp/config.log 2>&1; then
     syntax=msvc
     CC="$CC /nologo"
     cflags='/Oi-' # equivalent to -fno-builtin
-    output='/Fe:'
+    compile_obj='/c'
+    output_obj='/Fo:'
+    output_exe='/Fe:'
     config 'MSVC := 1'
     config 'OBJ_EXT := obj'
     config "_CC := \$(CC) /nologo"
     config 'CFLAGS := /O2 /DNDEBUG'
-    config 'COMPILE_OBJ := /c'
-    config 'OUTPUT_OBJ := /Fo:'
-    config 'OUTPUT_EXE := /Fe:'
     config 'INCLUDE := /I'
     config 'DEFINE := /D'
 elif $CC tmp/test.c -o tmp/a.out >> tmp/config.log 2>&1; then
     printgreen 'gcc'
     syntax=gcc
     lm='-lm'
-    output='-o'
+    compile_obj='-c'
+    output_obj='-o'
+    output_exe='-o'
     config 'OBJ_EXT := o'
     config "_CC := \$(CC)"
     config 'CFLAGS := -O2 -DNDEBUG'
-    config 'COMPILE_OBJ := -c'
-    config 'OUTPUT_OBJ := -o'
-    config 'OUTPUT_EXE := -o'
     config 'INCLUDE := -I'
     config 'DEFINE := -D'
 else
@@ -109,6 +109,9 @@ else
     rm -f config.mk
     exit 1
 fi
+config "COMPILE_OBJ := $compile_obj"
+config "OUTPUT_OBJ := $output_obj"
+config "OUTPUT_EXE := $output_exe"
 
 configlog 'checking if we are cross compiling'
 chmod +x tmp/a.out
@@ -119,12 +122,12 @@ else
     cross_compiling=1
 fi
 
-if [ "$syntax" != 'msvc' ] && check 'if the compiler supports -fno-builtin' -fno-builtin; then
+if [ "$syntax" != 'msvc' ] && nolink=1 check 'if the compiler supports -fno-builtin' -fno-builtin; then
     # function tests might have false positives without this
     cflags='-fno-builtin'
 fi
 
-if [ "$syntax" = 'msvc' ] || ! check 'if the compiler supports -MMD -MP -MF test.d' -MMD -MP -MF tmp/test.d; then
+if [ "$syntax" = 'msvc' ] || ! nolink=1 check 'if the compiler supports -MMD -MP -MF test.d' -MMD -MP -MF tmp/test.d; then
     config 'DISABLE_MMD := 1'
 fi
 rm -f tmp/test.d
@@ -162,7 +165,7 @@ printf '%s' "\
 int main(void){return 0;}
 " > tmp/test.c
 
-if ! check 'if stdbool.h works'; then
+if ! nolink=1 check 'if stdbool.h works'; then
     # Needed for GCC 2.95, where stdbool.h doesn't work in C++ mode
     include 'compat/stdbool'
 fi
@@ -172,13 +175,13 @@ printf '%s' "\
 int main(void){return 0;}
 " > tmp/test.c
 
-if ! check 'if stdint.h works'; then
+if ! nolink=1 check 'if stdint.h works'; then
     include 'compat/stdint'
     printf '%s' "\
 #include <sys/types.h>
 int main(void){return 0;}
 " > tmp/test.c
-    if check 'if sys/types.h works'; then
+    if nolink=1 check 'if sys/types.h works'; then
         define 'HAVE_SYS_TYPES_H'
     fi
 fi
