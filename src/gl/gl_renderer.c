@@ -98,8 +98,6 @@ static void rt_glGenFramebuffers(GLsizei n, GLuint* ids) {
 #define glGenFramebuffers rt_glGenFramebuffers
 
 static void rt_glBindFramebuffer(GLenum target, GLuint fb) {
-    if (fb == 0)
-        raise(SIGTRAP);
     if (glBindFramebuffer) glBindFramebuffer(target, fb);
     else glBindFramebufferEXT(target, fb);
 }
