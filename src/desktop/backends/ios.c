@@ -9,6 +9,7 @@
 #include <objc/message.h>
 #include <OpenGLES/EAGL.h>
 #include <QuartzCore/CAEAGLLayer.h>
+#include <Availability.h>
 
 #include <glad/glad.h>
 
@@ -394,11 +395,19 @@ static void drawTranslucentCircle(CGContextRef ctx, CGRect frame, BOOL highlight
 }
 
 static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 70000
+    CGSize size = [text sizeWithAttributes:@{NSFontAttributeName: font}];
+#else
     CGSize size = [text sizeWithFont:font];
+#endif
     CGPoint pt = CGPointMake(rect.origin.x + (rect.size.width  - size.width)  / 2.0f,
                               rect.origin.y + (rect.size.height - size.height) / 2.0f);
     [[UIColor whiteColor] set];
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 70000
+    [text drawAtPoint:pt withAttributes:@{NSFontAttributeName: font}];
+#else
     [text drawAtPoint:pt withFont:font];
+#endif
 }
 
 - (void)drawRect:(CGRect)rect {
