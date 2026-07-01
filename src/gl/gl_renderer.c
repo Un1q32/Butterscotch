@@ -1,7 +1,6 @@
 #include "gl_renderer.h"
 #include "matrix_math.h"
 #include "text_utils.h"
-#include <signal.h>
 
 #if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #include <GLES3/gl3.h>
