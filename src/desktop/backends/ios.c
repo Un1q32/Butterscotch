@@ -28,7 +28,6 @@ static Runner *g_runner;
 static EAGLContext *glcontext;
 static GLuint framebuffer;
 static GLuint renderbuffer;
-static GLuint depthRenderbuffer;
 static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
@@ -106,7 +105,6 @@ void platformInitFunctions(Runner *runner) {
     /* this can't be in platformInit because glad hasn't initialized yet */
     glGenFramebuffers(1, &framebuffer);
     glGenRenderbuffers(1, &renderbuffer);
-    glGenRenderbuffers(1, &depthRenderbuffer);
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
@@ -116,12 +114,6 @@ void platformInitFunctions(Runner *runner) {
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
-
-    // Depth/stencil renderbuffer — sized to match
-    glBindRenderbuffer(GL_RENDERBUFFER, depthRenderbuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fbWidth, fbHeight);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
 
     // IMPORTANT: presentRenderbuffer: presents whatever is bound to
     // GL_RENDERBUFFER at call time, not a framebuffer attachment.
@@ -137,7 +129,6 @@ void platformInitFunctions(Runner *runner) {
 }
 
 void platformSwapBuffers(void) {
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     [glcontext presentRenderbuffer:GL_RENDERBUFFER];
 }
 
