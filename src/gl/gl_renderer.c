@@ -1,6 +1,7 @@
 #include "gl_renderer.h"
 #include "matrix_math.h"
 #include "text_utils.h"
+#include <signal.h>
 
 #if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #include <GLES3/gl3.h>
@@ -97,7 +98,8 @@ static void rt_glGenFramebuffers(GLsizei n, GLuint* ids) {
 #define glGenFramebuffers rt_glGenFramebuffers
 
 static void rt_glBindFramebuffer(GLenum target, GLuint fb) {
-    fprintf(stderr, "glBindFramebuffer(%u)\n", fb);
+    if (fb == 0)
+        raise(SIGTRAP);
     if (glBindFramebuffer) glBindFramebuffer(target, fb);
     else glBindFramebufferEXT(target, fb);
 }
