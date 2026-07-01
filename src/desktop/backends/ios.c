@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include <stdio.h>
 #include <time.h>
 #include <dlfcn.h>
@@ -22,6 +23,8 @@
  * TODO: look into implementing platformSetCursor and platformGetWindowFocus
  * They might actually be meaningful on newer iPadOS versions.
  */
+
+static atomic_bool needsResize = false;
 
 static Runner *g_runner;
 
@@ -99,16 +102,9 @@ void platformExit(void) {
     [glcontext release];
 }
 
-void platformInitFunctions(Runner *runner) {
-    g_runner = runner;
-
-    /* this can't be in platformInit because glad hasn't initialized yet */
-    glGenFramebuffers(1, &framebuffer);
-    glGenRenderbuffers(1, &renderbuffer);
-
+static void resizeFramebuffer(void) {
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
-    // Color renderbuffer — sized by the drawable
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
     [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
@@ -117,7 +113,21 @@ void platformInitFunctions(Runner *runner) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
-    ((GLRenderer *)runner->renderer)->hostFramebuffer = framebuffer;
+    if (g_runner && g_runner->renderer)
+        ((GLRenderer *)g_runner->renderer)->hostFramebuffer = framebuffer;
+
+    glViewport(0, 0, fbWidth, fbHeight);
+}
+
+void platformInitFunctions(Runner *runner) {
+    g_runner = runner;
+
+    /* this can't be in platformInit because glad hasn't initialized yet */
+    glGenFramebuffers(1, &framebuffer);
+    glGenRenderbuffers(1, &renderbuffer);
+
+    resizeFramebuffer();
+    atomic_store(&needsResize, false);
 }
 
 void platformSwapBuffers(void) {
@@ -129,6 +139,8 @@ void *platformGetProcAddress(const char *name) {
 }
 
 bool platformHandleEvents(void) {
+    if (atomic_exchange(&needsResize, false))
+        resizeFramebuffer();
     return false;
 }
 
@@ -162,6 +174,11 @@ void platformSleepUntil(uint64_t time) {
         layer.opaque = YES;
     }
     return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    atomic_store(&needsResize, true);
 }
 
 - (void)dealloc {
