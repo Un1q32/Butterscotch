@@ -172,6 +172,7 @@ void platformSleepUntil(uint64_t time) {
     if ((self = [super initWithFrame:frame])) {
         layer = (CAEAGLLayer *)self.layer;
         layer.opaque = YES;
+        layer.contentsScale = [UIScreen mainScreen].scale;
     }
     return self;
 }
