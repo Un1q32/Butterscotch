@@ -569,6 +569,11 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     return YES;
 }
 
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    bsRequestRelayout();
+}
+
 /* Pre-iOS-7: without this, the view is offset 20pt down to make room for
  * the status bar, even though we hide the status bar at launch. */
 - (BOOL)wantsFullScreenLayout {
