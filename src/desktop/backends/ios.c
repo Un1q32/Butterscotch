@@ -136,7 +136,7 @@ static void dpadDirectionsForPoint(CGRect dpad, CGPoint p, bool *up, bool *down,
     CGFloat deadzone = fminf(dpad.size.width, dpad.size.height) * 0.15f;
 
     *up = *down = *left = *right = false;
-    if (fabsf(dx) < deadzone && fabsf(dy) < deadzone) return;
+    if (fabs(dx) < deadzone && fabs(dy) < deadzone) return;
 
     CGFloat deg = atan2f(dy, dx) * 180.0f / (CGFloat)M_PI; /* 0 = right, 90 = down (screen coords) */
     if (deg < 0) deg += 360.0f;
