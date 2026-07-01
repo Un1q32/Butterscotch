@@ -34,6 +34,7 @@ static Runner *g_runner;
 static EAGLContext *glcontext;
 static GLuint framebuffer;
 static GLuint renderbuffer;
+static bool glInited = false;
 static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
@@ -227,6 +228,7 @@ void platformExit(void) {
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
     [glcontext release];
+    glInited = false;
 }
 
 static void resizeFramebuffer(void) {
@@ -252,8 +254,11 @@ void platformInitFunctions(Runner *runner) {
     g_runner = runner;
 
     /* this can't be in platformInit because glad hasn't initialized yet */
-    glGenFramebuffers(1, &framebuffer);
-    glGenRenderbuffers(1, &renderbuffer);
+    if (!glInited) {
+        glGenFramebuffers(1, &framebuffer);
+        glGenRenderbuffers(1, &renderbuffer);
+        glInited = true;
+    }
 
     resizeFramebuffer();
     atomic_store(&needsResize, false);
