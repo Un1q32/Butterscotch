@@ -7,6 +7,8 @@
 #include <OpenGLES/EAGL.h>
 #include <QuartzCore/CAEAGLLayer.h>
 
+#include <glad/glad.h>
+
 #include "common.h"
 #include "input_recording.h"
 #include "desktop/platformdefs.h"
@@ -87,8 +89,8 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
 
 void platformExit(void) {
     [EAGLContext setCurrentContext:glcontext];
-    if (framebuffer) glDeleteFramebuffersOES(1, &framebuffer);
-    if (renderbuffer) glDeleteRenderbuffersOES(1, &renderbuffer);
+    if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
+    if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
     [glcontext release];
 }
 
@@ -96,37 +98,37 @@ void platformInitFunctions(Runner *runner) {
     g_runner = runner;
 
     /* this can't be in platformInit because glad hasn't initialized yet */
-    glGenFramebuffersOES(1, &framebuffer);
-    glGenRenderbuffersOES(1, &renderbuffer);
+    glGenFramebuffers(1, &framebuffer);
+    glGenRenderbuffers(1, &renderbuffer);
 
-    glBindFramebufferOES(GL_FRAMEBUFFER_OES, framebuffer);
-    glBindRenderbufferOES(GL_RENDERBUFFER_OES, renderbuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
-    [glcontext renderbufferStorage:GL_RENDERBUFFER_OES fromDrawable:layer];
+    [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
 
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES,
-                                     GL_RENDERBUFFER_WIDTH_OES,
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+                                     GL_RENDERBUFFER_WIDTH,
                                      &fbWidth);
 
-    glGetRenderbufferParameterivOES(GL_RENDERBUFFER_OES,
-                                     GL_RENDERBUFFER_HEIGHT_OES,
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+                                     GL_RENDERBUFFER_HEIGHT,
                                      &fbHeight);
 
-    glFramebufferRenderbufferOES(GL_FRAMEBUFFER_OES,
-                                 GL_COLOR_ATTACHMENT0_OES,
-                                 GL_RENDERBUFFER_OES,
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,
+                                 GL_COLOR_ATTACHMENT0,
+                                 GL_RENDERBUFFER,
                                  renderbuffer);
 }
 
 void platformSwapBuffers(void) {
-    //static float color = 1.0f;
-    //color -= 0.01f;
-    //if (color < 0.0f)
-    //    color = 1.0f;
-    //glClearColor(color, color, color, 1.0f);
-    //glClear(GL_COLOR_BUFFER_BIT);
-    [glcontext presentRenderbuffer:GL_RENDERBUFFER_OES];
-    glBindFramebufferOES(GL_FRAMEBUFFER_OES, framebuffer);
+    static float color = 1.0f;
+    color -= 0.01f;
+    if (color < 0.0f)
+        color = 1.0f;
+    glClearColor(color, color, color, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    [glcontext presentRenderbuffer:GL_RENDERBUFFER];
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 }
 
 void *platformGetProcAddress(const char *name) {
