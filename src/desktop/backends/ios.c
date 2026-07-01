@@ -115,15 +115,7 @@ void platformInitFunctions(Runner *runner) {
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
 
-    // IMPORTANT: presentRenderbuffer: presents whatever is bound to
-    // GL_RENDERBUFFER at call time, not a framebuffer attachment.
-    // Leave the *color* renderbuffer bound, not the depth one.
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        fprintf(stderr, "iOS framebuffer incomplete: 0x%x\n", status);
-    }
 
     ((GLRenderer *)runner->renderer)->hostFramebuffer = framebuffer;
 }
