@@ -53,13 +53,15 @@
 #include "profiler.h"
 #include "gettime.h"
 
-/* For SDL_main */
+/* For main function overrides */
 #if defined(USE_SDL1)
 #include <SDL/SDL_main.h>
 #elif defined(USE_SDL2)
 #include <SDL2/SDL_main.h>
 #elif defined(USE_SDL3)
 #include <SDL3/SDL_main.h>
+#elif defined(USE_IOS)
+#define main game_main
 #endif
 
 enum GraphicsAPI gfx;
@@ -1281,8 +1283,8 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER) )
-#if defined(USE_GLFW3) || defined(USE_GLFW2)
+#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)) && defined(ENABLE_SW_RENDERER) )
+#if defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)
             if (gfx == LEGACY_GL || gfx == MODERN_GL || gfx == SOFTWARE) {
 #else
             if (gfx == LEGACY_GL || gfx == MODERN_GL) {
