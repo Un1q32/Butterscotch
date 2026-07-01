@@ -216,6 +216,8 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
     }
 
     if (![EAGLContext setCurrentContext:glcontext]) {
+        [glcontext release];
+        glcontext = nil;
         fprintf(stderr, "Failed to set the OpenGLES context\n");
         return false;
     }
@@ -228,6 +230,8 @@ void platformExit(void) {
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
     [glcontext release];
+    framebuffer = 0;
+    renderbuffer = 0;
     glInited = false;
 }
 
@@ -609,6 +613,7 @@ extern int game_main(int argc, char *argv[]);
         UIViewController *vc = [[BSViewController alloc] init];
         vc.view = rootView;
         [window performSelector:@selector(setRootViewController:) withObject:vc];
+        [vc release];
     } else {
         [window addSubview:view];
         [window addSubview:overlay];
