@@ -192,9 +192,8 @@ extern int game_main(int argc, char *argv[]);
 
     static char arg0[] = "butterscotch";
     static char arg1[] = "/var/mobile/Documents/Butterscotch/undertale/data.win";
-    static char arg2[] = "--renderer=software";
-    char *argv[] = { arg0, arg1, arg2, NULL };
-    game_main(3, argv);
+    char *argv[] = { arg0, arg1, NULL };
+    game_main(2, argv);
 
     [pool release];
 }
