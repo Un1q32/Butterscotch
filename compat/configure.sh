@@ -115,7 +115,6 @@ elif $CC tmp/test.c -o tmp/a.out >> tmp/config.log 2>&1; then
     config 'CFLAGS := -O2 -DNDEBUG'
     config 'INCLUDE := -I'
     config 'DEFINE := -D'
-    [ "$OS" = 'iOS' ] && config "_CC := \$(CC) -ObjC"
 else
     printred 'unknown'
     printf 'unable to find a working compiler syntax, this is probably because your compiler is broken.\n'
@@ -136,7 +135,20 @@ else
 fi
 
 configlog 'checking the target OS'
-if checkdefine '_WIN32' > /dev/null; then
+
+printf '%s' "\
+#include <TargetConditionals.h>
+#if !TARGET_OS_IPHONE
+#error not iOS
+#endif
+int main(void){return 0;}
+" > tmp/test.c
+
+if check 'if we are targetting iOS' > /dev/null; then
+    printgreen 'ios'
+    config 'OS := iOS'
+    config "_CC := \$(CC) -ObjC"
+elif checkdefine '_WIN32' > /dev/null; then
     printgreen 'windows'
     config 'OS := Windows'
 elif checkdefine '__APPLE__' > /dev/null; then

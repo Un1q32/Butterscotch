@@ -216,7 +216,7 @@ all: build/butterscotch
 ifeq ($(filter clean distclean,$(MAKECMDGOALS)),)
 
 compat/config.mk: compat/configure.sh compat/tmp/cc
-	@CC="$(CC)" OS="$(OS)" $(SHELL) compat/configure.sh
+	@CC="$(CC)" $(SHELL) compat/configure.sh
 
 endif
 
