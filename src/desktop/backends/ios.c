@@ -228,6 +228,7 @@ extern int game_main(int argc, char *argv[]);
 int main(int argc, char *argv[]) {
     freopen("/tmp/bsout", "w", stderr);
     freopen("/tmp/bsout", "w", stdout);
+    setbuf(stderr, NULL);
     setbuf(stdout, NULL);
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
