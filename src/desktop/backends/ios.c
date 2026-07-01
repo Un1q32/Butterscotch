@@ -172,6 +172,7 @@ void platformSleepUntil(uint64_t time) {
     if ((self = [super initWithFrame:frame])) {
         layer = (CAEAGLLayer *)self.layer;
         layer.opaque = YES;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
         UIScreen *screen = [UIScreen mainScreen];
         CGFloat scale = 1.0f; /* pre-iOS 4: no retina, 1x is correct */
@@ -194,6 +195,25 @@ void platformSleepUntil(uint64_t time) {
 
 - (void)dealloc {
     [super dealloc];
+}
+
+@end
+
+/*
+ * Binaries linked against pre-iOS-6 SDKs get rotation handled via the legacy
+ * shouldAutorotateToInterfaceOrientation: API, even when running on newer
+ * OS versions. Plain UIViewController's default implementation only allows
+ * UIInterfaceOrientationPortrait, which silently blocks all rotation unless
+ * overridden here.
+ */
+@interface BSViewController : UIViewController
+@end
+
+@implementation BSViewController
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
+    (void)interfaceOrientation;
+    return YES;
 }
 
 @end
@@ -226,7 +246,7 @@ extern int game_main(int argc, char *argv[]);
     view = [[GLView alloc] initWithFrame:bounds];
 
     if ([window respondsToSelector:@selector(setRootViewController:)]) {
-        UIViewController *vc = [[UIViewController alloc] init];
+        UIViewController *vc = [[BSViewController alloc] init];
         vc.view = view;
         [window performSelector:@selector(setRootViewController:) withObject:vc];
     } else {
