@@ -172,7 +172,17 @@ void platformSleepUntil(uint64_t time) {
     if ((self = [super initWithFrame:frame])) {
         layer = (CAEAGLLayer *)self.layer;
         layer.opaque = YES;
-        layer.contentsScale = [UIScreen mainScreen].scale;
+
+        UIScreen *screen = [UIScreen mainScreen];
+        CGFloat scale = 1.0f; /* pre-iOS 4: no retina, 1x is correct */
+        if ([screen respondsToSelector:@selector(scale)]) {
+            CGFloat (*getScale)(id, SEL) = (CGFloat (*)(id, SEL))objc_msgSend;
+            scale = getScale(screen, @selector(scale));
+        }
+        if ([layer respondsToSelector:@selector(setContentsScale:)]) {
+            void (*setScale)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
+            setScale(layer, @selector(setContentsScale:), scale);
+        }
     }
     return self;
 }
