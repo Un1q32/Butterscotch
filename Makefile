@@ -43,8 +43,14 @@ INCLUDES += $(INCLUDE). \
 HEADERS += $(wildcard src/*.h) $(shell find vendor -name '*.h')
 SRCS += $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
+ifeq ($(OS),iOS)
+DESKTOP_BACKEND := ios
+AUDIO_BACKEND := openal
+DISABLE_LEGACY_GL := 1
+else
 DESKTOP_BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
+endif
 
 ifdef BUTTERSCOTCH_COMMIT_DATE
 DEFINES += $(DEFINE)BUTTERSCOTCH_COMMIT_DATE=\"$(BUTTERSCOTCH_COMMIT_DATE)\"
@@ -102,7 +108,10 @@ SDL3_LIBS += $(shell $(PKG_CONFIG) $(PKG_CONFIG_FLAGS) --libs sdl3)
 LIBS += $(SDL3_LIBS)
 DEFINES += $(DEFINE)USE_SDL3
 endif
-
+ifeq ($(DESKTOP_BACKEND),ios)
+LIBS += -framework Foundation -framework UIKit -framework OpenGLES -framework QuartzCore
+DEFINES += -DUSE_IOS
+endif
 
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
 ifndef DISABLE_LEGACY_GL
@@ -160,7 +169,7 @@ INCLUDES += $(INCLUDE)src/audio/openal
 DEFINES += $(DEFINE)USE_OPENAL
 SRCS += $(wildcard src/audio/openal/*.c)
 HEADERS += $(wildcard src/audio/openal/*.h)
-ifeq ($(OS),Darwin)
+ifneq ($(filter Darwin iOS,$(OS)),) # OS is 'Darwin' or 'iOS'
 LIBS += -framework OpenAL
 else
 LIBS += -lopenal
@@ -182,7 +191,7 @@ DEFINES += $(DEFINE)_CRT_SECURE_NO_WARNINGS $(DEFINE)_CRT_SECURE_NO_DEPRECATE
 endif
 DEFINES += $(DEFINE)WIN32_LEAN_AND_MEAN
 else
-ifeq ($(OS),Darwin)
+ifneq ($(filter Darwin iOS,$(OS)),) # OS is 'Darwin' or 'iOS'
 LIBS += -lobjc
 else
 LIBS += -lm
