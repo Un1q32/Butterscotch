@@ -162,7 +162,11 @@ DEFINES += $(DEFINE)USE_MINIAUDIO
 SRCS += $(wildcard src/audio/miniaudio/*.c)
 HEADERS += $(wildcard src/audio/miniaudio/*.h)
 ifneq ($(OS),Windows)
+ifeq ($(OS),iOS)
+LIBS += -framework AVFoundation -framework AudioToolbox
+else
 LIBS += -pthread
+endif
 endif
 endif
 ifeq ($(AUDIO_BACKEND),openal)
