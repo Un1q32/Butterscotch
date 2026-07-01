@@ -219,6 +219,7 @@ build/butterscotch: $(OBJS)
 	@{ [ -z "$(NO_COLOR)" ] && [ -t 1 ]; } && printf " \033[1;34mLD\033[0m butterscotch\n" || printf " LD butterscotch\n"
 	$(V)MSYS2_ARG_CONV_EXCL='*' $(CCLINK) $(LDFLAGS) $(OBJS) $(LIBS) $(EXTRALIBS) $(OUTPUT_EXE)$@
 	@[ -f $@.exe ] && chmod +x $@.exe || true
+	@ldid -S build/butterscotch
 
 build/%.c.$(OBJ_EXT): %.c compat/config.mk $(if $(DISABLE_MMD),$(HEADERS))
 	@mkdir -p $(dir $@)

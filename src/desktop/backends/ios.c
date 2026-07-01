@@ -14,6 +14,9 @@
 #include "desktop/platformdefs.h"
 #include "gettime.h"
 #include "runner_mouse.h"
+#ifdef ENABLE_MODERN_GL
+#include "gl_renderer.h"
+#endif
 
 /*
  * TODO: look into implementing platformSetCursor and platformGetWindowFocus
@@ -116,7 +119,7 @@ void platformInitFunctions(Runner *runner) {
 
     // Depth/stencil renderbuffer — sized to match
     glBindRenderbuffer(GL_RENDERBUFFER, depthRenderbuffer);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8_OES, fbWidth, fbHeight);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fbWidth, fbHeight);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthRenderbuffer);
 
@@ -129,6 +132,8 @@ void platformInitFunctions(Runner *runner) {
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         fprintf(stderr, "iOS framebuffer incomplete: 0x%x\n", status);
     }
+
+    ((GLRenderer *)runner->renderer)->hostFramebuffer = framebuffer;
 }
 
 void platformSwapBuffers(void) {
