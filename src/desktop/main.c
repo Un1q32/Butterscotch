@@ -849,7 +849,7 @@ static void dumpAllSurfaces(GLRenderer* gl, const char* filenamePattern, int fra
         writeFramebufferAsPng(gl->surfaces[surfaceId], width, height, filename, "Surface dump", false, false);
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 }
 #endif
 
@@ -1648,7 +1648,7 @@ int main(int argc, char* argv[]) {
 #endif
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL)
                 if (gfx == LEGACY_GL || gfx == MODERN_GL) {
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
                     glClear(GL_COLOR_BUFFER_BIT);
                 }
 #endif
@@ -1720,7 +1720,7 @@ int main(int argc, char* argv[]) {
 
                 if (shouldScreenshot || RunnerKeyboard_checkPressed(runner->keyboard, VK_F5)) {
                     captureScreenshot(0, args.screenshotPattern, runner->frameCount, fbWidth, fbHeight, true);
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
                 }
 
                 // Dump all surfaces if this frame matches a requested frame
@@ -1729,7 +1729,7 @@ int main(int argc, char* argv[]) {
                 if (shouldDumpSurfaces || RunnerKeyboard_checkPressed(runner->keyboard, VK_F6)) {
                     GLRenderer* gl = (GLRenderer*) renderer;
                     dumpAllSurfaces(gl, args.screenshotSurfacesPattern, runner->frameCount);
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
                 }
 #endif
 

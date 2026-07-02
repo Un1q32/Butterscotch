@@ -58,4 +58,11 @@ static const struct {
 #endif
 };
 
+#ifdef USE_IOS
+#include <glad/glad.h>
+extern GLuint framebuffer;
+#else
+#define framebuffer 0
+#endif
+
 #endif /* _BS_PLATFORMDEFS_H_ */

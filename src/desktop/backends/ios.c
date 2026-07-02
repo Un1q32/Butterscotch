@@ -34,8 +34,8 @@ static atomic_bool quitRequested = false;
 
 static Runner *g_runner;
 
+GLuint framebuffer;
 static EAGLContext *glcontext;
-static GLuint framebuffer;
 static GLuint renderbuffer;
 static bool glInited = false;
 static GLint fbWidth  = 0;
