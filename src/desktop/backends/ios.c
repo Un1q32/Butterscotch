@@ -651,8 +651,8 @@ extern int game_main(int argc, char *argv[]);
 @end
 
 int main(int argc, char *argv[]) {
-    freopen("/tmp/bsout", "w", stderr);
     freopen("/tmp/bsout", "w", stdout);
+    dup2(fileno(stdout), fileno(stderr));
     setbuf(stderr, NULL);
     setbuf(stdout, NULL);
 
