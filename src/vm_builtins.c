@@ -4190,7 +4190,14 @@ static RValue builtin_ds_map_create(VMContext* ctx, MAYBE_UNUSED RValue* args, M
     return RValue_makeReal((GMLReal) dsMapCreate(runner));
 }
 
-static RValue builtin_ds_map_add(VMContext* ctx, RValue* args, int32_t argCount) {
+static RValue makeMapListContainer(VMContext* ctx, int32_t id, int32_t type) {
+    Instance* container = Runner_createStruct(ctx->runner);
+    VM_structSetAndFreeVal(ctx, container, "ObjType", RValue_makeInt32(type), -1);
+    VM_structSetAndFreeVal(ctx, container, "Object", RValue_makeInt32(id), -1);
+    return RValue_makeStructAndIncRef(container);
+}
+
+static RValue dsMapAddCommon(VMContext* ctx, RValue* args, int32_t argCount, bool wrapAsContainer, int32_t containerType) {
     if (3 > argCount) return RValue_makeUndefined();
     Runner* runner = ctx->runner;
     int32_t id = RValue_toInt32(args[0]);
@@ -4199,16 +4206,80 @@ static RValue builtin_ds_map_add(VMContext* ctx, RValue* args, int32_t argCount)
 
     char* key = RValue_toString(args[1]);
 
-    // Only add if key doesn't exist
-    bool exists = shgeti(*mapPtr, key) != -1;
-
-    if (exists) {
-        free(key); // Key already exists, we didn't insert it
+    RValue valueToStore;
+    if (wrapAsContainer) {
+        // Wrap the value (ds_map or ds_list ID) in a container struct
+        int32_t containedId = RValue_toInt32(args[2]);
+        valueToStore = makeMapListContainer(ctx, containedId, containerType);
     } else {
-        shput(*mapPtr, key, RValue_makeIndependent(args[2]));
+        // Store the value directly
+        valueToStore = RValue_makeIndependent(args[2]);
+    }
+
+    // Check if key exists
+    ptrdiff_t existingIdx = shgeti(*mapPtr, key);
+    if (existingIdx != -1) {
+        // Key already exists - replace the value
+        RValue_free(&(*mapPtr)[existingIdx].value);
+        (*mapPtr)[existingIdx].value = valueToStore;
+        free(key); // The key is already stored in the map
+    } else {
+        shput(*mapPtr, key, valueToStore);
     }
 
     return RValue_makeUndefined();
+}
+
+static RValue builtin_ds_map_add(VMContext* ctx, RValue* args, int32_t argCount) {
+    return dsMapAddCommon(ctx, args, argCount, false, 0);
+}
+
+static RValue builtin_ds_map_add_map(VMContext* ctx, RValue* args, int32_t argCount) {
+    return dsMapAddCommon(ctx, args, argCount, true, DS_TYPE_MAP);
+}
+
+static RValue builtin_ds_map_add_list(VMContext* ctx, RValue* args, int32_t argCount) {
+    return dsMapAddCommon(ctx, args, argCount, true, DS_TYPE_LIST);
+}
+
+static RValue builtin_ds_map_is_map(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeBool(false);
+    Runner* runner = ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    DsMapEntry** mapPtr = dsMapGet(runner, id);
+    if (mapPtr == nullptr) return RValue_makeBool(false);
+
+    ptrdiff_t idx = getValueIndexInMap(mapPtr, args[1]);
+    if (0 > idx) return RValue_makeBool(false);
+
+    RValue val = (*mapPtr)[idx].value;
+    if (val.type == RVALUE_STRUCT && val.structInst != nullptr) {
+        RValue objType = VM_structGetVariableByVarName(ctx, val.structInst, "ObjType", -1);
+        if (objType.type != RVALUE_UNDEFINED) {
+            return RValue_makeBool(RValue_toInt32(objType) == DS_TYPE_MAP);
+        }
+    }
+    return RValue_makeBool(false);
+}
+
+static RValue builtin_ds_map_is_list(VMContext* ctx, RValue* args, int32_t argCount) {
+    if (2 > argCount) return RValue_makeBool(false);
+    Runner* runner = ctx->runner;
+    int32_t id = RValue_toInt32(args[0]);
+    DsMapEntry** mapPtr = dsMapGet(runner, id);
+    if (mapPtr == nullptr) return RValue_makeBool(false);
+
+    ptrdiff_t idx = getValueIndexInMap(mapPtr, args[1]);
+    if (0 > idx) return RValue_makeBool(false);
+
+    RValue val = (*mapPtr)[idx].value;
+    if (val.type == RVALUE_STRUCT && val.structInst != nullptr) {
+        RValue objType = VM_structGetVariableByVarName(ctx, val.structInst, "ObjType", -1);
+        if (objType.type != RVALUE_UNDEFINED) {
+            return RValue_makeBool(RValue_toInt32(objType) == DS_TYPE_LIST);
+        }
+    }
+    return RValue_makeBool(false);
 }
 
 static RValue builtin_ds_map_clear(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -4302,6 +4373,17 @@ static RValue builtin_ds_map_find_value(VMContext* ctx, RValue* args, int32_t ar
 
     if (0 > idx) return RValue_makeUndefined();
     RValue val = (*mapPtr)[idx].value;
+
+    if (val.type == RVALUE_STRUCT && val.structInst != nullptr) {
+        RValue objectVal = VM_structGetVariableByVarName(ctx, val.structInst, "Object", -1);
+        if (objectVal.type != RVALUE_UNDEFINED) {
+            RValue result = RValue_makeIndependent(objectVal);
+            RValue_free(&objectVal);
+            return result;
+        }
+        RValue_free(&objectVal);
+    }
+
     if (val.type == RVALUE_STRING && val.string != nullptr) {
         return RValue_makeOwnedString(safeStrdup(val.string));
     }
@@ -9099,36 +9181,6 @@ static RValue builtin_buffer_async_group_end(MAYBE_UNUSED VMContext* ctx, MAYBE_
     return RValue_makeReal((GMLReal) requestId);
 }
 
-// filename_change_ext(fname, newext): changes the extension of fname to newext
-// (see GameMaker-HTML5 Function_File.js for reference)
-static RValue builtin_filename_change_ext(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
-    if (2 > argCount) return RValue_makeUndefined();
-
-    char* fname = RValue_toString(args[0]);
-    char* newext = RValue_toString(args[1]); // includes the ., example: ".gmk"
-
-    char *last = strrchr(fname, '.');
-
-    if (last != nullptr && last != 0) {
-        long index = last - fname;
-        char* new_name = (char *)safeMalloc(index + strlen(newext) + 1);
-        memcpy(new_name, fname, (size_t) index);
-        memcpy(new_name + index, newext, (size_t) strlen(newext));
-        new_name[index + strlen(newext)] = '\0';
-        RValue result = RValue_makeOwnedString(new_name);
-
-        free(fname);
-        free(newext);
-
-        return result;
-    }
-
-    free(newext);
-
-    // If there isn't a dot, we return the original string as is
-    return RValue_makeOwnedString(fname);
-}
-
 static RValue builtin_buffer_base64_encode(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     Runner* runner = ctx->runner;
     if (3 > argCount) return RValue_makeOwnedString(safeStrdup(""));
@@ -9298,6 +9350,60 @@ static RValue builtin_md5_file(MAYBE_UNUSED VMContext* ctx, RValue* args, MAYBE_
     MD5Final(digest, &sctx);
 
     return RValue_makeOwnedString(convertToHexString(digest, 16));
+}
+
+// filename_change_ext(fname, newext): changes the extension of fname to newext
+// (see GameMaker-HTML5 Function_File.js for reference)
+static RValue builtin_filename_change_ext(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    if (2 > argCount) return RValue_makeUndefined();
+
+    char* fname = RValue_toString(args[0]);
+    char* newext = RValue_toString(args[1]); // includes the ., example: ".gmk"
+
+    char *last = strrchr(fname, '.');
+
+    if (last != nullptr && last != 0) {
+        long index = last - fname;
+        char* new_name = safeMalloc(index + strlen(newext) + 1);
+        memcpy(new_name, fname, (size_t) index);
+        memcpy(new_name + index, newext, (size_t) strlen(newext));
+        new_name[index + strlen(newext)] = '\0';
+        RValue result = RValue_makeOwnedString(new_name);
+
+        free(fname);
+        free(newext);
+
+        return result;
+    }
+
+    free(newext);
+
+    // If there isn't a dot, we return the original string as is
+    return RValue_makeOwnedString(fname);
+}
+
+// filename_name(fname): returns the name part of the indicated file, with the extension but without the path
+// (see GameMaker-HTML5 Function_File.js for reference)
+static RValue builtin_filename_name(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    if (1 > argCount) return RValue_makeOwnedString(safeStrdup(""));
+
+    char* fname = RValue_toString(args[0]);
+    if (fname == nullptr) return RValue_makeOwnedString(safeStrdup(""));
+
+    char* lastBackslash = strrchr(fname, '\\');
+    char* lastSlash = strrchr(fname, '/');
+    char* last = lastBackslash > lastSlash ? lastBackslash : lastSlash;
+
+    char* result;
+    if (last != nullptr) {
+        result = safeStrdup(last + 1);
+    } else {
+        result = fname;
+        fname = nullptr;
+    }
+
+    free(fname);
+    return RValue_makeOwnedString(result);
 }
 
 // buffer_get_surface(buffer, surface, offset) -> bool
@@ -14733,7 +14839,60 @@ static RValue builtin_json_encode(VMContext* ctx, RValue* args, int32_t argCount
     return RValue_makeOwnedString(result);
 }
 
-// json_decode
+// Recursively decode a JSON value into a GML value
+static RValue jsonDecodeValue(VMContext* ctx, JsonValue* json) {
+    if (json == nullptr) return RValue_makeUndefined();
+
+    switch (json->type) {
+        case JSON_NULL:
+            return RValue_makeUndefined();
+        case JSON_BOOL:
+            return RValue_makeBool(json->boolValue);
+        case JSON_NUMBER:
+            return RValue_makeReal((GMLReal)json->numberValue);
+        case JSON_STRING:
+            return RValue_makeOwnedString(safeStrdup(json->stringValue ? json->stringValue : ""));
+        case JSON_ARRAY: {
+            // For arrays, create a ds_list (matches HTML5 - _json_decode_array)
+            int32_t listId = dsListCreate(ctx->runner);
+            int len = JsonReader_arrayLength(json);
+            for (int i = 0; i < len; i++) {
+                JsonValue* item = JsonReader_getArrayElement(json, i);
+                RValue val = jsonDecodeValue(ctx, item);
+                DsList* list = dsListGet(ctx->runner, listId);
+                if (list != NULL) {
+                    arrput(list->items, val);
+                } else {
+                    RValue_free(&val);
+                }
+            }
+            return RValue_makeReal((GMLReal)listId);
+        }
+        case JSON_OBJECT: {
+            // For arrays, create a ds_map (matches HTML5 - _json_decode_object)
+            int32_t mapId = dsMapCreate(ctx->runner);
+            int len = JsonReader_objectLength(json);
+            for (int i = 0; i < len; i++) {
+                const char* key = JsonReader_getJsonKeyByIndex(json, i);
+                JsonValue* valJson = JsonReader_getJsonValueByIndex(json, i);
+                RValue val = jsonDecodeValue(ctx, valJson);
+                DsMapEntry** mapPtr = dsMapGet(ctx->runner, mapId);
+                if (mapPtr != nullptr) {
+                    char* keyCopy = safeStrdup(key);
+                    RValue storedVal = RValue_makeIndependent(val);
+                    RValue_free(&val);
+                    shput(*mapPtr, keyCopy, storedVal);
+                } else {
+                    RValue_free(&val);
+                }
+            }
+            return RValue_makeReal((GMLReal)mapId);
+        }
+        default:
+            return RValue_makeUndefined();
+    }
+}
+
 static RValue builtin_json_decode(VMContext* ctx, RValue* args, int32_t argCount) {
     if (1 > argCount) {
         fprintf(stderr, "[json_decode] Expected at least 1 argument\n");
@@ -14741,24 +14900,30 @@ static RValue builtin_json_decode(VMContext* ctx, RValue* args, int32_t argCount
     }
 
     Runner* runner = ctx->runner;
-    int32_t mapIndex = dsMapCreate(runner);
-    DsMapEntry **mapPtr = dsMapGet(runner, mapIndex);
     const char* content = args[0].string;
-    JsonValue* json = JsonReader_parse(content);
-    // While the docs say "An invalid DS Map handle (-1) is returned in case the JSON could not be decoded.", when looking at the GameMaker-HTML5 source code it actually wraps in a "default" block when it fails to be parsed
-    if (json == nullptr) {
-        shput(*mapPtr, "default", RValue_makeIndependent(args[0]));
-    } else {
-        repeat(JsonReader_objectLength(json), i) {
-            const char *key = safeStrdup(JsonReader_getJsonKeyByIndex(json, i));
-            RValue val = RValue_makeOwnedString(safeStrdup(JsonReader_getString(JsonReader_getJsonValueByIndex(json, i))));
-            shput(*mapPtr, key, val);
-        }
 
-        JsonReader_free(json);
+    JsonValue* json = JsonReader_parse(content);
+    // While the docs say "An invalid ds_map handle (-1) is returned in case the JSON could not be decoded",
+    // when looking at the GameMaker-HTML5 source code it actually wraps in a "default" block when it fails to be parsed
+    if (json == nullptr) {
+        int32_t mapIndex = dsMapCreate(runner);
+        DsMapEntry** mapPtr = dsMapGet(runner, mapIndex);
+        if (mapPtr != nullptr) {
+            shput(*mapPtr, safeStrdup("default"), RValue_makeIndependent(args[0]));
+        }
+        return RValue_makeReal((GMLReal)mapIndex);
     }
 
-    return RValue_makeReal(mapIndex);
+    // Recursively decode the JSON
+    RValue result = jsonDecodeValue(ctx, json);
+    JsonReader_free(json);
+
+    // result should be a ds_map ID (from the top-level object)
+    if (result.type == RVALUE_REAL || result.type == RVALUE_INT32) {
+        return result;
+    }
+
+    return RValue_makeReal((GMLReal)dsMapCreate(runner));
 }
 
 static RValue builtin_object_exists(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -15782,6 +15947,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "ds_map_create", builtin_ds_map_create);
     VM_registerBuiltin(ctx, "ds_map_delete", builtin_ds_map_delete);
     VM_registerBuiltin(ctx, "ds_map_add", builtin_ds_map_add);
+    VM_registerBuiltin(ctx, "ds_map_add_map", builtin_ds_map_add_map);
+    VM_registerBuiltin(ctx, "ds_map_add_list", builtin_ds_map_add_list);
+    VM_registerBuiltin(ctx, "ds_map_is_map", builtin_ds_map_is_map);
+    VM_registerBuiltin(ctx, "ds_map_is_list", builtin_ds_map_is_list);
     VM_registerBuiltin(ctx, "ds_map_clear", builtin_ds_map_clear);
     VM_registerBuiltin(ctx, "ds_map_set", builtin_ds_map_set);
     VM_registerBuiltin(ctx, "ds_map_set_pre", builtin_ds_map_set_pre);
@@ -16118,7 +16287,6 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "buffer_save_async", builtin_buffer_save_async);
     VM_registerBuiltin(ctx, "buffer_async_group_begin", builtin_buffer_async_group_begin);
     VM_registerBuiltin(ctx, "buffer_async_group_end", builtin_buffer_async_group_end);
-    VM_registerBuiltin(ctx, "filename_change_ext", builtin_filename_change_ext);
     VM_registerBuiltin(ctx, "buffer_base64_encode", builtin_buffer_base64_encode);
     VM_registerBuiltin(ctx, "buffer_base64_decode", builtin_buffer_base64_decode);
     VM_registerBuiltin(ctx, "base64_encode", builtin_base64_encode);
@@ -16128,6 +16296,10 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "buffer_get_surface", builtin_buffer_get_surface);
     VM_registerBuiltin(ctx, "sha1_file", builtin_sha1_file);
     VM_registerBuiltin(ctx, "md5_file", builtin_md5_file);
+
+    // Filename
+    VM_registerBuiltin(ctx, "filename_change_ext", builtin_filename_change_ext);
+    VM_registerBuiltin(ctx, "filename_name", builtin_filename_name);
 
     // PSN
     VM_registerBuiltin(ctx, "psn_init", builtin_psn_init);
