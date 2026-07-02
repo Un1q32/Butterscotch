@@ -1,7 +1,9 @@
 #include <stdatomic.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <limits.h>
 #include "math_compat.h"
 
 #include <UIKit/UIKit.h>
@@ -52,6 +54,12 @@ static float g_aspectRatio = 1.0f;
  * first rotation to happen to trigger one. */
 static UIView *g_glView = nil;
 static UIView *g_overlayView = nil;
+
+/* Path to the selected game's data.win, filled in by the game list
+ * controller before the game thread is started. */
+static char g_gamePath[PATH_MAX];
+
+#define BS_GAMES_ROOT_PATH @"/var/mobile/Documents/Butterscotch"
 
 static void bsRequestRelayout(void) {
     if (g_glView) {
@@ -230,6 +238,7 @@ void platformExit(void) {
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
     [glcontext release];
+    glcontext = nil;
     framebuffer = 0;
     renderbuffer = 0;
     glInited = false;
@@ -584,6 +593,93 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 @end
 
+/* ---------------------------------------------------------------------
+ * Game selection menu. Scans BS_GAMES_ROOT_PATH for subfolders that
+ * contain a data.win, and lets the user pick one. Re-scans every time
+ * the view (re)appears so games dropped in via file transfer while the
+ * app is running (or after returning from a game) show up.
+ * ------------------------------------------------------------------- */
+
+@interface BSGameListViewController : UITableViewController {
+    NSMutableArray *games;
+}
+- (void)reloadGames;
+@end
+
+@implementation BSGameListViewController
+
+- (id)init {
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 30000
+    if ((self = [super initWithStyle:UITableViewStylePlain])) {
+#else
+    if ((self = [super init])) {
+#endif
+        games = [[NSMutableArray alloc] init];
+        self.title = @"Butterscotch";
+        [self reloadGames];
+    }
+    return self;
+}
+
+- (void)reloadGames {
+    [games removeAllObjects];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:NULL];
+    for (NSString *name in entries) {
+        NSString *dir = [BS_GAMES_ROOT_PATH stringByAppendingPathComponent:name];
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
+
+        NSString *dataWin = [dir stringByAppendingPathComponent:@"data.win"];
+        if ([fm fileExistsAtPath:dataWin]) [games addObject:name];
+    }
+
+    [self.tableView reloadData];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reloadGames];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section;
+    return [games count];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *reuseId = @"BSGameCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
+    if (!cell) {
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 30000
+        cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:reuseId] autorelease];
+#else
+        cell = [[[UITableViewCell alloc] initWithFrame:CGRectZero reuseIdentifier:reuseId] autorelease];
+#endif
+    }
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 30000
+    cell.textLabel.text = [games objectAtIndex:indexPath.row];
+#else
+    cell.text = [games objectAtIndex:indexPath.row];
+#endif
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSString *folder = [games objectAtIndex:indexPath.row];
+    id delegate = [[UIApplication sharedApplication] delegate];
+    [delegate performSelector:@selector(startGameWithFolder:) withObject:folder];
+}
+
+- (void)dealloc {
+    [games release];
+    [super dealloc];
+}
+
+@end
+
 extern int game_main(int argc, char *argv[]);
 
 @interface AppDelegate : NSObject <UIApplicationDelegate> {
@@ -591,51 +687,96 @@ extern int game_main(int argc, char *argv[]);
     GLView *view;
     BSTouchOverlay *overlay;
     UIView *rootView;
+    BSGameListViewController *gameListVC;
+    BOOL usingRootViewController;
 }
+- (void)startGameWithFolder:(NSString *)folderName;
+- (void)returnToMenu;
 @end
 
 @implementation AppDelegate
 
-- (void)game {
+- (void)gameThread {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
     static char arg0[] = "butterscotch";
-    static char arg1[] = "/var/mobile/Documents/Butterscotch/undertale/data.win";
-    char *argv[] = { arg0, arg1, NULL };
-    exit(game_main(2, argv));
+    char *argv[] = { arg0, g_gamePath, NULL };
+    game_main(2, argv);
+
+    [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
     [pool release];
+}
+
+- (void)startGameWithFolder:(NSString *)folderName {
+    NSString *dataWin = [[BS_GAMES_ROOT_PATH stringByAppendingPathComponent:folderName]
+                          stringByAppendingPathComponent:@"data.win"];
+    strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
+
+    atomic_store(&quitRequested, false);
+
+    CGRect bounds = [[UIScreen mainScreen] bounds];
+    BSLayout bsLayout = computeLayout(bounds.size);
+
+    view = [[GLView alloc] initWithFrame:bsLayout.gameFrame];
+    overlay = [[BSTouchOverlay alloc] initWithFrame:bounds];
+    g_glView = view;
+    g_overlayView = overlay;
+
+    rootView = [[UIView alloc] initWithFrame:bounds];
+    rootView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [rootView addSubview:view];
+    [rootView addSubview:overlay]; /* on top, so controls are visible over the game */
+
+    if (usingRootViewController) {
+        UIViewController *vc = [[BSViewController alloc] init];
+        vc.view = rootView;
+        [window performSelector:@selector(setRootViewController:) withObject:vc];
+        [vc release];
+    } else {
+        NSArray *subs = [[window.subviews copy] autorelease];
+        for (UIView *sub in subs) [sub removeFromSuperview];
+        [window addSubview:rootView];
+    }
+
+    [NSThread detachNewThreadSelector:@selector(gameThread) toTarget:self withObject:nil];
+}
+
+- (void)returnToMenu {
+    g_glView = nil;
+    g_overlayView = nil;
+
+    if (usingRootViewController) {
+        [window performSelector:@selector(setRootViewController:) withObject:gameListVC];
+    } else {
+        NSArray *subs = [[window.subviews copy] autorelease];
+        for (UIView *sub in subs) [sub removeFromSuperview];
+        [window addSubview:gameListVC.view];
+    }
+
+    [overlay release];
+    overlay = nil;
+    [rootView release];
+    rootView = nil;
+    [view release];
+    view = nil;
 }
 
 - (void)applicationDidFinishLaunching:(UIApplication *)application {
     [application setStatusBarHidden:YES];
 
     CGRect bounds = [[UIScreen mainScreen] bounds];
-    BSLayout bsLayout = computeLayout(bounds.size);
-
     window = [[UIWindow alloc] initWithFrame:bounds];
-    view = [[GLView alloc] initWithFrame:bsLayout.gameFrame];
-    overlay = [[BSTouchOverlay alloc] initWithFrame:bounds];
-    g_glView = view;
-    g_overlayView = overlay;
+    usingRootViewController = [window respondsToSelector:@selector(setRootViewController:)];
 
-    if ([window respondsToSelector:@selector(setRootViewController:)]) {
-        rootView = [[UIView alloc] initWithFrame:bounds];
-        rootView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [rootView addSubview:view];
-        [rootView addSubview:overlay]; /* on top, so controls are visible over the game */
+    gameListVC = [[BSGameListViewController alloc] init];
 
-        UIViewController *vc = [[BSViewController alloc] init];
-        vc.view = rootView;
-        [window performSelector:@selector(setRootViewController:) withObject:vc];
-        [vc release];
+    if (usingRootViewController) {
+        [window performSelector:@selector(setRootViewController:) withObject:gameListVC];
     } else {
-        [window addSubview:view];
-        [window addSubview:overlay];
+        [window addSubview:gameListVC.view];
     }
     [window makeKeyAndVisible];
-
-    [NSThread detachNewThreadSelector:@selector(game) toTarget:self withObject:nil];
 }
 
 - (void)dealloc {
@@ -644,6 +785,7 @@ extern int game_main(int argc, char *argv[]);
     [overlay release];
     [rootView release];
     [view release];
+    [gameListVC release];
     [window release];
     [super dealloc];
 }
