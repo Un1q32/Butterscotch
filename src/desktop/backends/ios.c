@@ -701,8 +701,9 @@ extern int game_main(int argc, char *argv[]);
 
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
-    char *argv[] = { arg0, arg1, g_gamePath, NULL };
-    game_main(3, argv);
+    static char arg2[] = "--lazy-rooms";
+    char *argv[] = { arg0, arg1, arg2, g_gamePath, NULL };
+    game_main(4, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
