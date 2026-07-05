@@ -700,8 +700,9 @@ extern int game_main(int argc, char *argv[]);
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
     static char arg0[] = "butterscotch";
-    char *argv[] = { arg0, g_gamePath, NULL };
-    game_main(2, argv);
+    static char arg1[] = "--lazy-textures";
+    char *argv[] = { arg0, arg1, g_gamePath, NULL };
+    game_main(3, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
