@@ -1166,8 +1166,8 @@ extern int game_main(int argc, char *argv[]);
         /* Device rotated so its left edge points "up" corresponds to
          * interface orientation LandscapeRight, i.e. a +90 degree
          * compensating rotation; the other case is the mirror image. */
-        case UIDeviceOrientationLandscapeLeft:       angle = (CGFloat)M_PI_2;  swapped = YES; break;
-        case UIDeviceOrientationLandscapeRight:       angle = -(CGFloat)M_PI_2; swapped = YES; break;
+        case UIDeviceOrientationLandscapeLeft:      angle = (CGFloat)M_PI_2;  swapped = YES; break;
+        case UIDeviceOrientationLandscapeRight:     angle = -(CGFloat)M_PI_2; swapped = YES; break;
         default:
             /* FaceUp / FaceDown / Unknown: not a usable orientation --
              * keep whatever we last applied. */
