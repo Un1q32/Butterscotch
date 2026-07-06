@@ -79,6 +79,12 @@ static char g_gamePath[PATH_MAX];
  * for any reasonable floating-point value typed into the settings field. */
 static char g_ffSpeedArg[64] = "--fast-forward-speed=4";
 
+/* Cached copy of the "high resolution" setting (see BS_HIGH_RES_DEFAULTS_KEY
+ * below), refreshed from NSUserDefaults once per game launch in
+ * startGameWithFolder: rather than read on every applyRenderScale() call --
+ * the setting can only be changed from the menu, never mid-game. */
+static atomic_bool g_highResEnabled = false;
+
 #define BS_GAMES_ROOT_PATH @"/var/mobile/Documents/Butterscotch"
 
 static void bsRequestRelayout(void) {
@@ -227,12 +233,22 @@ bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH) {
  * size can also change independently of this call (rotation), so both
  * paths just flag needsResize and let resizeFramebuffer() re-derive it
  * from whatever's current on the next frame.
+ *
+ * The requested width/height also determine g_aspectRatio, which drives
+ * computeLayout()'s letterboxing -- previously only set once in
+ * platformInit(), so a game changing its resolution mid-run (e.g. a
+ * GameMaker room with a different size) kept the *old* aspect ratio's
+ * gameFrame even though the framebuffer underneath it got resized to
+ * match the new one. Recompute it here too, and force a relayout the
+ * same way platformInit() does for the initial value.
  */
 void platformSetWindowSize(int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return;
 
     g_reqRenderWidth  = width;
     g_reqRenderHeight = height;
+    g_aspectRatio = (float)width / (float)height;
+    bsRequestRelayout();
     atomic_store(&needsResize, true);
 }
 
@@ -310,8 +326,9 @@ static CGFloat nativeScreenScale(void) {
  *     already-underpowered low-res devices can't spare.
  *
  * Recomputed from scratch every call (cheap) rather than cached, since
- * either input -- the requested resolution, or the frame's current point
- * size -- can change independently (platformSetWindowSize vs. rotation).
+ * the inputs -- the requested resolution, the "high resolution" setting,
+ * or the frame's current point size -- can each change independently
+ * (platformSetWindowSize, the settings menu, or rotation respectively).
  */
 static void applyRenderScale(void) {
     if (!layer) return;
@@ -322,9 +339,27 @@ static void applyRenderScale(void) {
     CGFloat nativeScale = nativeScreenScale();
     CGFloat targetScale = nativeScale;
 
-    if (g_reqRenderWidth > 0 && g_reqRenderHeight > 0) {
-        CGFloat sW = (CGFloat)g_reqRenderWidth  / sz.width;
-        CGFloat sH = (CGFloat)g_reqRenderHeight / sz.height;
+    int32_t effReqWidth  = g_reqRenderWidth;
+    int32_t effReqHeight = g_reqRenderHeight;
+
+    /* "High resolution" setting (see BS_HIGH_RES_DEFAULTS_KEY): instead of
+     * clamping down to the game's requested render resolution (e.g.
+     * 640x480), target the full available logical screen size at native
+     * pixel density instead -- most noticeable in landscape, where the
+     * requested resolution would otherwise get scaled down well below
+     * what the device can actually display. g_glView's superview
+     * (rootView) already reflects the current device orientation (see
+     * AppDelegate applyDeviceOrientation:), so its bounds are exactly the
+     * logical on-screen size for however the device is currently held. */
+    if (atomic_load(&g_highResEnabled) && g_glView && g_glView.superview) {
+        CGSize logicalSize = g_glView.superview.bounds.size;
+        effReqWidth  = (int32_t)(logicalSize.width  * nativeScale);
+        effReqHeight = (int32_t)(logicalSize.height * nativeScale);
+    }
+
+    if (effReqWidth > 0 && effReqHeight > 0) {
+        CGFloat sW = (CGFloat)effReqWidth  / sz.width;
+        CGFloat sH = (CGFloat)effReqHeight / sz.height;
         /* Use whichever axis wants the smaller scale, so we never exceed
          * the requested pixel count on either dimension -- then clamp to
          * native so we never exceed the device's real resolution either. */
@@ -728,19 +763,29 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 @end
 
 /* ---------------------------------------------------------------------
- * Settings: currently just the fast-forward speed multiplier, persisted
- * via NSUserDefaults and applied as a --fast-forward-speed=<n> argv entry
- * the next time a game is launched (see AppDelegate startGameWithFolder:).
+ * Settings: the fast-forward speed multiplier and the "high resolution"
+ * toggle, both persisted via NSUserDefaults. The fast-forward speed is
+ * applied as a --fast-forward-speed=<n> argv entry, and the high-res flag
+ * is cached into g_highResEnabled, the next time a game is launched (see
+ * AppDelegate startGameWithFolder:).
  * ------------------------------------------------------------------- */
 
 #define BS_FF_SPEED_DEFAULTS_KEY @"BSFastForwardSpeed"
 #define BS_DEFAULT_FF_SPEED      4.0
+
+#define BS_HIGH_RES_DEFAULTS_KEY @"BSHighResolution"
 
 /* Falls back to the default any time the stored value is missing or
  * non-positive (e.g. first launch, or a corrupted/edited defaults plist). */
 static double bsLoadFastForwardSpeed(void) {
     double v = [[NSUserDefaults standardUserDefaults] doubleForKey:BS_FF_SPEED_DEFAULTS_KEY];
     return (v > 0.0) ? v : BS_DEFAULT_FF_SPEED;
+}
+
+/* boolForKey: returns NO when the key has never been set, so this is off
+ * by default with no separate first-launch handling needed. */
+static bool bsLoadHighResEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:BS_HIGH_RES_DEFAULTS_KEY];
 }
 
 /* Renders a simple gear glyph into a UIImage via Core Graphics, rather than
@@ -786,6 +831,7 @@ static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
 
 @interface BSSettingsViewController : UIViewController <UITextFieldDelegate> {
     UITextField *speedField;
+    UISwitch *highResSwitch;
 }
 @end
 
@@ -824,6 +870,22 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     speedField.text = [NSString stringWithFormat:@"%g", bsLoadFastForwardSpeed()];
     [root addSubview:speedField];
 
+    /* sizeToFit rather than a hardcoded frame, since UISwitch's on-screen
+     * size has drifted slightly across OS versions. */
+    highResSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    [highResSwitch sizeToFit];
+    CGRect swFrame = highResSwitch.frame;
+    swFrame.origin = CGPointMake(bounds.size.width - 20 - swFrame.size.width, 100);
+    highResSwitch.frame = swFrame;
+    highResSwitch.on = bsLoadHighResEnabled();
+    [root addSubview:highResSwitch];
+
+    UILabel *highResLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 100, swFrame.origin.x - 30, swFrame.size.height)] autorelease];
+    highResLabel.text = @"High resolution (landscape):";
+    highResLabel.font = [UIFont systemFontOfSize:15.0f];
+    highResLabel.backgroundColor = [UIColor clearColor];
+    [root addSubview:highResLabel];
+
     self.view = root;
 }
 
@@ -844,10 +906,13 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     double v = [speedField.text doubleValue];
     if (v > 0.0) {
         [[NSUserDefaults standardUserDefaults] setDouble:v forKey:BS_FF_SPEED_DEFAULTS_KEY];
-        [[NSUserDefaults standardUserDefaults] synchronize];
     }
     /* Invalid/non-positive input is silently ignored -- previously saved
      * value (or the default) is left untouched. */
+
+    [[NSUserDefaults standardUserDefaults] setBool:highResSwitch.isOn forKey:BS_HIGH_RES_DEFAULTS_KEY];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
     [[[UIApplication sharedApplication] delegate] performSelector:@selector(settingsDone)];
 }
 
@@ -858,6 +923,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 
 - (void)dealloc {
     [speedField release];
+    [highResSwitch release];
     [super dealloc];
 }
 
@@ -1003,6 +1069,7 @@ extern int game_main(int argc, char *argv[]);
                           stringByAppendingPathComponent:@"data.win"];
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
+    atomic_store(&g_highResEnabled, bsLoadHighResEnabled());
 
     atomic_store(&quitRequested, false);
 
