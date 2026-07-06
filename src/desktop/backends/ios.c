@@ -42,6 +42,14 @@ static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
 
+/* Requested render resolution, as set via platformSetWindowSize() (and
+ * seeded from platformInit()'s reqW/reqH before that's ever called). Used
+ * to pick a CAEAGLLayer contentsScale that renders at roughly this pixel
+ * resolution instead of unconditionally rendering at the device's native
+ * scale -- see applyRenderScale() below. */
+static int32_t g_reqRenderWidth  = 0;
+static int32_t g_reqRenderHeight = 0;
+
 /* w/h of the game's requested resolution. Used only for layout decisions;
  * the renderer itself already letterboxes/pillarboxes to this ratio
  * regardless of the actual framebuffer size we hand it. */
@@ -192,12 +200,21 @@ bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH) {
 }
 
 /*
- * TODO: allow this to resize the render resolution when the target value is
- * lower than the screen resolution, so we can gain some performance on early
- * retina devices by not being forced to always render at full resolution.
+ * Stores the game's requested render resolution; applyRenderScale() (run
+ * from resizeFramebuffer(), triggered here via needsResize) derives the
+ * actual CAEAGLLayer contentsScale from this plus the game view's current
+ * point size -- see applyRenderScale() for the up-vs-down-clamp logic.
+ * We don't recompute the scale directly here because the frame's point
+ * size can also change independently of this call (rotation), so both
+ * paths just flag needsResize and let resizeFramebuffer() re-derive it
+ * from whatever's current on the next frame.
  */
 void platformSetWindowSize(int32_t width, int32_t height) {
-    (void)width; (void)height;
+    if (width <= 0 || height <= 0) return;
+
+    g_reqRenderWidth  = width;
+    g_reqRenderHeight = height;
+    atomic_store(&needsResize, true);
 }
 
 /* TODO: touchscreen mouse support */
@@ -210,6 +227,8 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
     (void)title; (void)headless;
 
     g_aspectRatio = (reqH > 0) ? ((float)reqW / (float)reqH) : 1.0f;
+    g_reqRenderWidth  = reqW;
+    g_reqRenderHeight = reqH;
     bsRequestRelayout();
 
 #ifdef ENABLE_MODERN_GL
@@ -244,7 +263,66 @@ void platformExit(void) {
     glInited = false;
 }
 
+/* [screen respondsToSelector:@selector(scale)] guard is for pre-iOS-4,
+ * where UIScreen has no notion of a Retina content scale and 1x is
+ * correct. */
+static CGFloat nativeScreenScale(void) {
+    UIScreen *screen = [UIScreen mainScreen];
+    CGFloat scale = 1.0f;
+    if ([screen respondsToSelector:@selector(scale)]) {
+        CGFloat (*getScale)(id, SEL) = (CGFloat (*)(id, SEL))objc_msgSend;
+        scale = getScale(screen, @selector(scale));
+    }
+    return scale;
+}
+
+/*
+ * Picks the CAEAGLLayer's contentsScale -- and therefore the framebuffer's
+ * pixel resolution, since the drawable size handed to
+ * renderbufferStorage:fromDrawable: is just (layer bounds in points) *
+ * contentsScale -- based on the game's requested render resolution vs.
+ * the device's native scale:
+ *
+ *   - requested < native: render at the requested (lower) resolution.
+ *     Saves fill-rate, which matters a lot on early Retina devices that
+ *     got a 4x pixel-count jump without a matching GPU jump.
+ *   - requested > native: clamp to native. Upsampling past native just
+ *     produces blur with no visible benefit, and burns performance that
+ *     already-underpowered low-res devices can't spare.
+ *
+ * Recomputed from scratch every call (cheap) rather than cached, since
+ * either input -- the requested resolution, or the frame's current point
+ * size -- can change independently (platformSetWindowSize vs. rotation).
+ */
+static void applyRenderScale(void) {
+    if (!layer) return;
+
+    CGSize sz = layer.bounds.size;
+    if (sz.width <= 0.0f || sz.height <= 0.0f) return;
+
+    CGFloat nativeScale = nativeScreenScale();
+    CGFloat targetScale = nativeScale;
+
+    if (g_reqRenderWidth > 0 && g_reqRenderHeight > 0) {
+        CGFloat sW = (CGFloat)g_reqRenderWidth  / sz.width;
+        CGFloat sH = (CGFloat)g_reqRenderHeight / sz.height;
+        /* Use whichever axis wants the smaller scale, so we never exceed
+         * the requested pixel count on either dimension -- then clamp to
+         * native so we never exceed the device's real resolution either. */
+        targetScale = fminf(nativeScale, fminf(sW, sH));
+    }
+
+    if (targetScale <= 0.0f) targetScale = nativeScale; /* safety net */
+
+    if ([layer respondsToSelector:@selector(setContentsScale:)]) {
+        void (*setScale)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
+        setScale(layer, @selector(setContentsScale:), targetScale);
+    }
+}
+
 static void resizeFramebuffer(void) {
+    applyRenderScale();
+
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
@@ -325,12 +403,11 @@ void platformSleepUntil(uint64_t time) {
          * (rotation, first layout, etc), so we don't rely on autoresizing. */
         self.autoresizingMask = UIViewAutoresizingNone;
 
-        UIScreen *screen = [UIScreen mainScreen];
-        CGFloat scale = 1.0f; /* pre-iOS 4: no retina, 1x is correct */
-        if ([screen respondsToSelector:@selector(scale)]) {
-            CGFloat (*getScale)(id, SEL) = (CGFloat (*)(id, SEL))objc_msgSend;
-            scale = getScale(screen, @selector(scale));
-        }
+        /* Seed with the native scale so the layer is sane for the brief
+         * window between view creation and the first resizeFramebuffer()
+         * call; applyRenderScale() will correct this to the requested
+         * render resolution's scale once sizing kicks in. */
+        CGFloat scale = nativeScreenScale();
         if ([layer respondsToSelector:@selector(setContentsScale:)]) {
             void (*setScale)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
             setScale(layer, @selector(setContentsScale:), scale);
