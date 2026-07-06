@@ -7,13 +7,13 @@
     <key>CFBundleDisplayName</key>
     <string>Butterscotch</string>
     <key>CFBundleExecutable</key>
-    <string>Butterscotch</string>
+    <string>butterscotch</string>
     <key>CFBundleIdentifier</key>
     <string>com.mrpowergamerbr.butterscotch.ios</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>butterscotch</string>
+    <string>Butterscotch</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>
