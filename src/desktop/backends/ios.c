@@ -731,15 +731,12 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 @implementation BSViewController
 
-/* Rotation is now handled manually (see AppDelegate applyDeviceOrientation:
- * below) instead of via UIKit's autorotation machinery, whose trigger
- * mechanism and defaults have shifted across the iOS 2-10 / SDK 2-26
- * matrix this targets. Returning NO everywhere below means the OS never
- * tries to rotate the view controller's view itself, on any version --
- * we lock to Portrait and do all the rotating ourselves. */
+/*
+ * Apple keeps changing how you're supposed to tell UIKit to handle shit,
+ * so we just pretend we're portrait only and then rotate manually.
+ */
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
-    (void)interfaceOrientation;
-    return NO;
+    return interfaceOrientation == UIInterfaceOrientationPortrait;
 }
 
 /* iOS 6+ query this pair instead of the method above. NSUInteger (rather
