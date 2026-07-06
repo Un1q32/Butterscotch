@@ -561,39 +561,6 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 @end
 
-/*
- * Rotation support, layered across every mechanism Apple has used over the
- * years, since which one(s) the running OS actually consults depends on
- * BOTH the SDK a binary was linked against AND the OS version it's running
- * on -- neither axis alone tells you which callback chain is live:
- *
- *  - Info.plist UISupportedInterfaceOrientations (iOS 6+): must list all
- *    four orientations. This is compiled-independent (a plist key isn't
- *    affected by SDK version) and should already be set in the app's
- *    Info.plist.
- *  - -shouldAutorotateToInterfaceOrientation: (iOS 2.0+, legacy): consulted
- *    on iOS 2-5, and also apparently consulted on some later OS versions
- *    for binaries linked against pre-iOS-6 SDKs. Always compiled in.
- *  - -shouldAutorotate / -supportedInterfaceOrientations (iOS 6+): the
- *    modern per-view-controller replacement. Requires the 6.0 SDK to
- *    compile.
- *  - -application:supportedInterfaceOrientationsForWindow: (iOS 6+): same
- *    idea as above but for windows without a root view controller (the
- *    pre-iOS-3 codepath in this file where views are added directly to
- *    the UIWindow).
- *  - -willAnimateRotationToInterfaceOrientation:duration: (iOS 2.0+,
- *    deprecated iOS 8): drives the relayout animation on the legacy
- *    rotation path. Uses the old begin/commit animation API rather than
- *    the block-based +animateWithDuration:animations:, since that block
- *    API requires the 4.0 SDK to compile.
- *  - -viewWillTransitionToSize:withTransitionCoordinator: (iOS 8+): the
- *    modern replacement for the above. Requires the 8.0 SDK to compile.
- *  - UIDeviceOrientationDidChangeNotification (iOS 2.0+): does NOT depend
- *    on any of the view-controller rotation machinery above, so it's kept
- *    as a belt-and-suspenders relayout trigger in AppDelegate for cases
- *    where an old-SDK-linked binary running on a newer OS doesn't invoke
- *    any of the view-controller callbacks at all.
- */
 @interface BSViewController : UIViewController
 @end
 
@@ -604,16 +571,6 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     return YES;
 }
 
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 60000
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (NSUInteger)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAll;
-}
-#endif
-
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
                                           duration:(NSTimeInterval)duration {
     (void)toInterfaceOrientation;
@@ -622,17 +579,6 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     bsRequestRelayout();
     [UIView commitAnimations];
 }
-
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 80000
-- (void)viewWillTransitionToSize:(CGSize)size
-        withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
-    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
-    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-        (void)context;
-        bsRequestRelayout();
-    } completion:nil];
-}
-#endif
 
 /* Pre-iOS-7: without this, the view is offset 20pt down to make room for
  * the status bar, even though we hide the status bar at launch. */
@@ -826,17 +772,6 @@ extern int game_main(int argc, char *argv[]);
     (void)note;
     bsRequestRelayout();
 }
-
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 60000
-/* Mirrors BSViewController's supportedInterfaceOrientations for the
- * pre-iOS-3 codepath where views are added directly to the UIWindow
- * instead of going through a root view controller. */
-- (NSUInteger)application:(UIApplication *)application
-    supportedInterfaceOrientationsForWindow:(UIWindow *)appWindow {
-    (void)application; (void)appWindow;
-    return UIInterfaceOrientationMaskAll;
-}
-#endif
 
 - (void)applicationDidFinishLaunching:(UIApplication *)application {
     [application setStatusBarHidden:YES];
