@@ -333,6 +333,20 @@ static void applyRenderScale(void) {
 
     if (targetScale <= 0.0f) targetScale = nativeScale; /* safety net */
 
+    /* CAEAGLLayer derives its backing pixel size as bounds.size (points) *
+     * contentsScale, and truncates rather than rounds that product down
+     * to an integer. The division/multiplication chain above -- aspect
+     * ratio, then layout, then the division just above -- can leave
+     * targetScale a hair below the value that would exactly reproduce
+     * the intended pixel count (e.g. 1.499998 instead of 1.5), which
+     * then silently truncates a whole pixel off the framebuffer on each
+     * axis (observed as 639x479 instead of 640x480 on an iPhone 5S in
+     * landscape). Nudge just past that truncation boundary -- this is
+     * far too small (a fraction of a point in scale) to visibly affect
+     * the actual rendered resolution, but reliably avoids the off-by-one. */
+    targetScale += 0.0005f;
+    if (targetScale > nativeScale) targetScale = nativeScale;
+
     if ([layer respondsToSelector:@selector(setContentsScale:)]) {
         void (*setScale)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
         setScale(layer, @selector(setContentsScale:), targetScale);
