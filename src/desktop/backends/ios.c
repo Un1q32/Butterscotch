@@ -67,6 +67,11 @@ static UIView *g_overlayView = nil;
  * controller before the game thread is started. */
 static char g_gamePath[PATH_MAX];
 
+/* Built from the persisted fast-forward speed setting right before each
+ * game launch -- see AppDelegate startGameWithFolder:. Sized generously
+ * for any reasonable floating-point value typed into the settings field. */
+static char g_ffSpeedArg[64] = "--fast-forward-speed=4";
+
 #define BS_GAMES_ROOT_PATH @"/var/mobile/Documents/Butterscotch"
 
 static void bsRequestRelayout(void) {
@@ -96,13 +101,16 @@ static void bsRequestRelayout(void) {
 #define BS_CONTROL_STRIP_LANDSCAPE_W  120.0f
 #define BS_QUIT_BUTTON_SIZE           22.0f
 #define BS_QUIT_BUTTON_MARGIN         8.0f
-#define BS_GAME_TOP_PADDING           (BS_QUIT_BUTTON_MARGIN + BS_QUIT_BUTTON_SIZE + 4.0f)
+#define BS_FF_BUTTON_SIZE             32.0f   /* a bit bigger than the quit button */
+/* padded off the taller of the two top-corner buttons so neither gets clipped */
+#define BS_GAME_TOP_PADDING           (BS_QUIT_BUTTON_MARGIN + BS_FF_BUTTON_SIZE + 4.0f)
 
 typedef struct {
     CGRect gameFrame;
     CGRect dpadFrame;
     CGRect buttonsFrame;
     CGRect quitFrame;
+    CGRect ffFrame;
     bool   portrait;
 } BSLayout;
 
@@ -130,6 +138,10 @@ static BSLayout computeLayout(CGSize screen) {
 
     layout.quitFrame = CGRectMake(screen.width - BS_QUIT_BUTTON_MARGIN - BS_QUIT_BUTTON_SIZE,
                                    BS_QUIT_BUTTON_MARGIN, BS_QUIT_BUTTON_SIZE, BS_QUIT_BUTTON_SIZE);
+
+    /* Fast-forward: top-left, mirrors the quit button on the top-right. */
+    layout.ffFrame = CGRectMake(BS_QUIT_BUTTON_MARGIN, BS_QUIT_BUTTON_MARGIN,
+                                 BS_FF_BUTTON_SIZE, BS_FF_BUTTON_SIZE);
     return layout;
 }
 
@@ -443,6 +455,7 @@ void platformSleepUntil(uint64_t time) {
     int32_t  dpadKeysDown[4]; /* up, down, left, right */
     UITouch *buttonTouches[3]; /* z, x, c */
     UITouch *quitTouch;
+    UITouch *ffTouch;
 }
 @end
 
@@ -457,6 +470,7 @@ void platformSleepUntil(uint64_t time) {
         self.autoresizingMask = UIViewAutoresizingNone;
         dpadTouch = nil;
         quitTouch = nil;
+        ffTouch = nil;
         for (int i = 0; i < 4; i++) dpadKeysDown[i] = 0;
         for (int i = 0; i < 3; i++) buttonTouches[i] = nil;
     }
@@ -523,6 +537,9 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
     drawTranslucentCircle(ctx, bsLayout.quitFrame, quitTouch != nil);
     drawCenteredLabel(@"X", bsLayout.quitFrame, [UIFont boldSystemFontOfSize:14.0f]);
+
+    drawTranslucentCircle(ctx, bsLayout.ffFrame, ffTouch != nil);
+    drawCenteredLabel(@">>", bsLayout.ffFrame, [UIFont boldSystemFontOfSize:16.0f]);
 }
 
 - (void)updateDpadUp:(bool)up down:(bool)down left:(bool)left right:(bool)right {
@@ -549,6 +566,13 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
         if (!quitTouch && CGRectContainsPoint(CGRectInset(bsLayout.quitFrame, -6, -6), p)) {
             quitTouch = [touch retain];
+            [self setNeedsDisplay];
+            continue;
+        }
+
+        if (!ffTouch && CGRectContainsPoint(CGRectInset(bsLayout.ffFrame, -6, -6), p)) {
+            ffTouch = [touch retain];
+            if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_TAB);
             [self setNeedsDisplay];
             continue;
         }
@@ -606,6 +630,13 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
             [self setNeedsDisplay];
             continue;
         }
+        if (touch == ffTouch) {
+            if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_TAB);
+            [ffTouch release];
+            ffTouch = nil;
+            [self setNeedsDisplay];
+            continue;
+        }
         for (int i = 0; i < 3; i++) {
             if (touch == buttonTouches[i]) {
                 int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
@@ -632,6 +663,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 - (void)dealloc {
     if (dpadTouch) [dpadTouch release];
     if (quitTouch) [quitTouch release];
+    if (ffTouch) [ffTouch release];
     for (int i = 0; i < 3; i++) if (buttonTouches[i]) [buttonTouches[i] release];
     [super dealloc];
 }
@@ -666,6 +698,128 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 @end
 
 /* ---------------------------------------------------------------------
+ * Settings: currently just the fast-forward speed multiplier, persisted
+ * via NSUserDefaults and applied as a --fast-forward-speed=<n> argv entry
+ * the next time a game is launched (see AppDelegate startGameWithFolder:).
+ * ------------------------------------------------------------------- */
+
+#define BS_FF_SPEED_DEFAULTS_KEY @"BSFastForwardSpeed"
+#define BS_DEFAULT_FF_SPEED      4.0
+
+/* Falls back to the default any time the stored value is missing or
+ * non-positive (e.g. first launch, or a corrupted/edited defaults plist). */
+static double bsLoadFastForwardSpeed(void) {
+    double v = [[NSUserDefaults standardUserDefaults] doubleForKey:BS_FF_SPEED_DEFAULTS_KEY];
+    return (v > 0.0) ? v : BS_DEFAULT_FF_SPEED;
+}
+
+/* Renders a simple gear glyph into a UIImage via Core Graphics, rather than
+ * relying on a Unicode gear character rendering correctly on very old
+ * font/rendering stacks. Uses UIGraphicsBeginImageContext (iOS 2+) rather
+ * than the *WithOptions variant (iOS 4+) to stay compatible with the low
+ * end of the SDK matrix. */
+static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
+    UIGraphicsBeginImageContext(CGSizeMake(size, size));
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+    CGPoint center = CGPointMake(size / 2.0f, size / 2.0f);
+    CGFloat outerR = size * 0.46f;
+    CGFloat toothR = size * 0.12f;
+    CGFloat innerR = size * 0.28f;
+    const int teeth = 8;
+
+    CGContextSetFillColorWithColor(ctx, color.CGColor);
+
+    CGMutablePathRef path = CGPathCreateMutable();
+    for (int i = 0; i < teeth * 2; i++) {
+        CGFloat angle = (CGFloat)i * (CGFloat)M_PI / (CGFloat)teeth;
+        CGFloat r = (i % 2 == 0) ? (outerR + toothR) : outerR;
+        CGFloat x = center.x + r * cosf(angle);
+        CGFloat y = center.y + r * sinf(angle);
+        if (i == 0) CGPathMoveToPoint(path, NULL, x, y);
+        else        CGPathAddLineToPoint(path, NULL, x, y);
+    }
+    CGPathCloseSubpath(path);
+    CGContextAddPath(ctx, path);
+    CGContextFillPath(ctx);
+    CGPathRelease(path);
+
+    /* Punch the center hole so it reads as a gear rather than a spiky disc. */
+    CGContextSetBlendMode(ctx, kCGBlendModeClear);
+    CGContextFillEllipseInRect(ctx, CGRectMake(center.x - innerR, center.y - innerR,
+                                                innerR * 2.0f, innerR * 2.0f));
+
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+@interface BSSettingsViewController : UIViewController <UITextFieldDelegate> {
+    UITextField *speedField;
+}
+@end
+
+@implementation BSSettingsViewController
+
+- (void)loadView {
+    CGRect bounds = [[UIScreen mainScreen] bounds];
+    UIView *root = [[[UIView alloc] initWithFrame:bounds] autorelease];
+    root.backgroundColor = [UIColor whiteColor];
+    root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    UILabel *fieldLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 20, bounds.size.width - 40, 24)] autorelease];
+    fieldLabel.text = @"Fast forward speed (multiplier):";
+    fieldLabel.font = [UIFont systemFontOfSize:15.0f];
+    fieldLabel.backgroundColor = [UIColor clearColor];
+    [root addSubview:fieldLabel];
+
+    speedField = [[UITextField alloc] initWithFrame:CGRectMake(20, 48, bounds.size.width - 40, 36)];
+    speedField.borderStyle = UITextBorderStyleRoundedRect;
+    speedField.keyboardType = UIKeyboardTypeDecimalPad;
+    speedField.delegate = self;
+    speedField.text = [NSString stringWithFormat:@"%g", bsLoadFastForwardSpeed()];
+    [root addSubview:speedField];
+
+    self.view = root;
+}
+
+- (id)init {
+    if ((self = [super init])) {
+        self.title = @"Settings";
+        UIBarButtonItem *saveItem = [[UIBarButtonItem alloc] initWithTitle:@"Save"
+                                      style:UIBarButtonItemStyleDone
+                                      target:self action:@selector(saveTapped)];
+        self.navigationItem.rightBarButtonItem = saveItem;
+        [saveItem release];
+    }
+    return self;
+}
+
+- (void)saveTapped {
+    [speedField resignFirstResponder];
+    double v = [speedField.text doubleValue];
+    if (v > 0.0) {
+        [[NSUserDefaults standardUserDefaults] setDouble:v forKey:BS_FF_SPEED_DEFAULTS_KEY];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+    /* Invalid/non-positive input is silently ignored -- previously saved
+     * value (or the default) is left untouched. */
+    [[[UIApplication sharedApplication] delegate] performSelector:@selector(settingsDone)];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+- (void)dealloc {
+    [speedField release];
+    [super dealloc];
+}
+
+@end
+
+/* ---------------------------------------------------------------------
  * Game selection menu. Scans BS_GAMES_ROOT_PATH for subfolders that
  * contain a data.win, and lets the user pick one. Re-scans every time
  * the view (re)appears so games dropped in via file transfer while the
@@ -688,9 +842,21 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 #endif
         games = [[NSMutableArray alloc] init];
         self.title = @"Butterscotch";
+
+        UIImage *gearImg = createGearIconImage(22.0f, [UIColor darkGrayColor]);
+        UIBarButtonItem *gearItem = [[UIBarButtonItem alloc] initWithImage:gearImg
+                                      style:UIBarButtonItemStylePlain
+                                      target:self action:@selector(settingsTapped)];
+        self.navigationItem.leftBarButtonItem = gearItem;
+        [gearItem release];
+
         [self reloadGames];
     }
     return self;
+}
+
+- (void)settingsTapped {
+    [[[UIApplication sharedApplication] delegate] performSelector:@selector(showSettings)];
 }
 
 - (void)reloadGames {
@@ -760,10 +926,14 @@ extern int game_main(int argc, char *argv[]);
     BSTouchOverlay *overlay;
     UIView *rootView;
     BSGameListViewController *gameListVC;
+    BSSettingsViewController *settingsVC;
+    UINavigationController *navController;
     BOOL usingRootViewController;
 }
 - (void)startGameWithFolder:(NSString *)folderName;
 - (void)returnToMenu;
+- (void)showSettings;
+- (void)settingsDone;
 - (void)orientationChanged:(NSNotification *)note;
 @end
 
@@ -775,8 +945,8 @@ extern int game_main(int argc, char *argv[]);
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
-    char *argv[] = { arg0, arg1, arg2, g_gamePath, NULL };
-    game_main(4, argv);
+    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, g_gamePath, NULL };
+    game_main(5, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
@@ -787,6 +957,7 @@ extern int game_main(int argc, char *argv[]);
     NSString *dataWin = [[BS_GAMES_ROOT_PATH stringByAppendingPathComponent:folderName]
                           stringByAppendingPathComponent:@"data.win"];
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
+    snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
 
     atomic_store(&quitRequested, false);
 
@@ -822,11 +993,11 @@ extern int game_main(int argc, char *argv[]);
     g_overlayView = nil;
 
     if (usingRootViewController) {
-        [window performSelector:@selector(setRootViewController:) withObject:gameListVC];
+        [window performSelector:@selector(setRootViewController:) withObject:navController];
     } else {
         NSArray *subs = [[window.subviews copy] autorelease];
         for (UIView *sub in subs) [sub removeFromSuperview];
-        [window addSubview:gameListVC.view];
+        [window addSubview:navController.view];
     }
 
     [overlay release];
@@ -835,6 +1006,15 @@ extern int game_main(int argc, char *argv[]);
     rootView = nil;
     [view release];
     view = nil;
+}
+
+- (void)showSettings {
+    if (!settingsVC) settingsVC = [[BSSettingsViewController alloc] init];
+    [navController pushViewController:settingsVC animated:YES];
+}
+
+- (void)settingsDone {
+    [navController popViewControllerAnimated:YES];
 }
 
 /*
@@ -864,11 +1044,12 @@ extern int game_main(int argc, char *argv[]);
     usingRootViewController = [window respondsToSelector:@selector(setRootViewController:)];
 
     gameListVC = [[BSGameListViewController alloc] init];
+    navController = [[UINavigationController alloc] initWithRootViewController:gameListVC];
 
     if (usingRootViewController) {
-        [window performSelector:@selector(setRootViewController:) withObject:gameListVC];
+        [window performSelector:@selector(setRootViewController:) withObject:navController];
     } else {
-        [window addSubview:gameListVC.view];
+        [window addSubview:navController.view];
     }
     [window makeKeyAndVisible];
 }
@@ -883,6 +1064,8 @@ extern int game_main(int argc, char *argv[]);
     [rootView release];
     [view release];
     [gameListVC release];
+    [settingsVC release];
+    [navController release];
     [window release];
     [super dealloc];
 }
