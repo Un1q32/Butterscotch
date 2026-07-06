@@ -759,6 +759,20 @@ static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
 }
 @end
 
+/* UIKeyboardTypeDecimalPad was added in iOS 4.1. Rather than gate on the
+ * SDK this file happens to be compiled against (which says nothing about
+ * whether the *running* device actually supports it, and may not even
+ * declare the symbol), reference its known raw enum value directly and
+ * decide whether to use it purely from the device's reported OS version
+ * at runtime. Falls back to NumbersAndPunctuation (available since iOS
+ * 2.0) on anything older -- still exposes a decimal point. */
+static UIKeyboardType bsNumericKeyboardType(void) {
+    NSString *sysVersion = [[UIDevice currentDevice] systemVersion];
+    if ([sysVersion compare:@"4.1" options:NSNumericSearch] != NSOrderedAscending)
+        return (UIKeyboardType)8; /* UIKeyboardTypeDecimalPad's raw value */
+    return UIKeyboardTypeNumbersAndPunctuation;
+}
+
 @implementation BSSettingsViewController
 
 - (void)loadView {
@@ -775,7 +789,7 @@ static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
 
     speedField = [[UITextField alloc] initWithFrame:CGRectMake(20, 48, bounds.size.width - 40, 36)];
     speedField.borderStyle = UITextBorderStyleRoundedRect;
-    speedField.keyboardType = UIKeyboardTypeDecimalPad;
+    speedField.keyboardType = bsNumericKeyboardType();
     speedField.delegate = self;
     speedField.text = [NSString stringWithFormat:@"%g", bsLoadFastForwardSpeed()];
     [root addSubview:speedField];
