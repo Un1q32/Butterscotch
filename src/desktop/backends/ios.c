@@ -63,6 +63,13 @@ static float g_aspectRatio = 1.0f;
 static UIView *g_glView = nil;
 static UIView *g_overlayView = nil;
 
+/* Last UIDeviceOrientation actually applied to rootView by
+ * applyDeviceOrientation:, used to no-op duplicate/redundant notifications.
+ * Reset to Unknown in startGameWithFolder: so each new game session always
+ * re-syncs to the device's current orientation, even if it's the same
+ * orientation the previous session last settled into. */
+static UIDeviceOrientation g_lastAppliedOrientation = UIDeviceOrientationUnknown;
+
 /* Path to the selected game's data.win, filled in by the game list
  * controller before the game thread is started. */
 static char g_gamePath[PATH_MAX];
@@ -675,18 +682,27 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 @implementation BSViewController
 
+/* Rotation is now handled manually (see AppDelegate applyDeviceOrientation:
+ * below) instead of via UIKit's autorotation machinery, whose trigger
+ * mechanism and defaults have shifted across the iOS 2-10 / SDK 2-26
+ * matrix this targets. Returning NO everywhere below means the OS never
+ * tries to rotate the view controller's view itself, on any version --
+ * we lock to Portrait and do all the rotating ourselves. */
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
     (void)interfaceOrientation;
-    return YES;
+    return NO;
 }
 
-- (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
-                                          duration:(NSTimeInterval)duration {
-    (void)toInterfaceOrientation;
-    [UIView beginAnimations:nil context:NULL];
-    [UIView setAnimationDuration:duration];
-    bsRequestRelayout();
-    [UIView commitAnimations];
+/* iOS 6+ query this pair instead of the method above. NSUInteger (rather
+ * than UIInterfaceOrientationMask) as the return type keeps this
+ * compiling against SDKs that predate that type -- it's still called
+ * correctly at runtime on OS versions that support it. */
+- (BOOL)shouldAutorotate {
+    return NO;
+}
+
+- (NSUInteger)supportedInterfaceOrientations {
+    return 1; /* UIInterfaceOrientationMaskPortrait's raw value (1 << UIInterfaceOrientationPortrait) */
 }
 
 /* Pre-iOS-7: without this, the view is offset 20pt down to make room for
@@ -949,6 +965,7 @@ extern int game_main(int argc, char *argv[]);
 - (void)showSettings;
 - (void)settingsDone;
 - (void)orientationChanged:(NSNotification *)note;
+- (void)applyDeviceOrientation:(UIDeviceOrientation)devOrientation;
 @end
 
 @implementation AppDelegate
@@ -984,9 +1001,15 @@ extern int game_main(int argc, char *argv[]);
     g_overlayView = overlay;
 
     rootView = [[UIView alloc] initWithFrame:bounds];
-    rootView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    rootView.autoresizingMask = UIViewAutoresizingNone; /* we drive rootView's frame manually now -- autoresizing masks are unreliable once a transform is applied */
     [rootView addSubview:view];
     [rootView addSubview:overlay]; /* on top, so controls are visible over the game */
+
+    /* Force a fresh sync even if the device is in the same physical
+     * orientation the last game session ended in -- g_lastAppliedOrientation
+     * is stale for this brand-new rootView. */
+    g_lastAppliedOrientation = UIDeviceOrientationUnknown;
+    [self applyDeviceOrientation:[[UIDevice currentDevice] orientation]];
 
     if (usingRootViewController) {
         UIViewController *vc = [[BSViewController alloc] init];
@@ -1031,16 +1054,59 @@ extern int game_main(int argc, char *argv[]);
     [navController popViewControllerAnimated:YES];
 }
 
-/*
- * Belt-and-suspenders relayout trigger: fires purely off physical device
- * orientation, independent of whichever (if any) view-controller rotation
- * callback chain the running OS decides to invoke for this binary's linked
- * SDK version. Harmless to have alongside the view-controller-driven paths
- * above -- bsRequestRelayout() just forces a layout pass against the
- * views' current bounds, so redundant calls are cheap no-ops.
- */
 - (void)orientationChanged:(NSNotification *)note {
     (void)note;
+    [self applyDeviceOrientation:[[UIDevice currentDevice] orientation]];
+}
+
+/* ---------------------------------------------------------------------
+ * Manual rotation for the game screen. Locks the interface orientation
+ * (see BSViewController) and instead rotates rootView ourselves off raw
+ * UIDeviceOrientation notifications, which have been stable since iOS
+ * 2.0 -- unlike the view-controller rotation callback chain, which isn't.
+ *
+ * rootView's children (GLView, BSTouchOverlay) are untouched by this;
+ * they just read superview.bounds.size on layout, same as always, so
+ * computeLayout()'s existing portrait/landscape logic keeps working
+ * without any changes on that side.
+ *
+ * Only applies when a game is running (rootView != nil). The menu /
+ * settings navigation stack is left in the OS's default fixed
+ * orientation and does not rotate.
+ * ------------------------------------------------------------------- */
+- (void)applyDeviceOrientation:(UIDeviceOrientation)devOrientation {
+    if (!rootView) return;
+
+    CGFloat angle;
+    BOOL swapped;
+    switch (devOrientation) {
+        case UIDeviceOrientationPortrait:           angle = 0.0f;             swapped = NO;  break;
+        case UIDeviceOrientationPortraitUpsideDown: angle = (CGFloat)M_PI;    swapped = NO;  break;
+        /* Device rotated so its left edge points "up" corresponds to
+         * interface orientation LandscapeRight, i.e. a +90 degree
+         * compensating rotation; the other case is the mirror image. */
+        case UIDeviceOrientationLandscapeLeft:       angle = (CGFloat)M_PI_2;  swapped = YES; break;
+        case UIDeviceOrientationLandscapeRight:       angle = -(CGFloat)M_PI_2; swapped = YES; break;
+        default:
+            /* FaceUp / FaceDown / Unknown: not a usable orientation --
+             * keep whatever we last applied. */
+            return;
+    }
+
+    if (devOrientation == g_lastAppliedOrientation) return;
+    g_lastAppliedOrientation = devOrientation;
+
+    CGRect nativeBounds = [[UIScreen mainScreen] bounds];
+    CGSize logicalSize = swapped ? CGSizeMake(nativeBounds.size.height, nativeBounds.size.width)
+                                  : nativeBounds.size;
+
+    [UIView beginAnimations:nil context:NULL];
+    [UIView setAnimationDuration:0.3];
+    rootView.transform = CGAffineTransformMakeRotation(angle);
+    rootView.bounds = CGRectMake(0, 0, logicalSize.width, logicalSize.height);
+    rootView.center = CGPointMake(CGRectGetMidX(nativeBounds), CGRectGetMidY(nativeBounds));
+    [UIView commitAnimations];
+
     bsRequestRelayout();
 }
 
