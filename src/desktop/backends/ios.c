@@ -281,10 +281,11 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
     bsRequestRelayout();
 
 #ifdef ENABLE_MODERN_GL
-    if (gfx == MODERN_GL)
+    if (gfx == MODERN_GL) {
         glcontext = [[EAGLContext alloc] initWithAPI:3];
         if (!glcontext)
             glcontext = [[EAGLContext alloc] initWithAPI:2];
+    }
 #endif
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE)
