@@ -308,11 +308,19 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
 }
 
 void platformExit(void) {
-    if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
-    if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
+    if (framebuffer) {
+        glDeleteFramebuffers(1, &framebuffer);
+        framebuffer = 0;
+    }
+    if (renderbuffer) {
+        glDeleteRenderbuffers(1, &renderbuffer);
+        renderbuffer = 0;
+    }
 #ifdef ENABLE_SW_RENDERER
-    if (swTexture) glDeleteTextures(1, &swTexture);
-    swTexture = 0;
+    if (swTexture) {
+        glDeleteTextures(1, &swTexture);
+        swTexture = 0;
+    }
     if (swFbCopy) {
         free(swFbCopy);
         swFbCopy = NULL;
@@ -320,8 +328,6 @@ void platformExit(void) {
 #endif
     [glcontext release];
     glcontext = nil;
-    framebuffer = 0;
-    renderbuffer = 0;
     glInited = false;
 }
 
