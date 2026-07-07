@@ -13,6 +13,9 @@
 #include <QuartzCore/CAEAGLLayer.h>
 #include <Availability.h>
 
+/* Undefine macros that conflict with glad headers */
+#undef GL_UNSIGNED_SHORT_1_5_5_5_REV
+
 #include <glad/glad.h>
 
 #include "common.h"
