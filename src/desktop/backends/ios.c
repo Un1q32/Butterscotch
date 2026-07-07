@@ -494,7 +494,7 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
         if (swFbCopy)
             free(swFbCopy);
         size_t rfbSize = sizeof(uint32_t) * glWidth * glHeight;
-        swFbCopy = malloc(rfbSize);
+        swFbCopy = safeMalloc(rfbSize);
         memset(swFbCopy, 0, rfbSize);
         swFbCopyWidth = glWidth;
         swFbCopyHeight = glHeight;
@@ -509,52 +509,46 @@ void platformSwapBuffers(void) {
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glClear(GL_COLOR_BUFFER_BIT);
 
+        glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, swTexture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+
+        float xs = swFbCopyWidth / fbWidth;
+        float ys = swFbCopyHeight / fbHeight;
 
         /* Copy to power-of-2 buffer */
-        for (int y = 0; y < fbHeight; y++) {
+        for (int y = 0; y < fbHeight; ++y) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
             for (int x = 0; x < fbWidth; x++) {
                 dstline[x] = srcline[x];
             }
         }
+        nextFb = NULL;
 
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, swFbCopy);
 
-        glEnable(GL_TEXTURE_2D);
-        glDisable(GL_BLEND);
-
-        /* Calculate texture coordinate scaling */
-        CGRect bounds = [[UIScreen mainScreen] bounds];
-        float xs = (float)swFbCopyWidth / bounds.size.width;
-        float ys = (float)swFbCopyHeight / bounds.size.height;
-
-        /* Interleaved vertex and texture coordinate arrays */
-        GLfloat vertices[] = {
-            /* tri 1 */
-            -1, -1, 0, 1.0f / ys,
-            -1, 1, 0, 0,
-            1, 1, 1.0f / xs, 0,
-            /* tri 2 */
-            -1, -1, 0, 1.0f / ys,
-            1, 1, 1.0f / xs, 0,
-            1, -1, 1.0f / xs, 1.0f / ys,
-        };
-
         glEnableClientState(GL_VERTEX_ARRAY);
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        GLfloat vertices[] = { 
+            // tri 1
+            -1, -1,    0, 1.0f / ys,
+            -1, 1,     0, 0,
+            1, 1,      1.0f / xs, 0,
+            // tri 2
+            -1, -1,    0, 1.0f / ys,
+            1, 1,      1.0f / xs, 0,
+            1, -1,     1.0f / xs, 1.0f / ys,
+        };
+
+        // count, type, stride, pointer
         glVertexPointer(2, GL_FLOAT, 4 * sizeof(float), vertices);
         glTexCoordPointer(2, GL_FLOAT, 4 * sizeof(float), vertices + 2);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glDisable(GL_TEXTURE_2D);
         glDisableClientState(GL_VERTEX_ARRAY);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-
-        nextFb = NULL;
+        glBindRenderbuffer(GL_RENDERBUFFER, colorRenderbuffer);
     }
 #endif
     [glcontext presentRenderbuffer:GL_RENDERBUFFER];
