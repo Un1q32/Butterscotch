@@ -504,7 +504,9 @@ void platformSwapBuffers(void) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
             for (int x = 0; x < fbWidth; x++) {
-                dstline[x] = srcline[x];
+                uint32_t swapped = srcline[x];
+                swapped = (swapped & 0xFF00FF00) | ((swapped & 0xFF) << 16) | ((swapped & 0xFF0000) >> 16);
+                dstline[x] = swapped;
             }
         }
         nextFb = NULL;
