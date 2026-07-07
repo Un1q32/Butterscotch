@@ -513,8 +513,8 @@ void platformSwapBuffers(void) {
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, swTexture);
 
-        float xs = swFbCopyWidth / fbWidth;
-        float ys = swFbCopyHeight / fbHeight;
+        float xs = (float)swFbCopyWidth / (float)fbWidth;
+        float ys = (float)swFbCopyHeight / (float)fbHeight;
 
         /* Copy to power-of-2 buffer */
         for (int y = 0; y < fbHeight; ++y) {
