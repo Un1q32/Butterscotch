@@ -37,6 +37,16 @@ static atomic_bool quitRequested = false;
 
 static Runner *g_runner;
 
+#ifdef ENABLE_SW_RENDERER
+static int NearestPO2(int i) {
+    for (int j = 1; j < 1024 * 1024; j *= 2) {
+        if (i < j)
+            return j;
+    }
+    return i; /* fallback */
+}
+#endif
+
 static EAGLContext *glcontext;
 static GLuint framebuffer;
 static GLuint renderbuffer;
@@ -48,6 +58,8 @@ static CAEAGLLayer *layer;
 #ifdef ENABLE_SW_RENDERER
 static uint32_t* nextFb = NULL;
 static GLuint swTexture = 0;
+static uint32_t* swFbCopy = NULL;
+static int swFbCopyWidth = 0, swFbCopyHeight = 0;
 #endif
 
 /* Requested render resolution, as set via platformSetWindowSize() (and
@@ -309,6 +321,7 @@ void platformExit(void) {
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
 #ifdef ENABLE_SW_RENDERER
     if (swTexture) glDeleteTextures(1, &swTexture);
+    if (swFbCopy) free(swFbCopy);
 #endif
     [glcontext release];
     glcontext = nil;
@@ -474,53 +487,71 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
     nextFb = framebuffer;
     fbWidth = width;
     fbHeight = height;
+
+    /* Allocate power-of-2 sized buffer for texture upload */
+    int glWidth = NearestPO2(fbWidth), glHeight = NearestPO2(fbHeight);
+    if (swFbCopyWidth != glWidth || swFbCopyHeight != glHeight) {
+        if (swFbCopy)
+            free(swFbCopy);
+        size_t rfbSize = sizeof(uint32_t) * glWidth * glHeight;
+        swFbCopy = malloc(rfbSize);
+        memset(swFbCopy, 0, rfbSize);
+        swFbCopyWidth = glWidth;
+        swFbCopyHeight = glHeight;
+    }
 }
 
 #endif
 
 void platformSwapBuffers(void) {
 #ifdef ENABLE_SW_RENDERER
-    if (gfx == SOFTWARE && nextFb) {
+    if (gfx == SOFTWARE && nextFb && swFbCopy) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         glBindTexture(GL_TEXTURE_2D, swTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fbWidth, fbHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, nextFb);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 
+        /* Copy and swap RGB bytes (BGRA to RGBA) */
+        for (int y = 0; y < fbHeight; y++) {
+            uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
+            const uint32_t* srcline = nextFb + y * fbWidth;
+            for (int x = 0; x < fbWidth; x++) {
+                uint32_t swapped = srcline[x];
+                swapped = (swapped & 0xFF00FF00) | ((swapped & 0xFF) << 16) | ((swapped & 0xFF0000) >> 16);
+                dstline[x] = swapped;
+            }
+        }
+
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, swFbCopy);
+
         glEnable(GL_TEXTURE_2D);
         glDisable(GL_BLEND);
 
-        glMatrixMode(GL_PROJECTION);
-        glLoadIdentity();
-        glOrthof(0, fbWidth, 0, fbHeight, -1, 1);
+        /* Calculate texture coordinate scaling */
+        CGRect bounds = [[UIScreen mainScreen] bounds];
+        float xs = (float)swFbCopyWidth / bounds.size.width;
+        float ys = (float)swFbCopyHeight / bounds.size.height;
 
-        glMatrixMode(GL_MODELVIEW);
-        glLoadIdentity();
-
-        glColor4f(1, 1, 1, 1);
-
-        /* GLES 1.1 doesn't support glBegin/glEnd, use vertex arrays instead */
+        /* Interleaved vertex and texture coordinate arrays */
         GLfloat vertices[] = {
-            0, 0,
-            fbWidth, 0,
-            fbWidth, fbHeight,
-            0, fbHeight
-        };
-        GLfloat texCoords[] = {
-            0, 0,
-            1, 0,
-            1, 1,
-            0, 1
+            /* tri 1 */
+            -1, -1, 0, 1.0f / ys,
+            -1, 1, 0, 0,
+            1, 1, 1.0f / xs, 0,
+            /* tri 2 */
+            -1, -1, 0, 1.0f / ys,
+            1, 1, 1.0f / xs, 0,
+            1, -1, 1.0f / xs, 1.0f / ys,
         };
 
         glEnableClientState(GL_VERTEX_ARRAY);
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-        glVertexPointer(2, GL_FLOAT, 0, vertices);
-        glTexCoordPointer(2, GL_FLOAT, 0, texCoords);
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glVertexPointer(2, GL_FLOAT, 4 * sizeof(float), vertices);
+        glTexCoordPointer(2, GL_FLOAT, 4 * sizeof(float), vertices + 2);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
         glDisableClientState(GL_VERTEX_ARRAY);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 
