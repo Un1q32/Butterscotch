@@ -312,6 +312,8 @@ void platformExit(void) {
 #ifdef ENABLE_SW_RENDERER
     if (swTexture) glDeleteTextures(1, &swTexture);
     if (swFbCopy) free(swFbCopy);
+    swFbCopy = NULL;
+    swTexture = 0;
 #endif
     [glcontext release];
     glcontext = nil;
