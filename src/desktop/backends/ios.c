@@ -421,20 +421,6 @@ static void applyRenderScale(void) {
 }
 
 static void resizeFramebuffer(void) {
-#ifdef ENABLE_SW_RENDERER
-    if (gfx == SOFTWARE) {
-        applyRenderScale();
-
-        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-        [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
-        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
-        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
-
-        glViewport(0, 0, fbWidth, fbHeight);
-        return;
-    }
-#endif
-
     applyRenderScale();
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
