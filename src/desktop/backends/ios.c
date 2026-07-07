@@ -506,7 +506,6 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
 void platformSwapBuffers(void) {
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE && nextFb && swFbCopy) {
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glClear(GL_COLOR_BUFFER_BIT);
 
         glEnable(GL_TEXTURE_2D);
@@ -548,7 +547,6 @@ void platformSwapBuffers(void) {
         glDisable(GL_TEXTURE_2D);
         glDisableClientState(GL_VERTEX_ARRAY);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
     }
 #endif
     [glcontext presentRenderbuffer:GL_RENDERBUFFER];
