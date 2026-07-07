@@ -1326,10 +1326,7 @@ extern int game_main(int argc, char *argv[]);
     }
 #elif defined(ENABLE_MODERN_GL)
     snprintf(g_rendererArg, sizeof(g_rendererArg), "modern-gl");
-#elif defined(ENABLE_SW_RENDERER)
-    snprintf(g_rendererArg, sizeof(g_rendererArg), "software");
 #else
-    /* Neither renderer available - this shouldn't happen */
     snprintf(g_rendererArg, sizeof(g_rendererArg), "software");
 #endif
 
