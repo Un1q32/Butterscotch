@@ -114,6 +114,59 @@ static void bsRequestRelayout(void) {
 }
 
 /* ---------------------------------------------------------------------
+ * Deferred keyboard event queue.
+ *
+ * Touch handling runs on the main UI thread, but RunnerKeyboard_onKeyDown/
+ * onKeyUp mutate keyPressed/keyReleased arrays that are also cleared once
+ * per frame by RunnerKeyboard_beginFrame() on the game thread. Calling
+ * onKeyDown/onKeyUp directly from touchesBegan/touchesEnded races against
+ * that clear -- an event set here can be wiped by beginFrame() before
+ * main.c's next poll ever observes it, more easily on fast devices since
+ * frames (and beginFrame() calls) come more often, shrinking the window
+ * in which an async touch event is safe from being clobbered.
+ *
+ * Rather than touch runner_keyboard.c or main.c (both intentionally
+ * platform-independent), buffer transitions here and only apply them
+ * from platformHandleEvents() -- already polled once per frame on the
+ * game thread, in the same place needsResize/quitRequested are handled.
+ * That makes the actual RunnerKeyboard_onKeyDown/onKeyUp calls happen on
+ * the correct thread, safely ordered relative to that frame's
+ * beginFrame(), exactly as if a real keyboard event arrived there.
+ *
+ * Single-producer (UI thread only ever advances head)/single-consumer
+ * (game thread only ever advances tail), so the plain atomic_int
+ * load/store already used elsewhere in this file is sufficient -- no
+ * locks needed.
+ * ------------------------------------------------------------------- */
+#define BS_KEY_QUEUE_SIZE 32
+typedef struct { int32_t key; bool isDown; } BSKeyEvent;
+static BSKeyEvent bsKeyQueue[BS_KEY_QUEUE_SIZE];
+static atomic_int bsKeyQueueHead = 0; /* next slot to write -- producer (UI thread) owned */
+static atomic_int bsKeyQueueTail = 0; /* next slot to read -- consumer (game thread) owned */
+
+static void bsEnqueueKeyEvent(int32_t key, bool isDown) {
+    int head = atomic_load(&bsKeyQueueHead);
+    int next = (head + 1) % BS_KEY_QUEUE_SIZE;
+    if (next == atomic_load(&bsKeyQueueTail)) return; /* full -- drop rather than corrupt, shouldn't happen at touch event rates */
+    bsKeyQueue[head].key = key;
+    bsKeyQueue[head].isDown = isDown;
+    atomic_store(&bsKeyQueueHead, next);
+}
+
+static void bsDrainKeyEvents(void) {
+    for (;;) {
+        int tail = atomic_load(&bsKeyQueueTail);
+        if (tail == atomic_load(&bsKeyQueueHead)) break; /* empty */
+        BSKeyEvent ev = bsKeyQueue[tail];
+        atomic_store(&bsKeyQueueTail, (tail + 1) % BS_KEY_QUEUE_SIZE);
+        if (g_runner) {
+            if (ev.isDown) RunnerKeyboard_onKeyDown(g_runner->keyboard, ev.key);
+            else           RunnerKeyboard_onKeyUp(g_runner->keyboard, ev.key);
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------
  * Touch control layout
  *
  * Portrait: game view anchored to the top of the screen, dpad + z/x/c
@@ -556,6 +609,7 @@ void *platformGetProcAddress(const char *name) {
 }
 
 bool platformHandleEvents(void) {
+    bsDrainKeyEvents();
     if (atomic_exchange(&needsResize, false))
         resizeFramebuffer();
     if (atomic_load(&quitRequested))
@@ -727,9 +781,9 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     int32_t keys[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
     for (int i = 0; i < 4; i++) {
         if (newState[i] && !dpadKeysDown[i]) {
-            if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, keys[i]);
+            bsEnqueueKeyEvent(keys[i], true);
         } else if (!newState[i] && dpadKeysDown[i]) {
-            if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, keys[i]);
+            bsEnqueueKeyEvent(keys[i], false);
         }
         dpadKeysDown[i] = newState[i] ? 1 : 0;
     }
@@ -752,7 +806,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
         if (!ffTouch && CGRectContainsPoint(CGRectInset(bsLayout.ffFrame, -6, -6), p)) {
             ffTouch = [touch retain];
-            if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_TAB);
+            bsEnqueueKeyEvent(VK_TAB, true);
             [self setNeedsDisplay];
             continue;
         }
@@ -770,7 +824,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
             if (!buttonTouches[i] && CGRectContainsPoint(CGRectInset(actionRects[i], -6, -6), p)) {
                 buttonTouches[i] = [touch retain];
                 int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
-                if (g_runner) RunnerKeyboard_onKeyDown(g_runner->keyboard, vk);
+                bsEnqueueKeyEvent(vk, true);
                 [self setNeedsDisplay];
                 break;
             }
@@ -811,7 +865,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
             continue;
         }
         if (touch == ffTouch) {
-            if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_TAB);
+            bsEnqueueKeyEvent(VK_TAB, false);
             [ffTouch release];
             ffTouch = nil;
             [self setNeedsDisplay];
@@ -820,7 +874,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
         for (int i = 0; i < 3; i++) {
             if (touch == buttonTouches[i]) {
                 int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
-                if (g_runner) RunnerKeyboard_onKeyUp(g_runner->keyboard, vk);
+                bsEnqueueKeyEvent(vk, false);
                 [buttonTouches[i] release];
                 buttonTouches[i] = nil;
                 [self setNeedsDisplay];
