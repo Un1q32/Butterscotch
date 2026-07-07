@@ -486,7 +486,6 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
             free(swFbCopy);
         size_t rfbSize = sizeof(uint32_t) * glWidth * glHeight;
         swFbCopy = safeMalloc(rfbSize);
-        memset(swFbCopy, 0, rfbSize);
         swFbCopyWidth = glWidth;
         swFbCopyHeight = glHeight;
     }
@@ -509,7 +508,7 @@ void platformSwapBuffers(void) {
         for (int y = 0; y < fbHeight; ++y) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
-            memcpy(dstline, srcline, fbWidth);
+            memcpy(dstline, srcline, fbWidth * sizeof(uint32_t));
         }
         nextFb = NULL;
 
