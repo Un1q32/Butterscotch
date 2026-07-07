@@ -451,6 +451,8 @@ void platformInitFunctions(Runner *runner) {
         if (gfx == SOFTWARE) {
             glGenFramebuffers = glGenFramebuffersOES;
             glGenRenderbuffers = glGenRenderbuffersOES;
+            glBindFramebuffer = glBindFramebufferOES;
+            glBindRenderbuffer = glBindRenderbufferOES;
             fprintf(stderr, "glGenTextures: %p\n", glGenTextures);
             glGenTextures(1, &swTexture);
         }
