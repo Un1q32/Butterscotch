@@ -456,19 +456,8 @@ void platformInitFunctions(Runner *runner) {
             glFramebufferRenderbuffer = glFramebufferRenderbufferOES;
             glDeleteFramebuffers = glDeleteFramebuffersOES;
             glDeleteRenderbuffers = glDeleteRenderbuffersOES;
-            glGenTextures(1, &swTexture);
 
-            /* GLES defaults GL_TEXTURE_MIN_FILTER to
-             * GL_NEAREST_MIPMAP_LINEAR, which requires a complete mipmap
-             * chain. platformSwapBuffers() only ever uploads a single base
-             * level via glTexImage2D, so without overriding this the
-             * texture is "incomplete" per the GLES spec -- and on iOS's
-             * PowerVR-derived driver stack, sampling an incomplete
-             * texture returns solid white rather than black. That's the
-             * pure-white-screen bug: set filtering (no mipmaps needed)
-             * and clamp-to-edge wrap (harmless, and avoids any GL_REPEAT
-             * seam artifacts from the unused padding in the PO2 buffer)
-             * once, right after the texture object is created. */
+            glGenTextures(1, &swTexture);
             glBindTexture(GL_TEXTURE_2D, swTexture);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
