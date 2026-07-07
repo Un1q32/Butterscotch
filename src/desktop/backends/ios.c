@@ -93,6 +93,10 @@ static char g_ffSpeedArg[64] = "--fast-forward-speed=4";
  * the setting can only be changed from the menu, never mid-game. */
 static atomic_bool g_highResEnabled = false;
 
+/* Cached copy of the renderer setting, refreshed from NSUserDefaults once per
+ * game launch in startGameWithFolder:. */
+static char g_rendererArg[32] = "software";
+
 #define BS_GAMES_ROOT_PATH @"/var/mobile/Documents/Butterscotch"
 
 static void bsRequestRelayout(void) {
@@ -443,12 +447,16 @@ void platformInitFunctions(Runner *runner) {
 
     /* this can't be in platformInit because glad hasn't initialized yet */
     if (!glInited) {
+#ifdef ENABLE_SW_RENDERER
+        if (gfx == SOFTWARE) {
+            glGenFramebuffers = glGenFramebuffersOES;
+            glGenRenderbuffers = glGenRenderbuffersOES;
+            fprintf(stderr, "glGenTextures: %p\n", glGenTextures);
+            glGenTextures(1, &swTexture);
+        }
+#endif
         glGenFramebuffers(1, &framebuffer);
         glGenRenderbuffers(1, &renderbuffer);
-#ifdef ENABLE_SW_RENDERER
-        if (gfx == SOFTWARE)
-            glGenTextures(1, &swTexture);
-#endif
         glInited = true;
     }
 
@@ -847,6 +855,10 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 #define BS_HIGH_RES_DEFAULTS_KEY @"BSHighResolution"
 
+#define BS_RENDERER_DEFAULTS_KEY @"BSRenderer"
+#define BS_RENDERER_SOFTWARE    0
+#define BS_RENDERER_MODERN_GL   1
+
 /* Falls back to the default any time the stored value is missing or
  * non-positive (e.g. first launch, or a corrupted/edited defaults plist). */
 static double bsLoadFastForwardSpeed(void) {
@@ -858,6 +870,25 @@ static double bsLoadFastForwardSpeed(void) {
  * by default with no separate first-launch handling needed. */
 static bool bsLoadHighResEnabled(void) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:BS_HIGH_RES_DEFAULTS_KEY];
+}
+
+/* Returns the saved renderer preference, defaulting to software if never set. */
+static int bsLoadRendererPreference(void) {
+    NSInteger v = [[NSUserDefaults standardUserDefaults] integerForKey:BS_RENDERER_DEFAULTS_KEY];
+    if (v != BS_RENDERER_SOFTWARE && v != BS_RENDERER_MODERN_GL)
+        return BS_RENDERER_SOFTWARE;
+    return (int)v;
+}
+
+/* Checks if the device supports OpenGL ES 2.0. On iOS 2.0+, this can be
+ * checked by trying to create an EAGLContext with API=2. */
+static bool bsSupportsGLES2(void) {
+    EAGLContext *testContext = [[EAGLContext alloc] initWithAPI:2];
+    if (testContext) {
+        [testContext release];
+        return true;
+    }
+    return false;
 }
 
 /* Renders a simple gear glyph into a UIImage via Core Graphics, rather than
@@ -904,6 +935,7 @@ static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
 @interface BSSettingsViewController : UIViewController <UITextFieldDelegate> {
     UITextField *speedField;
     UISwitch *highResSwitch;
+    UISegmentedControl *rendererControl;
 }
 @end
 
@@ -958,6 +990,32 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     highResLabel.backgroundColor = [UIColor clearColor];
     [root addSubview:highResLabel];
 
+    /* Renderer selection: segmented control with Software and Modern GL options.
+     * Only show this if both renderers are available, otherwise force the appropriate one. */
+#if !defined(ENABLE_MODERN_GL) || !defined(ENABLE_SW_RENDERER)
+    rendererControl = nil;
+#else
+    bool supportsGLES2 = bsSupportsGLES2();
+    rendererControl = [[UISegmentedControl alloc] initWithItems:[NSArray arrayWithObjects:@"Software", @"Modern GL", nil]];
+    [rendererControl sizeToFit];
+    CGRect rendererFrame = rendererControl.frame;
+    rendererFrame.origin = CGPointMake(20, 150);
+    rendererFrame.size.width = bounds.size.width - 40;
+    rendererControl.frame = rendererFrame;
+    rendererControl.selectedSegmentIndex = bsLoadRendererPreference();
+    rendererControl.enabled = supportsGLES2;
+    if (!supportsGLES2) {
+        rendererControl.selectedSegmentIndex = BS_RENDERER_SOFTWARE;
+    }
+    [root addSubview:rendererControl];
+
+    UILabel *rendererLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 130, bounds.size.width - 40, 20)] autorelease];
+    rendererLabel.text = @"Renderer:";
+    rendererLabel.font = [UIFont systemFontOfSize:15.0f];
+    rendererLabel.backgroundColor = [UIColor clearColor];
+    [root addSubview:rendererLabel];
+#endif
+
     self.view = root;
 }
 
@@ -983,6 +1041,10 @@ static UIKeyboardType bsNumericKeyboardType(void) {
      * value (or the default) is left untouched. */
 
     [[NSUserDefaults standardUserDefaults] setBool:highResSwitch.isOn forKey:BS_HIGH_RES_DEFAULTS_KEY];
+#if defined(ENABLE_MODERN_GL) && defined(ENABLE_SW_RENDERER)
+    if (rendererControl)
+        [[NSUserDefaults standardUserDefaults] setInteger:rendererControl.selectedSegmentIndex forKey:BS_RENDERER_DEFAULTS_KEY];
+#endif
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     [[[UIApplication sharedApplication] delegate] performSelector:@selector(settingsDone)];
@@ -996,6 +1058,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 - (void)dealloc {
     [speedField release];
     [highResSwitch release];
+    if (rendererControl) [rendererControl release];
     [super dealloc];
 }
 
@@ -1194,8 +1257,9 @@ extern int game_main(int argc, char *argv[]);
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
-    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, g_gamePath, NULL };
-    game_main(5, argv);
+    static char arg3[] = "--renderer";
+    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, arg3, g_rendererArg, g_gamePath, NULL };
+    game_main(7, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
@@ -1208,6 +1272,22 @@ extern int game_main(int argc, char *argv[]);
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
     atomic_store(&g_highResEnabled, bsLoadHighResEnabled());
+
+#if defined(ENABLE_MODERN_GL) && defined(ENABLE_SW_RENDERER)
+    int rendererPref = bsLoadRendererPreference();
+    if (rendererPref == BS_RENDERER_MODERN_GL && bsSupportsGLES2()) {
+        snprintf(g_rendererArg, sizeof(g_rendererArg), "modern-gl");
+    } else {
+        snprintf(g_rendererArg, sizeof(g_rendererArg), "software");
+    }
+#elif defined(ENABLE_MODERN_GL)
+    snprintf(g_rendererArg, sizeof(g_rendererArg), "modern-gl");
+#elif defined(ENABLE_SW_RENDERER)
+    snprintf(g_rendererArg, sizeof(g_rendererArg), "software");
+#else
+    /* Neither renderer available - this shouldn't happen */
+    snprintf(g_rendererArg, sizeof(g_rendererArg), "software");
+#endif
 
     atomic_store(&quitRequested, false);
 
