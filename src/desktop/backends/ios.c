@@ -1295,6 +1295,9 @@ extern int game_main(int argc, char *argv[]);
 - (void)gameThread {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
+    optind = 1;
+    optreset = 1;
+
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
