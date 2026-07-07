@@ -1805,7 +1805,7 @@ int main(int argc, char* argv[]) {
             if (!args.headless && runner->currentRoom->speed > 0) {
                 static bool fastForwardActive = false;
                 static bool fastForwardTabPrev = false;
-                bool fastForwardTabNow = RunnerKeyboard_checkPressed(runner->keyboard, '\t');
+                bool fastForwardTabNow = RunnerKeyboard_checkPressed(runner->keyboard, VK_TAB);
                 if (args.fastForwardSpeed > 0.0 && fastForwardTabNow && !fastForwardTabPrev) {
                     fastForwardActive = !fastForwardActive;
                     lastFrameTime = nowNanos();
