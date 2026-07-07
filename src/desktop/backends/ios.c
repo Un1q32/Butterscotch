@@ -936,8 +936,9 @@ static UIKeyboardType bsNumericKeyboardType(void) {
  * app is running (or after returning from a game) show up.
  * ------------------------------------------------------------------- */
 
-@interface BSGameListViewController : UITableViewController {
+@interface BSGameListViewController : UITableViewController <UIAlertViewDelegate> {
     NSMutableArray *games;
+    NSIndexPath *pendingDeleteIndexPath;
 }
 - (void)reloadGames;
 @end
@@ -1014,6 +1015,70 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     return cell;
 }
 
+/* Enables the standard swipe-left-to-delete gesture for every row; UIKit
+ * reveals its built-in red "Delete" button automatically once this
+ * returns YES, no custom gesture recognizer needed. */
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView; (void)indexPath;
+    return YES;
+}
+
+/* Called when the user actually taps the revealed Delete button. We don't
+ * touch the filesystem here -- removing a game folder also wipes any save
+ * data living alongside data.win, so we confirm first via UIAlertView
+ * (rather than UIAlertController, which needs iOS 8+) and do the real
+ * removal from the alert's delegate callback below. */
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+       forRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+    if (editingStyle != UITableViewCellEditingStyleDelete) return;
+
+    NSString *name = [games objectAtIndex:indexPath.row];
+
+    [pendingDeleteIndexPath release];
+    pendingDeleteIndexPath = [indexPath retain];
+
+    NSString *msg = [NSString stringWithFormat:
+        @"Delete \"%@\" and all of its save data? This cannot be undone.", name];
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Delete Game"
+                                                      message:msg
+                                                     delegate:self
+                                            cancelButtonTitle:@"Cancel"
+                                            otherButtonTitles:@"Delete", nil];
+    [alert show];
+    [alert release];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+    NSIndexPath *indexPath = pendingDeleteIndexPath;
+    pendingDeleteIndexPath = nil;
+
+    if (!indexPath) return;
+    if (buttonIndex == alertView.cancelButtonIndex) {
+        [indexPath release];
+        return;
+    }
+
+    NSString *name = [games objectAtIndex:indexPath.row];
+    NSString *dir = [BS_GAMES_ROOT_PATH stringByAppendingPathComponent:name];
+
+    /* removeItemAtPath: recursively removes directory contents, so this
+     * takes data.win and any save files sitting next to it in one shot. */
+    NSError *error = nil;
+    if ([[NSFileManager defaultManager] removeItemAtPath:dir error:&error]) {
+        [games removeObjectAtIndex:indexPath.row];
+        [self.tableView deleteRowsAtIndexPaths:[NSArray arrayWithObject:indexPath]
+                               withRowAnimation:UITableViewRowAnimationFade];
+    } else {
+        NSLog(@"Butterscotch: failed to delete game directory %@: %@", dir, error);
+        /* Directory listing may now be stale (partial delete, permissions
+         * error, etc) -- resync from disk rather than trust our cache. */
+        [self reloadGames];
+    }
+
+    [indexPath release];
+}
+
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSString *folder = [games objectAtIndex:indexPath.row];
@@ -1022,6 +1087,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 }
 
 - (void)dealloc {
+    [pendingDeleteIndexPath release];
     [games release];
     [super dealloc];
 }
