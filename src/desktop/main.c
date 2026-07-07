@@ -119,8 +119,13 @@ static bool platformInitGlad(void) {
     GLVer ver = GLCommon_getGLVersion();
 
     if (ver.isGLES) {
-        if (!gladLoadGLES2Loader(platformGetProcAddress))
-            return false;
+        if (ver.major >= 2) {
+            if (!gladLoadGLES2Loader(platformGetProcAddress))
+                return false;
+        } else {
+            if (!gladLoadGLES1Loader(platformGetProcAddress))
+                return false;
+        }
     } else {
         if (!gladLoadGLLoader(platformGetProcAddress))
             return false;
