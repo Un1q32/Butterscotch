@@ -454,6 +454,8 @@ void platformInitFunctions(Runner *runner) {
             glBindRenderbuffer = glBindRenderbufferOES;
             glGetRenderbufferParameteriv = glGetRenderbufferParameterivOES;
             glFramebufferRenderbuffer = glFramebufferRenderbufferOES;
+            glDeleteFramebuffers = glDeleteFramebuffersOES;
+            glDeleteRenderbuffers = glDeleteRenderbuffersOES;
             glGenTextures(1, &swTexture);
 
             /* GLES defaults GL_TEXTURE_MIN_FILTER to
