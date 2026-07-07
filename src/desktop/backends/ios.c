@@ -506,7 +506,8 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
 void platformSwapBuffers(void) {
 #ifdef ENABLE_SW_RENDERER
     if (gfx == SOFTWARE && nextFb && swFbCopy) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glClear(GL_COLOR_BUFFER_BIT);
 
         glBindTexture(GL_TEXTURE_2D, swTexture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -514,18 +515,16 @@ void platformSwapBuffers(void) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 
-        /* Copy and swap RGB bytes (BGRA to RGBA) */
+        /* Copy to power-of-2 buffer */
         for (int y = 0; y < fbHeight; y++) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
             for (int x = 0; x < fbWidth; x++) {
-                uint32_t swapped = srcline[x];
-                swapped = (swapped & 0xFF00FF00) | ((swapped & 0xFF) << 16) | ((swapped & 0xFF0000) >> 16);
-                dstline[x] = swapped;
+                dstline[x] = srcline[x];
             }
         }
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, swFbCopy);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, swFbCopy);
 
         glEnable(GL_TEXTURE_2D);
         glDisable(GL_BLEND);
