@@ -454,7 +454,6 @@ void platformInitFunctions(Runner *runner) {
             glBindRenderbuffer = glBindRenderbufferOES;
             glGetRenderbufferParameteriv = glGetRenderbufferParameterivOES;
             glFramebufferRenderbuffer = glFramebufferRenderbufferOES;
-            fprintf(stderr, "glGenTextures: %p\n", glGenTextures);
             glGenTextures(1, &swTexture);
         }
 #endif
@@ -510,7 +509,7 @@ void platformSwapBuffers(void) {
         }
         nextFb = NULL;
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, swFbCopy);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, swFbCopy);
 
         glEnableClientState(GL_VERTEX_ARRAY);
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
