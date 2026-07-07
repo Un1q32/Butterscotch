@@ -37,16 +37,6 @@ static atomic_bool quitRequested = false;
 
 static Runner *g_runner;
 
-#ifdef ENABLE_SW_RENDERER
-static int NearestPO2(int i) {
-    for (int j = 1; j < 1024 * 1024; j *= 2) {
-        if (i < j)
-            return j;
-    }
-    return i; /* fallback */
-}
-#endif
-
 static EAGLContext *glcontext;
 static GLuint framebuffer;
 static GLuint renderbuffer;
@@ -475,6 +465,14 @@ void platformInitFunctions(Runner *runner) {
 }
 
 #ifdef ENABLE_SW_RENDERER
+
+static GLint NearestPO2(GLint i) {
+    for (GLint j = 1; j < 1024 * 1024; j *= 2)
+        if (i < j)
+            return j;
+    assert(!"this shouldn't happen");
+    return i; /* fallback */
+}
 
 void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
     nextFb = framebuffer;
