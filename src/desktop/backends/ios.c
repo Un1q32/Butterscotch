@@ -455,6 +455,23 @@ void platformInitFunctions(Runner *runner) {
             glGetRenderbufferParameteriv = glGetRenderbufferParameterivOES;
             glFramebufferRenderbuffer = glFramebufferRenderbufferOES;
             glGenTextures(1, &swTexture);
+
+            /* GLES defaults GL_TEXTURE_MIN_FILTER to
+             * GL_NEAREST_MIPMAP_LINEAR, which requires a complete mipmap
+             * chain. platformSwapBuffers() only ever uploads a single base
+             * level via glTexImage2D, so without overriding this the
+             * texture is "incomplete" per the GLES spec -- and on iOS's
+             * PowerVR-derived driver stack, sampling an incomplete
+             * texture returns solid white rather than black. That's the
+             * pure-white-screen bug: set filtering (no mipmaps needed)
+             * and clamp-to-edge wrap (harmless, and avoids any GL_REPEAT
+             * seam artifacts from the unused padding in the PO2 buffer)
+             * once, right after the texture object is created. */
+            glBindTexture(GL_TEXTURE_2D, swTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         }
 #endif
         glGenFramebuffers(1, &framebuffer);
@@ -504,14 +521,12 @@ void platformSwapBuffers(void) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
             for (int x = 0; x < fbWidth; x++) {
-                uint32_t swapped = srcline[x];
-                swapped = (swapped & 0xFF00FF00) | ((swapped & 0xFF) << 16) | ((swapped & 0xFF0000) >> 16);
-                dstline[x] = swapped;
+                dstline[x] = srcline[x];
             }
         }
         nextFb = NULL;
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, swFbCopy);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, swFbCopyWidth, swFbCopyHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, swFbCopy);
 
         glEnableClientState(GL_VERTEX_ARRAY);
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
