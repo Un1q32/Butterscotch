@@ -548,7 +548,7 @@ void platformSwapBuffers(void) {
         glDisable(GL_TEXTURE_2D);
         glDisableClientState(GL_VERTEX_ARRAY);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-        glBindRenderbuffer(GL_RENDERBUFFER, colorRenderbuffer);
+        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
     }
 #endif
     [glcontext presentRenderbuffer:GL_RENDERBUFFER];
