@@ -501,12 +501,28 @@ void platformSwapBuffers(void) {
         glLoadIdentity();
 
         glColor4f(1, 1, 1, 1);
-        glBegin(GL_QUADS);
-        glTexCoord2f(0, 0); glVertex2f(0, 0);
-        glTexCoord2f(1, 0); glVertex2f(fbWidth, 0);
-        glTexCoord2f(1, 1); glVertex2f(fbWidth, fbHeight);
-        glTexCoord2f(0, 1); glVertex2f(0, fbHeight);
-        glEnd();
+
+        /* GLES 1.1 doesn't support glBegin/glEnd, use vertex arrays instead */
+        GLfloat vertices[] = {
+            0, 0,
+            fbWidth, 0,
+            fbWidth, fbHeight,
+            0, fbHeight
+        };
+        GLfloat texCoords[] = {
+            0, 0,
+            1, 0,
+            1, 1,
+            0, 1
+        };
+
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(2, GL_FLOAT, 0, vertices);
+        glTexCoordPointer(2, GL_FLOAT, 0, texCoords);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 
         nextFb = NULL;
     }
