@@ -45,6 +45,11 @@ static GLint fbWidth  = 0;
 static GLint fbHeight = 0;
 static CAEAGLLayer *layer;
 
+#ifdef ENABLE_SW_RENDERER
+static uint32_t* nextFb = NULL;
+static GLuint swTexture = 0;
+#endif
+
 /* Requested render resolution, as set via platformSetWindowSize() (and
  * seeded from platformInit()'s reqW/reqH before that's ever called). Used
  * to pick a CAEAGLLayer contentsScale that renders at roughly this pixel
@@ -275,6 +280,10 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
         if (!glcontext)
             glcontext = [[EAGLContext alloc] initWithAPI:2];
 #endif
+#ifdef ENABLE_SW_RENDERER
+    if (gfx == SOFTWARE)
+        glcontext = [[EAGLContext alloc] initWithAPI:1];
+#endif
 
     if (!glcontext) {
         fprintf(stderr, "Failed to create an OpenGLES context\n");
@@ -294,6 +303,9 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
 void platformExit(void) {
     if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
     if (renderbuffer) glDeleteRenderbuffers(1, &renderbuffer);
+#ifdef ENABLE_SW_RENDERER
+    if (swTexture) glDeleteTextures(1, &swTexture);
+#endif
     [glcontext release];
     glcontext = nil;
     framebuffer = 0;
@@ -392,6 +404,20 @@ static void applyRenderScale(void) {
 }
 
 static void resizeFramebuffer(void) {
+#ifdef ENABLE_SW_RENDERER
+    if (gfx == SOFTWARE) {
+        applyRenderScale();
+
+        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
+
+        glViewport(0, 0, fbWidth, fbHeight);
+        return;
+    }
+#endif
+
     applyRenderScale();
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
@@ -419,6 +445,10 @@ void platformInitFunctions(Runner *runner) {
     if (!glInited) {
         glGenFramebuffers(1, &framebuffer);
         glGenRenderbuffers(1, &renderbuffer);
+#ifdef ENABLE_SW_RENDERER
+        if (gfx == SOFTWARE)
+            glGenTextures(1, &swTexture);
+#endif
         glInited = true;
     }
 
@@ -426,7 +456,49 @@ void platformInitFunctions(Runner *runner) {
     atomic_store(&needsResize, false);
 }
 
+#ifdef ENABLE_SW_RENDERER
+
+void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
+    nextFb = framebuffer;
+    fbWidth = width;
+    fbHeight = height;
+}
+
+#endif
+
 void platformSwapBuffers(void) {
+#ifdef ENABLE_SW_RENDERER
+    if (gfx == SOFTWARE && nextFb) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        glBindTexture(GL_TEXTURE_2D, swTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fbWidth, fbHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, nextFb);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+
+        glEnable(GL_TEXTURE_2D);
+        glDisable(GL_BLEND);
+
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrthof(0, fbWidth, 0, fbHeight, -1, 1);
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+
+        glColor4f(1, 1, 1, 1);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0, 0); glVertex2f(0, 0);
+        glTexCoord2f(1, 0); glVertex2f(fbWidth, 0);
+        glTexCoord2f(1, 1); glVertex2f(fbWidth, fbHeight);
+        glTexCoord2f(0, 1); glVertex2f(0, fbHeight);
+        glEnd();
+
+        nextFb = NULL;
+    }
+#endif
     [glcontext presentRenderbuffer:GL_RENDERBUFFER];
 }
 
