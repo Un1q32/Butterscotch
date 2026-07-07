@@ -522,9 +522,7 @@ void platformSwapBuffers(void) {
         for (int y = 0; y < fbHeight; ++y) {
             uint32_t* dstline = swFbCopy + y * swFbCopyWidth;
             const uint32_t* srcline = nextFb + y * fbWidth;
-            for (int x = 0; x < fbWidth; x++) {
-                dstline[x] = srcline[x];
-            }
+            memcpy(dstline, srcline, fbWidth);
         }
         nextFb = NULL;
 
