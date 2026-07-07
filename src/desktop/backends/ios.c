@@ -453,6 +453,8 @@ void platformInitFunctions(Runner *runner) {
             glGenRenderbuffers = glGenRenderbuffersOES;
             glBindFramebuffer = glBindFramebufferOES;
             glBindRenderbuffer = glBindRenderbufferOES;
+            glGetRenderbufferParameteriv = glGetRenderbufferParameterivOES;
+            glFramebufferRenderbuffer = glFramebufferRenderbufferOES;
             fprintf(stderr, "glGenTextures: %p\n", glGenTextures);
             glGenTextures(1, &swTexture);
         }
