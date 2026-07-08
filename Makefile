@@ -219,11 +219,11 @@ compat/config.mk: compat/configure.sh compat/tmp/cc
 
 endif
 
-build/butterscotch: $(OBJS) $(if $(filter iOS,$(OS)),targets/ios/build-ipa.sh $(wildcard targets/ios/assets/*))
+build/butterscotch: $(OBJS) $(if $(filter iOS,$(OS)),artifacts/ios/build-ipa.sh $(wildcard artifacts/ios/assets/*))
 	@{ [ -z "$(NO_COLOR)" ] && [ -t 1 ]; } && printf " \033[1;34mLD\033[0m butterscotch\n" || printf " LD butterscotch\n"
 	$(V)MSYS2_ARG_CONV_EXCL='*' $(CCLINK) $(LDFLAGS) $(OBJS) $(LIBS) $(EXTRALIBS) $(OUTPUT_EXE)$@
 	@[ -f $@.exe ] && chmod +x $@.exe || true
-	@if [ "$(OS)" = 'iOS' ]; then targets/ios/build-ipa.sh; fi
+	@if [ "$(OS)" = 'iOS' ]; then artifacts/ios/build-ipa.sh; fi
 
 build/%.c.$(OBJ_EXT): %.c compat/config.mk $(if $(DISABLE_MMD),$(HEADERS))
 	@mkdir -p $(dir $@)
