@@ -200,18 +200,23 @@ jobs:
           [ -f workspacecache.tar ] && mv workspacecache.tar ${{ github.workspace }} || true
       - name: Install dependencies
         run: |
+          wget https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y ccache libplist-dev
+          sudo apt-get install -y ccache libplist-dev libplist-utils clang-22
           [ -f workspacecache.tar ] && tar xf workspacecache.tar
           ./artifacts/ios/build-toolchain.sh
           tar cf workspacecache.tar artifacts/ios/build/toolchain
           mv workspacecache.tar ~
       - name: Build
         run: |
+          ios-cc -v
           PATH="$PWD/artifacts/ios/build/toolchain/bin:$PATH" make \
               NO_COLOR=1 \
               VERBOSE=1 \
               CC='ccache ios-cc'
+        env:
+          CLANG: clang-22
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
