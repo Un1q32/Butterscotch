@@ -24,6 +24,7 @@ if ! [ -d sdks/ios8-sdk ] || [ "$(cat sdks/sdkver 2>/dev/null)" != "$sdkver" ]; 
     mv iPhoneOS8.0.sdk sdks/ios8-sdk
     rm iPhoneOS8.0.sdk.tar.lzma
     printf '%s' "$sdkver" > sdks/sdkver
+    cp ../SDKSettings.json sdks/ios8-sdk
 fi
 
 if command -v nproc >/dev/null; then
