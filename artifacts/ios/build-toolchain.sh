@@ -5,8 +5,6 @@ set -e
 [ "${0%/*}" = "$0" ] && scriptroot="." || scriptroot="${0%/*}"
 cd "$scriptroot"
 
-platformdir=$PWD
-
 workdir="$PWD/build"
 mkdir -p "$workdir"
 cd "$workdir"
