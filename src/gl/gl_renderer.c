@@ -729,11 +729,6 @@ static void glEndFrameInit(Renderer* renderer) {
         glBindFramebuffer(GL_FRAMEBUFFER, gl->hostFramebuffer);
         return;
     }
-
-    if (gl->isGL3) {
-        int32_t appId = gl->base.runner->applicationSurfaceId;
-        GLCommon_beginLetterboxBlit(gl->surfaces[appId], gl->hostFramebuffer);
-    }
 }
 
 static void glEndFrameEnd(Renderer* renderer) {
