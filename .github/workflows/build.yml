@@ -201,7 +201,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache
+          sudo apt-get install -y ccache libplist-dev
           [ -f workspacecache.tar ] && tar xf workspacecache.tar
           ./artifacts/ios/build-toolchain.sh
           tar cf workspacecache.tar artifacts/ios/build/toolchain
