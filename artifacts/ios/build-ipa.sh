@@ -13,13 +13,13 @@ printf 'Creating butterscotch.ipa\n'
 rm -rf "$apppath"
 mkdir -p "$apppath"
 if command -v ldid >/dev/null; then
-    ldid -Stargets/ios/butterscotch.entitlements build/butterscotch
+    ldid -Sartifacts/ios/butterscotch.entitlements build/butterscotch
 else
-    codesign -f -s - --entitlements targets/ios/butterscotch.entitlements build/butterscotch
+    codesign -f -s - --entitlements artifacts/ios/butterscotch.entitlements build/butterscotch
 fi
 cp build/butterscotch "$apppath/butterscotch"
-cp -a targets/ios/assets/* "$apppath"
-command -v plistutil >/dev/null && plistutil -i targets/ios/assets/Info.plist -o "$apppath/Info.plist" -f bin
+cp -a artifacts/ios/assets/* "$apppath"
+command -v plistutil >/dev/null && plistutil -i artifacts/ios/assets/Info.plist -o "$apppath/Info.plist" -f bin
 
 cd build
 rm -f butterscotch.ipa
