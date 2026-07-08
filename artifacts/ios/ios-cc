@@ -2,12 +2,7 @@
 
 [ "${0%/*}" = "$0" ] && scriptroot="." || scriptroot="${0%/*}"
 
-case $0 in
-    *++) cc="clang++" ;;
-    *)   cc="clang"   ;;
-esac
-
-exec "$cc" \
+exec "${CLANG:-clang}" \
     -mlinker-version=762 \
     "$@" \
     -isysroot "$scriptroot/../../sdks/ios8-sdk" \
