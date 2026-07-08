@@ -63,7 +63,7 @@ fi
 
 # toolchainver should be increased if we ever make a change to the toolchain,
 # for example using a newer cctools version, and we need to invalidate the cache.
-toolchainver=1
+toolchainver=2
 if [ "$(cat toolchain/toolchainver 2>/dev/null)" != "$toolchainver" ]; then
     outdated_toolchain=1
 fi
@@ -121,7 +121,7 @@ if [ "$(uname -s)" != "Darwin" ] && ! command -v ldid >/dev/null; then
     rm -rf "ldid-$ldid_commit" &
 fi
 
-cp ../ios-cc toolchain/bin
+ln -s ../../../ios-cc toolchain/bin
 
 printf '%s' "$toolchainver" > toolchain/toolchainver
 wait

@@ -210,7 +210,7 @@ jobs:
           mv workspacecache.tar ~
       - name: Build
         run: |
-          PATH="$PWD/artifacts/ios/build/toolchain/bin:$PATH" CLANG=clang-22 ios-cc -v
+          PATH="$PWD/artifacts/ios/build/toolchain/bin:$PATH" ios-cc -v
           PATH="$PWD/artifacts/ios/build/toolchain/bin:$PATH" make \
               NO_COLOR=1 \
               VERBOSE=1 \
