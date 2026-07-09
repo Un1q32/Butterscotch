@@ -1712,10 +1712,13 @@ extern int game_main(int argc, char *argv[]);
 @end
 
 int main(int argc, char *argv[]) {
-    freopen("/tmp/bsout", "w", stdout);
-    dup2(fileno(stdout), fileno(stderr));
-    setbuf(stderr, NULL);
-    setbuf(stdout, NULL);
+    FILE *f = fopen("/tmp/bsout", "w");
+    if (f) {
+        dup2(fileno(f), STDOUT_FILENO);
+        dup2(fileno(f), STDERR_FILENO);
+        setbuf(stdout, NULL);
+        setbuf(stderr, NULL);
+    }
 
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     int ret = UIApplicationMain(argc, argv, nil, @"AppDelegate");
