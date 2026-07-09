@@ -1231,10 +1231,37 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 
     NSFileManager *fm = [NSFileManager defaultManager];
     NSError *error = nil;
+
+    /* Check if the games directory exists, create it if not */
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:BS_GAMES_ROOT_PATH isDirectory:&isDir]) {
+        error = nil;
+        [fm createDirectoryAtPath:BS_GAMES_ROOT_PATH withIntermediateDirectories:YES attributes:nil error:&error];
+        if (error) {
+            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
+                                                          message:[NSString stringWithFormat:@"Could not create games directory: %@", [error localizedDescription]]
+                                                         delegate:nil
+                                                cancelButtonTitle:@"OK"
+                                                otherButtonTitles:nil];
+            [alert show];
+            [alert release];
+            return;
+        }
+    } else if (!isDir) {
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
+                                                      message:@"Games path exists but is not a directory"
+                                                     delegate:nil
+                                            cancelButtonTitle:@"OK"
+                                            otherButtonTitles:nil];
+        [alert show];
+        [alert release];
+        return;
+    }
+
     NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:&error];
     if (error) {
         UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                      message:[error localizedDescription]
+                                                      message:[NSString stringWithFormat:@"Could not scan games directory: %@", [error localizedDescription]]
                                                      delegate:nil
                                             cancelButtonTitle:@"OK"
                                             otherButtonTitles:nil];
