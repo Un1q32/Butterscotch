@@ -1233,7 +1233,13 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     NSError *error = nil;
     NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:&error];
     if (error) {
-        fprintf(stderr, "Error scanning game directory: %s\n", [[error localizedDescription] UTF8String]);
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
+                                                      message:[error localizedDescription]
+                                                     delegate:nil
+                                            cancelButtonTitle:@"OK"
+                                            otherButtonTitles:nil];
+        [alert show];
+        [alert release];
         return;
     }
     for (NSString *name in entries) {
