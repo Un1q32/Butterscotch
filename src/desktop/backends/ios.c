@@ -1662,10 +1662,11 @@ extern int game_main(int argc, char *argv[]);
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
-    static char arg3[] = "--renderer";
-    static char arg4[] = "--save-folder";
-    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, arg3, g_rendererArg, arg4, g_saveFolderPath, g_gamePath, NULL };
-    game_main(9, argv);
+    static char arg3[] = "--load-type=load-per-chunk";
+    static char arg4[] = "--renderer";
+    static char arg5[] = "--save-folder";
+    char *argv[] = { arg0, arg1, arg2, arg3, g_ffSpeedArg, arg4, g_rendererArg, arg5, g_saveFolderPath, g_gamePath, NULL };
+    game_main(10, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
