@@ -1403,18 +1403,17 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     }
 }
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    /* Disable all automatic inset adjustment — the 7.0 SDK's
-     * automaticallyAdjustsScrollViewInsets doesn't understand the XS safe
-     * area (44pt status) and only insets 64pt (44 nav + 20 old-style status).
-     * On iOS 11+ the KVC call also disables the modern equivalent. */
-    self.automaticallyAdjustsScrollViewInsets = NO;
-    if ([self.tableView respondsToSelector:@selector(setContentInsetAdjustmentBehavior:)])
-        [self.tableView setValue:@0 forKey:@"contentInsetAdjustmentBehavior"];
-    CGFloat topInset = bsDeviceHasNotch() ? 88.0f : 64.0f;
-    self.tableView.contentInset = UIEdgeInsetsMake(topInset, 0, 0, 0);
-    self.tableView.scrollIndicatorInsets = self.tableView.contentInset;
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    /* The 7.0 SDK's automaticallyAdjustsScrollViewInsets only insets 64pt
+     * (44 nav + 20 old-style status). On a notched device the status area
+     * is 44pt, so we need 24pt more for the first row to be fully visible. */
+    if (bsDeviceHasNotch() && self.tableView.contentInset.top < 66.0f) {
+        UIEdgeInsets inset = self.tableView.contentInset;
+        inset.top = 88.0f;
+        self.tableView.contentInset = inset;
+        self.tableView.scrollIndicatorInsets = inset;
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
