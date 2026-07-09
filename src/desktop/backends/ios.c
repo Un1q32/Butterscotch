@@ -75,7 +75,7 @@ static UIView *g_overlayView = nil;
 
 /* Last UIDeviceOrientation actually applied to rootView by
  * applyDeviceOrientation:, used to no-op duplicate/redundant notifications.
- * Reset to Unknown in startGameWithFolder: so each new game session always
+ * Reset to Unknown in startGameWithPath: so each new game session always
  * re-syncs to the device's current orientation, even if it's the same
  * orientation the previous session last settled into. */
 static UIDeviceOrientation g_lastAppliedOrientation = UIDeviceOrientationUnknown;
@@ -85,51 +85,63 @@ static UIDeviceOrientation g_lastAppliedOrientation = UIDeviceOrientationUnknown
 static char g_gamePath[PATH_MAX];
 
 /* Built from the persisted fast-forward speed setting right before each
- * game launch -- see AppDelegate startGameWithFolder:. Sized generously
+ * game launch -- see AppDelegate startGameWithPath:. Sized generously
  * for any reasonable floating-point value typed into the settings field. */
 static char g_ffSpeedArg[64] = "--fast-forward-speed=4";
 
 /* Cached copy of the "high resolution" setting (see BS_HIGH_RES_DEFAULTS_KEY
  * below), refreshed from NSUserDefaults once per game launch in
- * startGameWithFolder: rather than read on every applyRenderScale() call --
+ * startGameWithPath: rather than read on every applyRenderScale() call --
  * the setting can only be changed from the menu, never mid-game. */
 static atomic_bool g_highResEnabled = false;
 
 /* Cached copy of the renderer setting, refreshed from NSUserDefaults once per
- * game launch in startGameWithFolder:. */
+ * game launch in startGameWithPath:. */
 static char g_rendererArg[32] = "software";
 
-/* Games root directory. NSSearchPathForDirectoriesInDomains(
+/* Games root(s) to scan. NSSearchPathForDirectoriesInDomains(
  * NSDocumentDirectory, ...) resolves correctly on every SDK back to iOS
- * 2, but what it resolves *to* depends on how the app is installed:
+ * 2, but what it resolves *to* -- and therefore what else is worth
+ * checking -- depends on how the app is installed:
  *
- *   - Sandboxed install (App Store, or a sandboxed jailbreak profile):
- *     resolves to this app's own container, e.g.
- *     /var/mobile/Containers/Data/Application/<UUID>/Documents -- already
- *     private to Butterscotch, so use it as-is.
  *   - Unsandboxed system app (installed to /Applications, classic
  *     jailbreak-style): NSHomeDirectory() has no per-app container and
  *     just resolves to /var/mobile, so NSDocumentDirectory alone gives
  *     the literal /var/mobile/Documents -- the same shared folder every
- *     other unsandboxed app on the device also gets pointed at. Only in
- *     this specific case, append "Butterscotch" to keep this install
- *     path isolated too, matching the original hardcoded behavior.
+ *     other unsandboxed app on the device also gets pointed at. Append
+ *     "Butterscotch" to keep this install path isolated, matching the
+ *     original hardcoded behavior. There's only one root to scan here.
  *
- * Distinguish the two by comparing against the known shared path
- * literally, rather than e.g. checking for "Containers" in the path --
- * the sandboxed container layout has shifted before and isn't ours to
- * assume; /var/mobile/Documents as the unsandboxed shared docs folder
- * has been stable since early iOS and is the one thing we can rely on.
+ *   - Sandboxed install (App Store, or a sandboxed jailbreak profile):
+ *     resolves to this app's own container, e.g.
+ *     /var/mobile/Containers/Data/Application/<UUID>/Documents. Used
+ *     as-is as the primary root. But since some file managers / tweaks
+ *     write into /var/mobile/Documents/Butterscotch regardless of a
+ *     particular app's sandboxing, also scan that as a secondary root
+ *     so games dropped there are still picked up. We never create it
+ *     ourselves in this case (a sandboxed app creating files outside
+ *     its own container is a sandbox violation waiting to happen), and
+ *     if it's unreadable -- doesn't exist, permission denied, sandbox
+ *     blocks the access outright -- that's fine, reloadGames() below
+ *     just silently skips it.
  *
- * The appended subfolder is created if missing (harmless no-op if it
- * already exists) since an app can't assume the OS already created it.
+ * Distinguish sandboxed vs not by comparing the resolved Documents path
+ * against the known shared path literally, rather than e.g. checking
+ * for "Containers" in the path -- the sandboxed container layout has
+ * shifted before and isn't ours to assume; /var/mobile/Documents as the
+ * unsandboxed shared docs folder has been stable since early iOS and is
+ * the one thing we can rely on.
+ *
  * Computed and cached once, since neither the container path nor the
- * sandboxed-vs-not status changes over the process's lifetime. */
-static NSString *bsGamesRootPath(void) {
-    static NSString *cached = nil;
+ * sandboxed-vs-not status changes over the process's lifetime. Index 0
+ * is always the primary root (the only one whose read errors get
+ * surfaced to the user -- see reloadGames()). */
+static NSArray *bsGamesRootsToScan(void) {
+    static NSArray *cached = nil;
     if (!cached) {
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *docs = [paths objectAtIndex:0];
+        NSMutableArray *roots = [NSMutableArray array];
 
         if ([docs isEqualToString:@"/var/mobile/Documents"]) {
             NSString *root = [docs stringByAppendingPathComponent:@"Butterscotch"];
@@ -142,10 +154,13 @@ static NSString *bsGamesRootPath(void) {
              * install), fall back to docs itself rather than a path that
              * may not exist -- reloadGames' contentsOfDirectoryAtPath:
              * will just report the real error either way. */
-            cached = [(error ? docs : root) retain];
+            [roots addObject:(error ? docs : root)];
         } else {
-            cached = [docs retain];
+            [roots addObject:docs];
+            [roots addObject:@"/var/mobile/Documents/Butterscotch"];
         }
+
+        cached = [roots retain];
     }
     return cached;
 }
@@ -991,7 +1006,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
  * toggle, both persisted via NSUserDefaults. The fast-forward speed is
  * applied as a --fast-forward-speed=<n> argv entry, and the high-res flag
  * is cached into g_highResEnabled, the next time a game is launched (see
- * AppDelegate startGameWithFolder:).
+ * AppDelegate startGameWithPath:).
  * ------------------------------------------------------------------- */
 
 #define BS_FF_SPEED_DEFAULTS_KEY @"BSFastForwardSpeed"
@@ -1209,7 +1224,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 @end
 
 /* ---------------------------------------------------------------------
- * Game selection menu. Scans the games root (see bsGamesRootPath()
+ * Game selection menu. Scans the games roots (see bsGamesRootsToScan()
  * above -- a "Butterscotch" folder under Documents, one way or another)
  * for subfolders that contain a data.win, and lets the user pick one.
  * Re-scans every time the view (re)appears so games dropped in via file
@@ -1277,29 +1292,57 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     [[[UIApplication sharedApplication] delegate] performSelector:@selector(showSettings)];
 }
 
+/* Each entry in `games` is an NSDictionary with:
+ *   "name" -- the folder's display name (may repeat across roots if the
+ *             same name exists in more than one scanned root -- we don't
+ *             dedupe, since they could be entirely different games that
+ *             just happen to share a folder name).
+ *   "path" -- the full path to that folder, already resolved against
+ *             whichever root it was found under. Kept in full rather
+ *             than re-derived from bsGamesRootsToScan() + name at
+ *             use-time, since a name alone is now ambiguous as to which
+ *             root it came from. */
 - (void)reloadGames {
     [games removeAllObjects];
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSError *error = nil;
-    NSArray *entries = [fm contentsOfDirectoryAtPath:bsGamesRootPath() error:&error];
-    if (error) {
-        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                      message:[error localizedDescription]
-                                                     delegate:nil
-                                            cancelButtonTitle:@"OK"
-                                            otherButtonTitles:nil];
-        [alert show];
-        [alert release];
-        return;
-    }
-    for (NSString *name in entries) {
-        NSString *dir = [bsGamesRootPath() stringByAppendingPathComponent:name];
-        BOOL isDir = NO;
-        if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
+    NSArray *roots = bsGamesRootsToScan();
 
-        NSString *dataWin = [dir stringByAppendingPathComponent:@"data.win"];
-        if ([fm fileExistsAtPath:dataWin]) [games addObject:name];
+    for (NSUInteger i = 0; i < [roots count]; i++) {
+        NSString *root = [roots objectAtIndex:i];
+        NSError *error = nil;
+        NSArray *entries = [fm contentsOfDirectoryAtPath:root error:&error];
+        if (error) {
+            /* Only the primary root (index 0) is expected to always be
+             * readable -- it's either our own sandboxed container or a
+             * freshly-created directory. Secondary roots (currently just
+             * the shared /var/mobile/Documents/Butterscotch courtesy
+             * scan when sandboxed) are allowed to be missing/unreadable;
+             * silently skip those rather than alerting the user to
+             * something they can't do anything about. */
+            if (i == 0) {
+                UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
+                                                              message:[error localizedDescription]
+                                                             delegate:nil
+                                                    cancelButtonTitle:@"OK"
+                                                    otherButtonTitles:nil];
+                [alert show];
+                [alert release];
+            }
+            continue;
+        }
+
+        for (NSString *name in entries) {
+            NSString *dir = [root stringByAppendingPathComponent:name];
+            BOOL isDir = NO;
+            if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
+
+            NSString *dataWin = [dir stringByAppendingPathComponent:@"data.win"];
+            if ([fm fileExistsAtPath:dataWin]) {
+                [games addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                                   name, @"name", dir, @"path", nil]];
+            }
+        }
     }
 
     [self.tableView reloadData];
@@ -1359,9 +1402,9 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 #endif
     }
 #if __IPHONE_OS_VERSION_MIN_REQUIRED >= 30000
-    cell.textLabel.text = [games objectAtIndex:indexPath.row];
+    cell.textLabel.text = [[games objectAtIndex:indexPath.row] objectForKey:@"name"];
 #else
-    cell.text = [games objectAtIndex:indexPath.row];
+    cell.text = [[games objectAtIndex:indexPath.row] objectForKey:@"name"];
 #endif
     return cell;
 }
@@ -1384,7 +1427,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     (void)tableView;
     if (editingStyle != UITableViewCellEditingStyleDelete) return;
 
-    NSString *name = [games objectAtIndex:indexPath.row];
+    NSString *name = [[games objectAtIndex:indexPath.row] objectForKey:@"name"];
 
     [pendingDeleteIndexPath release];
     pendingDeleteIndexPath = [indexPath retain];
@@ -1410,8 +1453,8 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         return;
     }
 
-    NSString *name = [games objectAtIndex:indexPath.row];
-    NSString *dir = [bsGamesRootPath() stringByAppendingPathComponent:name];
+    NSDictionary *entry = [games objectAtIndex:indexPath.row];
+    NSString *dir = [entry objectForKey:@"path"];
 
     /* removeItemAtPath: recursively removes directory contents, so this
      * takes data.win and any save files sitting next to it in one shot. */
@@ -1432,9 +1475,9 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    NSString *folder = [games objectAtIndex:indexPath.row];
+    NSString *gameDir = [[games objectAtIndex:indexPath.row] objectForKey:@"path"];
     id delegate = [[UIApplication sharedApplication] delegate];
-    [delegate performSelector:@selector(startGameWithFolder:) withObject:folder];
+    [delegate performSelector:@selector(startGameWithPath:) withObject:gameDir];
 }
 
 - (void)dealloc {
@@ -1459,7 +1502,7 @@ extern int game_main(int argc, char *argv[]);
     UINavigationController *navController;
     BOOL usingRootViewController;
 }
-- (void)startGameWithFolder:(NSString *)folderName;
+- (void)startGameWithPath:(NSString *)gamePath;
 - (void)returnToMenu;
 - (void)showSettings;
 - (void)settingsDone;
@@ -1487,9 +1530,8 @@ extern int game_main(int argc, char *argv[]);
     [pool release];
 }
 
-- (void)startGameWithFolder:(NSString *)folderName {
-    NSString *dataWin = [[bsGamesRootPath() stringByAppendingPathComponent:folderName]
-                          stringByAppendingPathComponent:@"data.win"];
+- (void)startGameWithPath:(NSString *)gamePath {
+    NSString *dataWin = [gamePath stringByAppendingPathComponent:@"data.win"];
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
     atomic_store(&g_highResEnabled, bsLoadHighResEnabled());
