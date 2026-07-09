@@ -237,12 +237,13 @@ static void bsDrainKeyEvents(void) {
 /* ---------------------------------------------------------------------
  * Touch control layout
  *
- * Portrait: game view anchored to the top of the screen, dpad + z/x/c
- * strip along the bottom (gameboy-ish). Landscape: game view centered,
- * dpad on the left, z/x/c on the right. If the requested aspect ratio
- * needs more space than what's left after reserving the control strip,
- * the game view is allowed to grow into the control area rather than
- * get squashed -- the controls are translucent, so this is fine.
+ * Portrait: game view anchored to the top of the screen, joystick +
+ * z/x/c strip along the bottom (gameboy-ish). Landscape: game view
+ * centered, joystick on the left, z/x/c on the right. If the requested
+ * aspect ratio needs more space than what's left after reserving the
+ * control strip, the game view is allowed to grow into the control
+ * area rather than get squashed -- the controls are translucent, so
+ * this is fine.
  * ------------------------------------------------------------------- */
 
 #define BS_CONTROL_STRIP_PORTRAIT_H   160.0f
@@ -306,19 +307,23 @@ static BSLayout computeLayout(CGSize screen) {
     return layout;
 }
 
-static void dpadArmRects(CGRect dpad, CGRect *up, CGRect *down, CGRect *left, CGRect *right) {
-    CGFloat cx = dpad.origin.x + dpad.size.width  / 2.0f;
-    CGFloat cy = dpad.origin.y + dpad.size.height / 2.0f;
-    CGFloat armW = dpad.size.width  / 3.0f;
-    CGFloat armH = dpad.size.height / 3.0f;
-    *up    = CGRectMake(cx - armW / 2.0f, dpad.origin.y, armW, armH);
-    *down  = CGRectMake(cx - armW / 2.0f, dpad.origin.y + dpad.size.height - armH, armW, armH);
-    *left  = CGRectMake(dpad.origin.x, cy - armH / 2.0f, armW, armH);
-    *right = CGRectMake(dpad.origin.x + dpad.size.width - armW, cy - armH / 2.0f, armW, armH);
+static CGFloat joystickRadius(CGRect dpad) {
+    return fminf(dpad.size.width, dpad.size.height) * 0.45f;
 }
 
-/* 8-way split around the dpad's center so a single touch can express
- * diagonals (e.g. up+left) without needing two fingers. */
+static CGPoint joystickClampOffset(CGRect dpad, CGPoint touchPoint) {
+    CGFloat cx = dpad.origin.x + dpad.size.width  / 2.0f;
+    CGFloat cy = dpad.origin.y + dpad.size.height / 2.0f;
+    CGFloat dx = touchPoint.x - cx;
+    CGFloat dy = touchPoint.y - cy;
+    CGFloat maxR = joystickRadius(dpad);
+    CGFloat dist = sqrtf(dx*dx + dy*dy);
+    if (dist < maxR) return CGPointMake(dx, dy);
+    return CGPointMake(dx / dist * maxR, dy / dist * maxR);
+}
+
+/* 8-way split around the joystick's center so a single touch can
+ * express diagonals (e.g. up+left) without needing two fingers. */
 static void dpadDirectionsForPoint(CGRect dpad, CGPoint p, bool *up, bool *down, bool *left, bool *right) {
     CGFloat cx = dpad.origin.x + dpad.size.width  / 2.0f;
     CGFloat cy = dpad.origin.y + dpad.size.height / 2.0f;
@@ -759,7 +764,7 @@ void platformSleepUntil(uint64_t time) {
 @end
 
 /* ---------------------------------------------------------------------
- * On-screen touch controls: dpad + z/x/c + quit. Sits as a sibling of
+ * On-screen touch controls: joystick + z/x/c + quit. Sits as a sibling of
  * GLView, sized to the full screen (so it can draw controls in the area
  * outside the game view, and translucently over it when the game view
  * grows into that area).
@@ -768,6 +773,7 @@ void platformSleepUntil(uint64_t time) {
 @interface BSTouchOverlay : UIView {
     UITouch *dpadTouch;
     int32_t  dpadKeysDown[4]; /* up, down, left, right */
+    CGPoint  joystickThumbOffset;
     UITouch *buttonTouches[3]; /* z, x, c */
     UITouch *quitTouch;
     UITouch *ffTouch;
@@ -787,6 +793,7 @@ void platformSleepUntil(uint64_t time) {
         quitTouch = nil;
         ffTouch = nil;
         for (int i = 0; i < 4; i++) dpadKeysDown[i] = 0;
+        joystickThumbOffset = CGPointZero;
         for (int i = 0; i < 3; i++) buttonTouches[i] = nil;
     }
     return self;
@@ -829,17 +836,24 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     BSLayout bsLayout = computeLayout(self.bounds.size);
 
-    CGRect up, down, left, right;
-    dpadArmRects(bsLayout.dpadFrame, &up, &down, &left, &right);
+    CGFloat cx = bsLayout.dpadFrame.origin.x + bsLayout.dpadFrame.size.width / 2.0f;
+    CGFloat cy = bsLayout.dpadFrame.origin.y + bsLayout.dpadFrame.size.height / 2.0f;
+    CGFloat baseR = joystickRadius(bsLayout.dpadFrame);
+    CGRect baseRect = CGRectMake(cx - baseR, cy - baseR, baseR * 2, baseR * 2);
 
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[0] ? 0.55f : 0.28f);
-    CGContextFillRect(ctx, up);
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[1] ? 0.55f : 0.28f);
-    CGContextFillRect(ctx, down);
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[2] ? 0.55f : 0.28f);
-    CGContextFillRect(ctx, left);
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, dpadKeysDown[3] ? 0.55f : 0.28f);
-    CGContextFillRect(ctx, right);
+    BOOL anyDpadDown = dpadKeysDown[0] || dpadKeysDown[1] || dpadKeysDown[2] || dpadKeysDown[3];
+    CGFloat baseAlpha = anyDpadDown ? 0.55f : 0.28f;
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, baseAlpha);
+    CGContextFillEllipseInRect(ctx, baseRect);
+    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
+    CGContextStrokeEllipseInRect(ctx, baseRect);
+
+    CGFloat thumbR = baseR * 0.35f;
+    CGFloat thumbX = cx + joystickThumbOffset.x;
+    CGFloat thumbY = cy + joystickThumbOffset.y;
+    CGRect thumbRect = CGRectMake(thumbX - thumbR, thumbY - thumbR, thumbR * 2, thumbR * 2);
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 0.55f);
+    CGContextFillEllipseInRect(ctx, thumbRect);
 
     CGRect actionRects[3];
     actionButtonRects(bsLayout.buttonsFrame, actionRects);
@@ -897,6 +911,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
             bool up, down, left, right;
             dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
             [self updateDpadUp:up down:down left:left right:right];
+            joystickThumbOffset = joystickClampOffset(bsLayout.dpadFrame, p);
             [self setNeedsDisplay];
             continue;
         }
@@ -923,6 +938,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
             bool up, down, left, right;
             dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
             [self updateDpadUp:up down:down left:left right:right];
+            joystickThumbOffset = joystickClampOffset(bsLayout.dpadFrame, p);
             [self setNeedsDisplay];
             break;
         }
@@ -933,6 +949,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     for (UITouch *touch in touches) {
         if (touch == dpadTouch) {
             [self updateDpadUp:false down:false left:false right:false];
+            joystickThumbOffset = CGPointZero;
             [dpadTouch release];
             dpadTouch = nil;
             [self setNeedsDisplay];
