@@ -1812,7 +1812,23 @@ extern int game_main(int argc, char *argv[]);
 @end
 
 int main(int argc, char *argv[]) {
-    FILE *f = fopen("/tmp/bsout", "w");
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docs = [paths objectAtIndex:0];
+    NSString *logPath;
+    if ([docs isEqualToString:@"/var/mobile/Documents"]) {
+        NSString *butterscotch = [docs stringByAppendingPathComponent:@"Butterscotch"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:butterscotch
+                                   withIntermediateDirectories:YES
+                                                    attributes:nil
+                                                         error:nil];
+        logPath = [butterscotch stringByAppendingPathComponent:@"lastrun.log"];
+    } else {
+        logPath = [docs stringByAppendingPathComponent:@"lastrun.log"];
+    }
+
+    FILE *f = fopen([logPath fileSystemRepresentation], "w");
     if (f) {
         dup2(fileno(f), STDOUT_FILENO);
         dup2(fileno(f), STDERR_FILENO);
@@ -1820,7 +1836,6 @@ int main(int argc, char *argv[]) {
         setbuf(stderr, NULL);
     }
 
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     int ret = UIApplicationMain(argc, argv, nil, @"AppDelegate");
     [pool release];
 
