@@ -99,7 +99,56 @@ static atomic_bool g_highResEnabled = false;
  * game launch in startGameWithFolder:. */
 static char g_rendererArg[32] = "software";
 
-#define BS_GAMES_ROOT_PATH @"/var/mobile/Documents/Butterscotch"
+/* Games root directory. NSSearchPathForDirectoriesInDomains(
+ * NSDocumentDirectory, ...) resolves correctly on every SDK back to iOS
+ * 2, but what it resolves *to* depends on how the app is installed:
+ *
+ *   - Sandboxed install (App Store, or a sandboxed jailbreak profile):
+ *     resolves to this app's own container, e.g.
+ *     /var/mobile/Containers/Data/Application/<UUID>/Documents -- already
+ *     private to Butterscotch, so use it as-is.
+ *   - Unsandboxed system app (installed to /Applications, classic
+ *     jailbreak-style): NSHomeDirectory() has no per-app container and
+ *     just resolves to /var/mobile, so NSDocumentDirectory alone gives
+ *     the literal /var/mobile/Documents -- the same shared folder every
+ *     other unsandboxed app on the device also gets pointed at. Only in
+ *     this specific case, append "Butterscotch" to keep this install
+ *     path isolated too, matching the original hardcoded behavior.
+ *
+ * Distinguish the two by comparing against the known shared path
+ * literally, rather than e.g. checking for "Containers" in the path --
+ * the sandboxed container layout has shifted before and isn't ours to
+ * assume; /var/mobile/Documents as the unsandboxed shared docs folder
+ * has been stable since early iOS and is the one thing we can rely on.
+ *
+ * The appended subfolder is created if missing (harmless no-op if it
+ * already exists) since an app can't assume the OS already created it.
+ * Computed and cached once, since neither the container path nor the
+ * sandboxed-vs-not status changes over the process's lifetime. */
+static NSString *bsGamesRootPath(void) {
+    static NSString *cached = nil;
+    if (!cached) {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *docs = [paths objectAtIndex:0];
+
+        if ([docs isEqualToString:@"/var/mobile/Documents"]) {
+            NSString *root = [docs stringByAppendingPathComponent:@"Butterscotch"];
+            NSError *error = nil;
+            [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                       withIntermediateDirectories:YES
+                                                        attributes:nil
+                                                             error:&error];
+            /* If creation failed (e.g. read-only filesystem in some exotic
+             * install), fall back to docs itself rather than a path that
+             * may not exist -- reloadGames' contentsOfDirectoryAtPath:
+             * will just report the real error either way. */
+            cached = [(error ? docs : root) retain];
+        } else {
+            cached = [docs retain];
+        }
+    }
+    return cached;
+}
 
 static void bsRequestRelayout(void) {
     if (g_glView) {
@@ -1160,10 +1209,12 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 @end
 
 /* ---------------------------------------------------------------------
- * Game selection menu. Scans BS_GAMES_ROOT_PATH for subfolders that
- * contain a data.win, and lets the user pick one. Re-scans every time
- * the view (re)appears so games dropped in via file transfer while the
- * app is running (or after returning from a game) show up.
+ * Game selection menu. Scans the games root (see bsGamesRootPath()
+ * above -- a "Butterscotch" folder under Documents, one way or another)
+ * for subfolders that contain a data.win, and lets the user pick one.
+ * Re-scans every time the view (re)appears so games dropped in via file
+ * transfer while the app is running (or after returning from a game)
+ * show up.
  * ------------------------------------------------------------------- */
 
 @interface BSGameListViewController : UITableViewController <UIAlertViewDelegate> {
@@ -1231,37 +1282,10 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 
     NSFileManager *fm = [NSFileManager defaultManager];
     NSError *error = nil;
-
-    /* Check if the games directory exists, create it if not */
-    BOOL isDir = NO;
-    if (![fm fileExistsAtPath:BS_GAMES_ROOT_PATH isDirectory:&isDir]) {
-        error = nil;
-        [fm createDirectoryAtPath:BS_GAMES_ROOT_PATH withIntermediateDirectories:YES attributes:nil error:&error];
-        if (error) {
-            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                          message:[NSString stringWithFormat:@"Could not create games directory: %@", [error localizedDescription]]
-                                                         delegate:nil
-                                                cancelButtonTitle:@"OK"
-                                                otherButtonTitles:nil];
-            [alert show];
-            [alert release];
-            return;
-        }
-    } else if (!isDir) {
-        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                      message:@"Games path exists but is not a directory"
-                                                     delegate:nil
-                                            cancelButtonTitle:@"OK"
-                                            otherButtonTitles:nil];
-        [alert show];
-        [alert release];
-        return;
-    }
-
-    NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:&error];
+    NSArray *entries = [fm contentsOfDirectoryAtPath:bsGamesRootPath() error:&error];
     if (error) {
         UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                      message:[NSString stringWithFormat:@"Could not scan games directory: %@", [error localizedDescription]]
+                                                      message:[error localizedDescription]
                                                      delegate:nil
                                             cancelButtonTitle:@"OK"
                                             otherButtonTitles:nil];
@@ -1270,7 +1294,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         return;
     }
     for (NSString *name in entries) {
-        NSString *dir = [BS_GAMES_ROOT_PATH stringByAppendingPathComponent:name];
+        NSString *dir = [bsGamesRootPath() stringByAppendingPathComponent:name];
         BOOL isDir = NO;
         if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
 
@@ -1387,7 +1411,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     }
 
     NSString *name = [games objectAtIndex:indexPath.row];
-    NSString *dir = [BS_GAMES_ROOT_PATH stringByAppendingPathComponent:name];
+    NSString *dir = [bsGamesRootPath() stringByAppendingPathComponent:name];
 
     /* removeItemAtPath: recursively removes directory contents, so this
      * takes data.win and any save files sitting next to it in one shot. */
@@ -1464,7 +1488,7 @@ extern int game_main(int argc, char *argv[]);
 }
 
 - (void)startGameWithFolder:(NSString *)folderName {
-    NSString *dataWin = [[BS_GAMES_ROOT_PATH stringByAppendingPathComponent:folderName]
+    NSString *dataWin = [[bsGamesRootPath() stringByAppendingPathComponent:folderName]
                           stringByAppendingPathComponent:@"data.win"];
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
