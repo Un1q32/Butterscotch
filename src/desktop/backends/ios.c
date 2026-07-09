@@ -1169,8 +1169,12 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 @interface BSGameListViewController : UITableViewController <UIAlertViewDelegate> {
     NSMutableArray *games;
     NSIndexPath *pendingDeleteIndexPath;
+    UIActivityIndicatorView *refreshIndicator;
+    UIView *refreshOverlay;
+    BOOL isRefreshing;
 }
 - (void)reloadGames;
+- (void)handleRefresh:(id)sender;
 @end
 
 @implementation BSGameListViewController
@@ -1192,6 +1196,28 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         [gearItem release];
 
         [self reloadGames];
+
+        /* Add pull-to-refresh support. UIRefreshControl is available since iOS 6,
+         * so use it if present, otherwise fall back to a custom implementation. */
+        Class refreshControlClass = NSClassFromString(@"UIRefreshControl");
+        if (refreshControlClass) {
+            id refreshControl = [[refreshControlClass alloc] init];
+            [refreshControl addTarget:self action:@selector(handleRefresh:) forControlEvents:UIControlEventValueChanged];
+            [self setValue:refreshControl forKey:@"refreshControl"];
+            [refreshControl release];
+        } else {
+            /* Custom refresh for iOS < 6: use centered activity indicator overlay */
+            refreshIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
+            refreshIndicator.hidesWhenStopped = YES;
+            refreshIndicator.hidden = YES;
+
+            refreshOverlay = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
+            refreshOverlay.backgroundColor = [UIColor colorWithRed:0.0 green:0.0 blue:0.0 alpha:0.7];
+            refreshOverlay.hidden = YES;
+
+            refreshIndicator.center = CGPointMake(50, 50);
+            [refreshOverlay addSubview:refreshIndicator];
+        }
     }
     return self;
 }
@@ -1217,9 +1243,42 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     [self.tableView reloadData];
 }
 
+- (void)handleRefresh:(id)sender {
+    [self reloadGames];
+
+    /* End the refresh animation for UIRefreshControl (iOS 6+) */
+    Class refreshControlClass = NSClassFromString(@"UIRefreshControl");
+    if (refreshControlClass && [sender isKindOfClass:refreshControlClass]) {
+        [sender performSelector:@selector(endRefreshing)];
+    } else {
+        /* End custom refresh for iOS < 6 */
+        isRefreshing = NO;
+        [refreshIndicator stopAnimating];
+        refreshOverlay.hidden = YES;
+        [refreshOverlay removeFromSuperview];
+    }
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self reloadGames];
+}
+
+/* Custom pull-to-refresh implementation for iOS < 6 */
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+    (void)decelerate;
+    if (!refreshIndicator) return; /* Using UIRefreshControl on iOS 6+ */
+
+    CGFloat offset = scrollView.contentOffset.y;
+    if (offset < -60 && !isRefreshing) {
+        isRefreshing = YES;
+        refreshOverlay.hidden = NO;
+        refreshOverlay.center = CGPointMake(self.tableView.bounds.size.width / 2.0f,
+                                           self.tableView.bounds.size.height / 2.0f);
+        [self.tableView addSubview:refreshOverlay];
+        [refreshIndicator startAnimating];
+        [self performSelector:@selector(handleRefresh:) withObject:nil afterDelay:0.5];
+    }
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -1319,6 +1378,8 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 - (void)dealloc {
     [pendingDeleteIndexPath release];
     [games release];
+    [refreshIndicator release];
+    [refreshOverlay release];
     [super dealloc];
 }
 
