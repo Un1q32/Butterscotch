@@ -1230,7 +1230,12 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     [games removeAllObjects];
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:NULL];
+    NSError *error = nil;
+    NSArray *entries = [fm contentsOfDirectoryAtPath:BS_GAMES_ROOT_PATH error:&error];
+    if (error) {
+        fprintf(stderr, "Error scanning game directory: %s\n", [[error localizedDescription] UTF8String]);
+        return;
+    }
     for (NSString *name in entries) {
         NSString *dir = [BS_GAMES_ROOT_PATH stringByAppendingPathComponent:name];
         BOOL isDir = NO;
