@@ -26,8 +26,6 @@
     <array>
         <string>iPhoneOS</string>
     </array>
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
     <key>MinimumOSVersion</key>
     <string>2.0</string>
     <key>UIDeviceFamily</key>
