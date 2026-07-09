@@ -1823,9 +1823,9 @@ int main(int argc, char *argv[]) {
                                    withIntermediateDirectories:YES
                                                     attributes:nil
                                                          error:nil];
-        logPath = [butterscotch stringByAppendingPathComponent:@"lastrun.log"];
+        logPath = [butterscotch stringByAppendingPathComponent:@"latest_log.txt"];
     } else {
-        logPath = [docs stringByAppendingPathComponent:@"lastrun.log"];
+        logPath = [docs stringByAppendingPathComponent:@"latest_log.txt"];
     }
 
     FILE *f = fopen([logPath fileSystemRepresentation], "w");
