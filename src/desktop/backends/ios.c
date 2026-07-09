@@ -262,6 +262,15 @@ typedef struct {
     bool   portrait;
 } BSLayout;
 
+/* All notched iPhones have an aspect ratio > 2.0 (375x812, 414x896,
+ * 390x844, 428x926, etc). Older/non-notched devices are <= 1.78. */
+static bool bsDeviceHasNotch(void) {
+    CGRect bounds = [[UIScreen mainScreen] bounds];
+    CGFloat maxDim = fmaxf(bounds.size.width, bounds.size.height);
+    CGFloat minDim = fminf(bounds.size.width, bounds.size.height);
+    return (maxDim / minDim > 2.0f);
+}
+
 static BSLayout computeLayout(CGSize screen) {
     BSLayout layout;
     layout.portrait = screen.height >= screen.width;
@@ -280,8 +289,12 @@ static BSLayout computeLayout(CGSize screen) {
         CGFloat gameX = (screen.width - gameW) / 2.0f;
         layout.gameFrame = CGRectMake(gameX, 0, gameW, screen.height);
 
-        layout.dpadFrame    = CGRectMake(10, (screen.height - 130) / 2.0f + 35, 110, 130);
-        layout.buttonsFrame = CGRectMake(screen.width - 10 - 170, (screen.height - 130) / 2.0f + 60, 170, 60);
+        /* On notched devices both landscape orientations have ~44pt of
+         * safe-area inset on each side (notch cutout zone). Shift the
+         * controls in so they're not behind the notch. */
+        CGFloat notchInset = bsDeviceHasNotch() ? 44.0f : 0.0f;
+        layout.dpadFrame    = CGRectMake(10 + notchInset, (screen.height - 130) / 2.0f + 35, 110, 130);
+        layout.buttonsFrame = CGRectMake(screen.width - notchInset - 10 - 170, (screen.height - 130) / 2.0f + 60, 170, 60);
     }
 
     layout.quitFrame = CGRectMake(screen.width - BS_QUIT_BUTTON_MARGIN - BS_QUIT_BUTTON_SIZE,
@@ -1185,6 +1198,8 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 - (id)init {
     if ((self = [super init])) {
         self.title = @"Settings";
+        if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
+            self.edgesForExtendedLayout = UIRectEdgeNone;
         UIBarButtonItem *saveItem = [[UIBarButtonItem alloc] initWithTitle:@"Save"
                                       style:UIBarButtonItemStyleDone
                                       target:self action:@selector(saveTapped)];
@@ -1386,6 +1401,20 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         refreshOverlay.hidden = YES;
         [refreshOverlay removeFromSuperview];
     }
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    /* Disable all automatic inset adjustment — the 7.0 SDK's
+     * automaticallyAdjustsScrollViewInsets doesn't understand the XS safe
+     * area (44pt status) and only insets 64pt (44 nav + 20 old-style status).
+     * On iOS 11+ the KVC call also disables the modern equivalent. */
+    self.automaticallyAdjustsScrollViewInsets = NO;
+    if ([self.tableView respondsToSelector:@selector(setContentInsetAdjustmentBehavior:)])
+        [self.tableView setValue:@0 forKey:@"contentInsetAdjustmentBehavior"];
+    CGFloat topInset = bsDeviceHasNotch() ? 88.0f : 64.0f;
+    self.tableView.contentInset = UIEdgeInsetsMake(topInset, 0, 0, 0);
+    self.tableView.scrollIndicatorInsets = self.tableView.contentInset;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
