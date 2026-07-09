@@ -1199,7 +1199,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     if ((self = [super init])) {
         self.title = @"Settings";
         if ([self respondsToSelector:@selector(setEdgesForExtendedLayout:)])
-            self.edgesForExtendedLayout = UIRectEdgeNone;
+            ((void(*)(id, SEL, NSUInteger))objc_msgSend)(self, @selector(setEdgesForExtendedLayout:), 0);
         UIBarButtonItem *saveItem = [[UIBarButtonItem alloc] initWithTitle:@"Save"
                                       style:UIBarButtonItemStyleDone
                                       target:self action:@selector(saveTapped)];
@@ -1250,6 +1250,14 @@ static UIKeyboardType bsNumericKeyboardType(void) {
  * transfer while the app is running (or after returning from a game)
  * show up.
  * ------------------------------------------------------------------- */
+
+/* Forward-declare viewDidLayoutSubviews on UITableViewController so the
+ * compiler doesn't warn when we call super on it -- the method is only
+ * called at runtime when the runtime supports it (iOS 5+), guarded by
+ * instancesRespondToSelector:. */
+@interface UITableViewController (BSIOS5Compat)
+- (void)viewDidLayoutSubviews;
+@end
 
 @interface BSGameListViewController : UITableViewController <UIAlertViewDelegate> {
     NSMutableArray *games;
@@ -1404,7 +1412,8 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 }
 
 - (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
+    if ([UIViewController instancesRespondToSelector:@selector(viewDidLayoutSubviews)])
+        [super viewDidLayoutSubviews];
     /* The 7.0 SDK's automaticallyAdjustsScrollViewInsets only insets 64pt
      * (44 nav + 20 old-style status). On a notched device the status area
      * is 44pt, so we need 24pt more for the first row to be fully visible. */
