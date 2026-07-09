@@ -99,6 +99,10 @@ static atomic_bool g_highResEnabled = false;
  * game launch in startGameWithPath:. */
 static char g_rendererArg[32] = "software";
 
+/* Save folder path, derived from the selected game's directory in
+ * startGameWithPath: and used in gameThread to pass --save-folder. */
+static char g_saveFolderPath[PATH_MAX];
+
 /* Games root(s) to scan. NSSearchPathForDirectoriesInDomains(
  * NSDocumentDirectory, ...) resolves correctly on every SDK back to iOS
  * 2, but what it resolves *to* -- and therefore what else is worth
@@ -1235,6 +1239,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 @interface BSGameListViewController : UITableViewController <UIAlertViewDelegate> {
     NSMutableArray *games;
     NSIndexPath *pendingDeleteIndexPath;
+    NSIndexPath *longPressIndexPath;
     UIActivityIndicatorView *refreshIndicator;
     UIView *refreshOverlay;
     BOOL isRefreshing;
@@ -1280,10 +1285,19 @@ static UIKeyboardType bsNumericKeyboardType(void) {
             refreshOverlay = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
             refreshOverlay.backgroundColor = [UIColor colorWithRed:0.0 green:0.0 blue:0.0 alpha:0.7];
             refreshOverlay.hidden = YES;
-
             refreshIndicator.center = CGPointMake(50, 50);
             [refreshOverlay addSubview:refreshIndicator];
         }
+
+        /* Add long-press gesture for game context menu (iOS 3.2+) */
+        Class lpClass = NSClassFromString(@"UILongPressGestureRecognizer");
+        if (lpClass) {
+            id lp = [lpClass alloc];
+            lp = ((id(*)(id, SEL, id, SEL))objc_msgSend)(lp, @selector(initWithTarget:action:), self, @selector(handleLongPress:));
+            ((void(*)(id, SEL, id))objc_msgSend)(self.tableView, @selector(addGestureRecognizer:), lp);
+            [lp release];
+        }
+
     }
     return self;
 }
@@ -1310,8 +1324,18 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 
     for (NSUInteger i = 0; i < [roots count]; i++) {
         NSString *root = [roots objectAtIndex:i];
+        NSString *gamesDir = [root stringByAppendingPathComponent:@"games"];
+
+        /* Ensure the games directory exists for the primary root */
+        if (i == 0) {
+            [[NSFileManager defaultManager] createDirectoryAtPath:gamesDir
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:nil];
+        }
+
         NSError *error = nil;
-        NSArray *entries = [fm contentsOfDirectoryAtPath:root error:&error];
+        NSArray *entries = [fm contentsOfDirectoryAtPath:gamesDir error:&error];
         if (error) {
             /* Only the primary root (index 0) is expected to always be
              * readable -- it's either our own sandboxed container or a
@@ -1322,10 +1346,10 @@ static UIKeyboardType bsNumericKeyboardType(void) {
              * something they can't do anything about. */
             if (i == 0) {
                 UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Error"
-                                                              message:[error localizedDescription]
-                                                             delegate:nil
-                                                    cancelButtonTitle:@"OK"
-                                                    otherButtonTitles:nil];
+                                                               message:[error localizedDescription]
+                                                              delegate:nil
+                                                     cancelButtonTitle:@"OK"
+                                                     otherButtonTitles:nil];
                 [alert show];
                 [alert release];
             }
@@ -1333,7 +1357,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         }
 
         for (NSString *name in entries) {
-            NSString *dir = [root stringByAppendingPathComponent:name];
+            NSString *dir = [gamesDir stringByAppendingPathComponent:name];
             BOOL isDir = NO;
             if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
 
@@ -1444,6 +1468,42 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+    if (longPressIndexPath) {
+        if (buttonIndex == alertView.cancelButtonIndex) {
+            [longPressIndexPath release];
+            longPressIndexPath = nil;
+            return;
+        }
+
+        NSDictionary *entry = [games objectAtIndex:longPressIndexPath.row];
+        NSString *dir = [entry objectForKey:@"path"];
+        NSString *name = [entry objectForKey:@"name"];
+
+        if (buttonIndex == 2) {
+            /* "Delete Game" — reuse the existing confirmation flow */
+            NSString *msg = [NSString stringWithFormat:
+                @"Delete \"%@\" and all of its save data? This cannot be undone.", name];
+            pendingDeleteIndexPath = longPressIndexPath;
+            longPressIndexPath = nil;
+            UIAlertView *confirm = [[UIAlertView alloc] initWithTitle:@"Delete Game"
+                                                             message:msg
+                                                            delegate:self
+                                                   cancelButtonTitle:@"Cancel"
+                                                   otherButtonTitles:@"Delete", nil];
+            [confirm show];
+            [confirm release];
+        } else {
+            /* "Delete Save Data" — remove only the saves folder */
+            NSString *gamesRoot = [dir stringByDeletingLastPathComponent];
+            NSString *butterscotchDir = [gamesRoot stringByDeletingLastPathComponent];
+            NSString *saveDir = [[butterscotchDir stringByAppendingPathComponent:@"saves"] stringByAppendingPathComponent:name];
+            [[NSFileManager defaultManager] removeItemAtPath:saveDir error:nil];
+            [longPressIndexPath release];
+            longPressIndexPath = nil;
+        }
+        return;
+    }
+
     NSIndexPath *indexPath = pendingDeleteIndexPath;
     pendingDeleteIndexPath = nil;
 
@@ -1456,8 +1516,14 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     NSDictionary *entry = [games objectAtIndex:indexPath.row];
     NSString *dir = [entry objectForKey:@"path"];
 
-    /* removeItemAtPath: recursively removes directory contents, so this
-     * takes data.win and any save files sitting next to it in one shot. */
+    /* Derive the corresponding saves folder and remove it too. */
+    NSString *gameName = [dir lastPathComponent];
+    NSString *gamesRoot = [dir stringByDeletingLastPathComponent];
+    NSString *butterscotchDir = [gamesRoot stringByDeletingLastPathComponent];
+    NSString *saveDir = [[butterscotchDir stringByAppendingPathComponent:@"saves"] stringByAppendingPathComponent:gameName];
+    [[NSFileManager defaultManager] removeItemAtPath:saveDir error:nil];
+
+    /* removeItemAtPath: recursively removes directory contents. */
     NSError *error = nil;
     if ([[NSFileManager defaultManager] removeItemAtPath:dir error:&error]) {
         [games removeObjectAtIndex:indexPath.row];
@@ -1480,7 +1546,28 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     [delegate performSelector:@selector(startGameWithPath:) withObject:gameDir];
 }
 
+- (void)handleLongPress:(id)gesture {
+    if ([gesture state] != 1) return; /* UIGestureRecognizerStateBegan */
+
+    CGPoint p = [gesture locationInView:self.tableView];
+    NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:p];
+    if (!indexPath) return;
+
+    [longPressIndexPath release];
+    longPressIndexPath = [indexPath retain];
+
+    NSString *name = [[games objectAtIndex:indexPath.row] objectForKey:@"name"];
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:name
+                                                    message:nil
+                                                   delegate:self
+                                          cancelButtonTitle:@"Cancel"
+                                          otherButtonTitles:@"Delete Save Data", @"Delete Game", nil];
+    [alert show];
+    [alert release];
+}
+
 - (void)dealloc {
+    [longPressIndexPath release];
     [pendingDeleteIndexPath release];
     [games release];
     [refreshIndicator release];
@@ -1522,8 +1609,9 @@ extern int game_main(int argc, char *argv[]);
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
     static char arg3[] = "--renderer";
-    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, arg3, g_rendererArg, g_gamePath, NULL };
-    game_main(7, argv);
+    static char arg4[] = "--save-folder";
+    char *argv[] = { arg0, arg1, arg2, g_ffSpeedArg, arg3, g_rendererArg, arg4, g_saveFolderPath, g_gamePath, NULL };
+    game_main(9, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
@@ -1535,6 +1623,18 @@ extern int game_main(int argc, char *argv[]);
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
     atomic_store(&g_highResEnabled, bsLoadHighResEnabled());
+
+    /* Derive the save folder from the game path: strip "games/<name>" to
+     * get the Butterscotch base, then append "saves/<name>". */
+    NSString *gameName = [gamePath lastPathComponent];
+    NSString *gamesDir = [gamePath stringByDeletingLastPathComponent];
+    NSString *butterscotchDir = [gamesDir stringByDeletingLastPathComponent];
+    NSString *gameSaveDir = [[butterscotchDir stringByAppendingPathComponent:@"saves"] stringByAppendingPathComponent:gameName];
+    [[NSFileManager defaultManager] createDirectoryAtPath:gameSaveDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    strlcpy(g_saveFolderPath, [gameSaveDir fileSystemRepresentation], sizeof(g_saveFolderPath));
 
 #if defined(ENABLE_MODERN_GL) && defined(ENABLE_SW_RENDERER)
     int rendererPref = bsLoadRendererPreference();
