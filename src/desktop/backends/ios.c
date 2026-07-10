@@ -578,7 +578,7 @@ static void resizeFramebuffer(void) {
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
 #ifdef ENABLE_MODERN_GL
-    if (g_runner && g_runner->renderer)
+    if (gfx == MODERN_GL && g_runner && g_runner->renderer)
         ((GLRenderer *)g_runner->renderer)->hostFramebuffer = framebuffer;
 #endif
 
