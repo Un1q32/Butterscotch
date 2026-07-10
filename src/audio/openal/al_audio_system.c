@@ -471,21 +471,21 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
                 else
                     format = AL_FORMAT_STEREO16;
             }
-            #if defined(IS_BIG_ENDIAN)
-                if (bitsPerSample == 16) {
-                    int16_t* swapped = (int16_t*)safeMalloc(audioDataLen);
-                    memcpy(swapped, audioData, audioDataLen);
-                    for (uint32_t i = 0, n = audioDataLen / sizeof(int16_t); i < n; i++) {
-                        swapped[i] = (int16_t)BinaryUtils_bswap16((uint16_t)swapped[i]);
-                    }
-                    alBufferData(slot->alBuffer, format, swapped, audioDataLen, sampleRate);
-                    free(swapped);
-                } else {
-                    alBufferData(slot->alBuffer, format, audioData, audioDataLen, sampleRate);
+#if defined(IS_BIG_ENDIAN)
+            if (bitsPerSample == 16) {
+                int16_t* swapped = (int16_t*)safeMalloc(audioDataLen);
+                memcpy(swapped, audioData, audioDataLen);
+                for (uint32_t i = 0, n = audioDataLen / sizeof(int16_t); i < n; i++) {
+                    swapped[i] = (int16_t)BinaryUtils_bswap16((uint16_t)swapped[i]);
                 }
-            #else
+                alBufferData(slot->alBuffer, format, swapped, audioDataLen, sampleRate);
+                free(swapped);
+            } else {
                 alBufferData(slot->alBuffer, format, audioData, audioDataLen, sampleRate);
-            #endif
+            }
+#else
+            alBufferData(slot->alBuffer, format, audioData, audioDataLen, sampleRate);
+#endif
             ALenum alErr = alGetError();
             if (alErr != AL_NO_ERROR) {
                 fprintf(stderr, "Audio: alBufferData failed for '%s' format=0x%x len=%u rate=%u err=%d\n",
