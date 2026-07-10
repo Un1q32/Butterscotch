@@ -1162,7 +1162,12 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 - (void)loadView {
     CGRect bounds = [[UIScreen mainScreen] bounds];
     UIView *root = [[[UIView alloc] initWithFrame:bounds] autorelease];
-    root.backgroundColor = [UIColor whiteColor];
+    if ([UIColor respondsToSelector:@selector(systemBackgroundColor)]) {
+        UIColor *(*getBg)(id, SEL) = (UIColor *(*)(id, SEL))objc_msgSend;
+        root.backgroundColor = getBg([UIColor class], @selector(systemBackgroundColor));
+    } else {
+        root.backgroundColor = [UIColor whiteColor];
+    }
     root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
     UILabel *fieldLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 20, bounds.size.width - 40, 24)] autorelease];
@@ -1326,7 +1331,12 @@ static UIKeyboardType bsNumericKeyboardType(void) {
         games = [[NSMutableArray alloc] init];
         self.title = @"Butterscotch";
 
-        UIImage *gearImg = createGearIconImage(22.0f, [UIColor darkGrayColor]);
+        UIColor *gearColor = [UIColor darkGrayColor];
+        if ([UIColor respondsToSelector:@selector(labelColor)]) {
+            UIColor *(*getLabelColor)(id, SEL) = (UIColor *(*)(id, SEL))objc_msgSend;
+            gearColor = getLabelColor([UIColor class], @selector(labelColor));
+        }
+        UIImage *gearImg = createGearIconImage(22.0f, gearColor);
         UIBarButtonItem *gearItem = [[UIBarButtonItem alloc] initWithImage:gearImg
                                       style:UIBarButtonItemStylePlain
                                       target:self action:@selector(settingsTapped)];
