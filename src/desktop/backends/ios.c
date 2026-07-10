@@ -1170,74 +1170,82 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     }
     root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    UILabel *fieldLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 20, bounds.size.width - 40, 24)] autorelease];
+    CGFloat y = 20.0f;
+    const CGFloat margin = 20.0f;
+    const CGFloat gap = 8.0f;
+
+    UILabel *fieldLabel = [[[UILabel alloc] initWithFrame:CGRectMake(margin, y, bounds.size.width - margin * 2, 24)] autorelease];
     fieldLabel.text = @"Fast forward speed (multiplier):";
     fieldLabel.font = [UIFont systemFontOfSize:15.0f];
     fieldLabel.backgroundColor = [UIColor clearColor];
     [root addSubview:fieldLabel];
+    y += 24 + gap;
 
-    speedField = [[UITextField alloc] initWithFrame:CGRectMake(20, 48, bounds.size.width - 40, 36)];
+    speedField = [[UITextField alloc] initWithFrame:CGRectMake(margin, y, bounds.size.width - margin * 2, 36)];
     speedField.borderStyle = UITextBorderStyleRoundedRect;
     speedField.keyboardType = bsNumericKeyboardType();
     speedField.delegate = self;
     speedField.text = [NSString stringWithFormat:@"%g", bsLoadFastForwardSpeed()];
     [root addSubview:speedField];
+    y += 36 + gap * 2;
 
-    /* sizeToFit rather than a hardcoded frame, since UISwitch's on-screen
-     * size has drifted slightly across OS versions. */
     highResSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     [highResSwitch sizeToFit];
     CGRect swFrame = highResSwitch.frame;
-    swFrame.origin = CGPointMake(bounds.size.width - 20 - swFrame.size.width, 100);
+    swFrame.origin = CGPointMake(bounds.size.width - margin - swFrame.size.width, y);
     highResSwitch.frame = swFrame;
     highResSwitch.on = bsLoadHighResEnabled();
     [root addSubview:highResSwitch];
 
-    UILabel *highResLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 100, swFrame.origin.x - 30, swFrame.size.height)] autorelease];
+    UILabel *highResLabel = [[[UILabel alloc] initWithFrame:CGRectMake(margin, y, swFrame.origin.x - margin * 1.5, swFrame.size.height)] autorelease];
     highResLabel.text = @"High resolution (landscape):";
     highResLabel.font = [UIFont systemFontOfSize:15.0f];
     highResLabel.backgroundColor = [UIColor clearColor];
     [root addSubview:highResLabel];
+    y += swFrame.size.height + gap;
+
+#if !defined(ENABLE_MODERN_GL) || !defined(ENABLE_SW_RENDERER)
+    rendererControl = nil;
+#else
+    {
+        bool supportsGLES2 = bsSupportsGLES2();
+        rendererControl = [[UISegmentedControl alloc] initWithItems:[NSArray arrayWithObjects:@"Software", @"Modern GL", nil]];
+
+        UILabel *rendererLabel = [[[UILabel alloc] initWithFrame:CGRectMake(margin, y, bounds.size.width - margin * 2, 20)] autorelease];
+        rendererLabel.text = @"Renderer:";
+        rendererLabel.font = [UIFont systemFontOfSize:15.0f];
+        rendererLabel.backgroundColor = [UIColor clearColor];
+        [root addSubview:rendererLabel];
+        y += 20 + gap;
+
+        [rendererControl sizeToFit];
+        CGRect rendererFrame = rendererControl.frame;
+        rendererFrame.origin = CGPointMake(margin, y);
+        rendererFrame.size.width = bounds.size.width - margin * 2;
+        rendererControl.frame = rendererFrame;
+        rendererControl.selectedSegmentIndex = bsLoadRendererPreference();
+        rendererControl.enabled = supportsGLES2;
+        if (!supportsGLES2) {
+            rendererControl.selectedSegmentIndex = BS_RENDERER_SOFTWARE;
+        }
+        [root addSubview:rendererControl];
+        y += rendererFrame.size.height + gap;
+    }
+#endif
 
     debugSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     [debugSwitch sizeToFit];
     CGRect debugSwFrame = debugSwitch.frame;
-    debugSwFrame.origin = CGPointMake(bounds.size.width - 20 - debugSwFrame.size.width, 140);
+    debugSwFrame.origin = CGPointMake(bounds.size.width - margin - debugSwFrame.size.width, y);
     debugSwitch.frame = debugSwFrame;
     debugSwitch.on = bsLoadDebugEnabled();
     [root addSubview:debugSwitch];
 
-    UILabel *debugLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 140, debugSwFrame.origin.x - 30, debugSwFrame.size.height)] autorelease];
+    UILabel *debugLabel = [[[UILabel alloc] initWithFrame:CGRectMake(margin, y, debugSwFrame.origin.x - margin * 1.5, debugSwFrame.size.height)] autorelease];
     debugLabel.text = @"Debug mode:";
     debugLabel.font = [UIFont systemFontOfSize:15.0f];
     debugLabel.backgroundColor = [UIColor clearColor];
     [root addSubview:debugLabel];
-
-    /* Renderer selection: segmented control with Software and Modern GL options.
-     * Only show this if both renderers are available, otherwise force the appropriate one. */
-#if !defined(ENABLE_MODERN_GL) || !defined(ENABLE_SW_RENDERER)
-    rendererControl = nil;
-#else
-    bool supportsGLES2 = bsSupportsGLES2();
-    rendererControl = [[UISegmentedControl alloc] initWithItems:[NSArray arrayWithObjects:@"Software", @"Modern GL", nil]];
-    [rendererControl sizeToFit];
-    CGRect rendererFrame = rendererControl.frame;
-    rendererFrame.origin = CGPointMake(20, 150);
-    rendererFrame.size.width = bounds.size.width - 40;
-    rendererControl.frame = rendererFrame;
-    rendererControl.selectedSegmentIndex = bsLoadRendererPreference();
-    rendererControl.enabled = supportsGLES2;
-    if (!supportsGLES2) {
-        rendererControl.selectedSegmentIndex = BS_RENDERER_SOFTWARE;
-    }
-    [root addSubview:rendererControl];
-
-    UILabel *rendererLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 130, bounds.size.width - 40, 20)] autorelease];
-    rendererLabel.text = @"Renderer:";
-    rendererLabel.font = [UIFont systemFontOfSize:15.0f];
-    rendererLabel.backgroundColor = [UIColor clearColor];
-    [root addSubview:rendererLabel];
-#endif
 
     self.view = root;
 }
