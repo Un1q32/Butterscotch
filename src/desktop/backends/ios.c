@@ -95,6 +95,10 @@ static char g_ffSpeedArg[64] = "--fast-forward-speed=4";
  * the setting can only be changed from the menu, never mid-game. */
 static atomic_bool g_highResEnabled = false;
 
+/* Cached copy of the debug mode setting, refreshed from NSUserDefaults once
+ * per game launch in startGameWithPath:. */
+static atomic_bool g_debugEnabled = false;
+
 /* Cached copy of the renderer setting, refreshed from NSUserDefaults once per
  * game launch in startGameWithPath:. */
 static char g_rendererArg[32] = "software";
@@ -1052,6 +1056,8 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 #define BS_RENDERER_SOFTWARE    0
 #define BS_RENDERER_MODERN_GL   1
 
+#define BS_DEBUG_DEFAULTS_KEY   @"BSDebugMode"
+
 /* Falls back to the default any time the stored value is missing or
  * non-positive (e.g. first launch, or a corrupted/edited defaults plist). */
 static double bsLoadFastForwardSpeed(void) {
@@ -1063,6 +1069,10 @@ static double bsLoadFastForwardSpeed(void) {
  * by default with no separate first-launch handling needed. */
 static bool bsLoadHighResEnabled(void) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:BS_HIGH_RES_DEFAULTS_KEY];
+}
+
+static bool bsLoadDebugEnabled(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:BS_DEBUG_DEFAULTS_KEY];
 }
 
 /* Returns the saved renderer preference, defaulting to software if never set. */
@@ -1128,6 +1138,7 @@ static UIImage *createGearIconImage(CGFloat size, UIColor *color) {
 @interface BSSettingsViewController : UIViewController <UITextFieldDelegate> {
     UITextField *speedField;
     UISwitch *highResSwitch;
+    UISwitch *debugSwitch;
     UISegmentedControl *rendererControl;
 }
 @end
@@ -1183,6 +1194,20 @@ static UIKeyboardType bsNumericKeyboardType(void) {
     highResLabel.backgroundColor = [UIColor clearColor];
     [root addSubview:highResLabel];
 
+    debugSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    [debugSwitch sizeToFit];
+    CGRect debugSwFrame = debugSwitch.frame;
+    debugSwFrame.origin = CGPointMake(bounds.size.width - 20 - debugSwFrame.size.width, 140);
+    debugSwitch.frame = debugSwFrame;
+    debugSwitch.on = bsLoadDebugEnabled();
+    [root addSubview:debugSwitch];
+
+    UILabel *debugLabel = [[[UILabel alloc] initWithFrame:CGRectMake(20, 140, debugSwFrame.origin.x - 30, debugSwFrame.size.height)] autorelease];
+    debugLabel.text = @"Debug mode:";
+    debugLabel.font = [UIFont systemFontOfSize:15.0f];
+    debugLabel.backgroundColor = [UIColor clearColor];
+    [root addSubview:debugLabel];
+
     /* Renderer selection: segmented control with Software and Modern GL options.
      * Only show this if both renderers are available, otherwise force the appropriate one. */
 #if !defined(ENABLE_MODERN_GL) || !defined(ENABLE_SW_RENDERER)
@@ -1236,6 +1261,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
      * value (or the default) is left untouched. */
 
     [[NSUserDefaults standardUserDefaults] setBool:highResSwitch.isOn forKey:BS_HIGH_RES_DEFAULTS_KEY];
+    [[NSUserDefaults standardUserDefaults] setBool:debugSwitch.isOn forKey:BS_DEBUG_DEFAULTS_KEY];
 #if defined(ENABLE_MODERN_GL) && defined(ENABLE_SW_RENDERER)
     if (rendererControl)
         [[NSUserDefaults standardUserDefaults] setInteger:rendererControl.selectedSegmentIndex forKey:BS_RENDERER_DEFAULTS_KEY];
@@ -1253,6 +1279,7 @@ static UIKeyboardType bsNumericKeyboardType(void) {
 - (void)dealloc {
     [speedField release];
     [highResSwitch release];
+    [debugSwitch release];
     if (rendererControl) [rendererControl release];
     [super dealloc];
 }
@@ -1665,8 +1692,10 @@ extern int game_main(int argc, char *argv[]);
     static char arg3[] = "--load-type=load-per-chunk";
     static char arg4[] = "--renderer";
     static char arg5[] = "--save-folder";
-    char *argv[] = { arg0, arg1, arg2, arg3, g_ffSpeedArg, arg4, g_rendererArg, arg5, g_saveFolderPath, g_gamePath, NULL };
-    game_main(10, argv);
+    static char arg_debug[] = "--debug";
+    char *argv[] = { arg0, arg1, arg2, arg3, g_ffSpeedArg, arg4, g_rendererArg, arg5, g_saveFolderPath, g_gamePath, arg_debug, NULL };
+    int argc = atomic_load(&g_debugEnabled) ? 11 : 10;
+    game_main(argc, argv);
 
     [self performSelectorOnMainThread:@selector(returnToMenu) withObject:nil waitUntilDone:NO];
 
@@ -1678,6 +1707,7 @@ extern int game_main(int argc, char *argv[]);
     strlcpy(g_gamePath, [dataWin fileSystemRepresentation], sizeof(g_gamePath));
     snprintf(g_ffSpeedArg, sizeof(g_ffSpeedArg), "--fast-forward-speed=%g", bsLoadFastForwardSpeed());
     atomic_store(&g_highResEnabled, bsLoadHighResEnabled());
+    atomic_store(&g_debugEnabled, bsLoadDebugEnabled());
 
     /* Derive the save folder from the game path: strip "games/<name>" to
      * get the Butterscotch base, then append "saves/<name>". */
