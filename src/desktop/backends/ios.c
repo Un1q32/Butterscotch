@@ -792,8 +792,58 @@ void platformSleepUntil(uint64_t time) {
     UITouch *buttonTouches[3]; /* z, x, c */
     UITouch *quitTouch;
     UITouch *ffTouch;
+    BOOL keyboardConnected;
 }
 @end
+
+/* Maps a HID keyboard usage code (from UIKey.keyCode / GCKeyCode) to a GML
+ * virtual-key code (ASCII or VK_* constant). Returns -1 for unmapped keys. */
+static int32_t bsHidKeyCodeToGml(int32_t code) {
+    if (code >= 4 && code <= 29) return code - 4 + 'A';
+    if (code >= 30 && code <= 38) return code - 30 + '1';
+    if (code == 39) return '0';
+    switch (code) {
+        case 40: return VK_ENTER;
+        case 41: return VK_ESCAPE;
+        case 42: return VK_BACKSPACE;
+        case 43: return VK_TAB;
+        case 44: return VK_SPACE;
+        case 45: return '-';
+        case 46: return '=';
+        case 47: return '[';
+        case 48: return ']';
+        case 49: return '\\';
+        case 51: return ';';
+        case 52: return '\'';
+        case 53: return '`';
+        case 54: return ',';
+        case 55: return '.';
+        case 56: return '/';
+        case 79: return VK_RIGHT;
+        case 80: return VK_LEFT;
+        case 81: return VK_DOWN;
+        case 82: return VK_UP;
+        case 73: return VK_HOME;
+        case 77: return VK_END;
+        case 75: return VK_PAGEUP;
+        case 78: return VK_PAGEDOWN;
+        case 74: return VK_INSERT;
+        case 76: return VK_DELETE;
+    }
+    if (code >= 58 && code <= 69) return VK_F1 + (code - 58);
+    if (code >= 224 && code <= 231) {
+        switch (code) {
+            case 224: case 228: return VK_CONTROL;
+            case 225: case 229: return VK_SHIFT;
+            case 226: case 230: return VK_ALT;
+            default: return VK_CONTROL;
+        }
+    }
+    if (code >= 89 && code <= 97) return (code - 89) + '1';
+    if (code == 98) return '0';
+    if (code == 88) return VK_ENTER;
+    return -1;
+}
 
 @implementation BSTouchOverlay
 
@@ -812,6 +862,45 @@ void platformSleepUntil(uint64_t time) {
         for (int i = 0; i < 3; i++) buttonTouches[i] = nil;
     }
     return self;
+}
+
+- (BOOL)canBecomeFirstResponder {
+    return YES;
+}
+
+- (void)pressesBegan:(NSSet *)presses withEvent:(UIEvent *)event {
+    if (!keyboardConnected) {
+        keyboardConnected = YES;
+        [self setNeedsDisplay];
+    }
+
+    if ([[presses anyObject] respondsToSelector:@selector(key)]) {
+        NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
+        for (id press in presses) {
+            id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
+            if (key) {
+                int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
+                if (gmlKey >= 0) bsEnqueueKeyEvent(gmlKey, true);
+            }
+        }
+    } else {
+        [super pressesBegan:presses withEvent:(id)event];
+    }
+}
+
+- (void)pressesEnded:(NSSet *)presses withEvent:(UIEvent *)event {
+    if ([[presses anyObject] respondsToSelector:@selector(key)]) {
+        NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
+        for (id press in presses) {
+            id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
+            if (key) {
+                int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
+                if (gmlKey >= 0) bsEnqueueKeyEvent(gmlKey, false);
+            }
+        }
+    } else {
+        [super pressesEnded:presses withEvent:(id)event];
+    }
 }
 
 - (void)layoutSubviews {
@@ -847,6 +936,7 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 }
 
 - (void)drawRect:(CGRect)rect {
+    if (keyboardConnected) return;
     (void)rect;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     BSLayout bsLayout = computeLayout(self.bounds.size);
@@ -900,6 +990,14 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 }
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    /* If a physical keyboard is being used, the first touch dismisses the
+     * invisible overlay and brings the on-screen controls back. */
+    if (keyboardConnected) {
+        keyboardConnected = NO;
+        [self setNeedsDisplay];
+        return;
+    }
+
     (void)event;
     BSLayout bsLayout = computeLayout(self.bounds.size);
     CGRect actionRects[3];
@@ -1774,6 +1872,7 @@ extern int game_main(int argc, char *argv[]);
     rootView.autoresizingMask = UIViewAutoresizingNone; /* we drive rootView's frame manually now -- autoresizing masks are unreliable once a transform is applied */
     [rootView addSubview:view];
     [rootView addSubview:overlay]; /* on top, so controls are visible over the game */
+    [overlay becomeFirstResponder]; /* receive physical keyboard events */
 
     /* Force a fresh sync even if the device is in the same physical
      * orientation the last game session ended in -- g_lastAppliedOrientation
