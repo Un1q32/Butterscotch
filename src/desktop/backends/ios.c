@@ -13,8 +13,8 @@
 #include <QuartzCore/CAEAGLLayer.h>
 #include <Availability.h>
 
-#ifndef __IPHONE_6_0
-typedef NSUInteger UIInterfaceOrientationMask;
+#ifndef __IPHONE_9_0
+#define UIInterfaceOrientationMask NSInteger
 #endif
 
 /* Undefine macros that conflict with glad headers */
