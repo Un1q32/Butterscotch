@@ -111,6 +111,14 @@ static char g_rendererArg[32] = "software";
  * startGameWithPath: and used in gameThread to pass --save-folder. */
 static char g_saveFolderPath[PATH_MAX];
 
+/* Game Controller framework (MFi / Xbox / PlayStation), loaded at runtime
+ * via dlopen so the file compiles against the iOS 2.0 SDK headers which
+ * don't declare any of these types.  All interaction goes through
+ * objc_msgSend with no compile-time references to GameController symbols. */
+static void *bsGCFramework = NULL;
+static Class  bsGCControllerClass = NULL;
+static bool   bsGCEnabled = false;
+
 /* Games root(s) to scan. NSSearchPathForDirectoriesInDomains(
  * NSDocumentDirectory, ...) resolves correctly on every SDK back to iOS
  * 2, but what it resolves *to* -- and therefore what else is worth
@@ -239,6 +247,142 @@ static void bsDrainKeyEvents(void) {
             if (ev.isDown) RunnerKeyboard_onKeyDown(g_runner->keyboard, ev.key);
             else           RunnerKeyboard_onKeyUp(g_runner->keyboard, ev.key);
         }
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Game Controller (GCController / GCExtendedGamepad) support.
+ *
+ * Loads the GameController framework at runtime so the file compiles
+ * against the iOS 2.0 SDK (which doesn't declare any of these types).
+ * Every interaction with GameController types goes through objc_msgSend.
+ * ------------------------------------------------------------------- */
+
+static void bsGCInit(void) {
+    if (bsGCFramework) return;
+    bsGCFramework = dlopen("/System/Library/Frameworks/GameController.framework/GameController", RTLD_LAZY | RTLD_LOCAL);
+    if (!bsGCFramework) return;
+    bsGCControllerClass = NSClassFromString(@"GCController");
+    bsGCEnabled = (bsGCControllerClass != NULL);
+}
+
+/* Reads a GCControllerButtonInput's analog value and pressed state. */
+static void bsGCReadButton(id btn, float *outValue, bool *outPressed) {
+    if (!btn) { *outValue = 0.0f; *outPressed = false; return; }
+    *outValue   = ((float (*)(id, SEL))objc_msgSend)(btn, @selector(value));
+    *outPressed = ((BOOL (*)(id, SEL))objc_msgSend)(btn, @selector(isPressed)) ? true : false;
+}
+
+static void bsPollGameControllers(void) {
+    static bool inited = false;
+    if (!inited) { inited = true; bsGCInit(); }
+    if (!bsGCEnabled || !g_runner) return;
+
+    g_runner->gamepads->connectedCount = 0;
+
+    id controllers = ((id (*)(Class, SEL))objc_msgSend)(bsGCControllerClass, @selector(controllers));
+    NSInteger count = controllers ? ((NSInteger (*)(id, SEL))objc_msgSend)(controllers, @selector(count)) : 0;
+    if (count > MAX_GAMEPADS) count = MAX_GAMEPADS;
+
+    for (NSInteger i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadSlot *slot = g_runner->gamepads->slots + i;
+
+        memcpy(slot->buttonDownPrev, slot->buttonDown, sizeof(slot->buttonDown));
+        memset(slot->buttonDown, 0, sizeof(slot->buttonDown));
+        memset(slot->buttonPressed, 0, sizeof(slot->buttonPressed));
+        memset(slot->buttonReleased, 0, sizeof(slot->buttonReleased));
+        memset(slot->buttonValue, 0, sizeof(slot->buttonValue));
+        memset(slot->axisValue, 0, sizeof(slot->axisValue));
+
+        if (i >= count) { slot->connected = false; continue; }
+
+        id ctrl = ((id (*)(id, SEL, NSUInteger))objc_msgSend)(controllers, @selector(objectAtIndex:), (NSUInteger)i);
+        if (!ctrl) { slot->connected = false; continue; }
+
+        slot->connected = true;
+        slot->jid = (int)i;
+
+        id vendorName = ((id (*)(id, SEL))objc_msgSend)(ctrl, @selector(vendorName));
+        if (vendorName) {
+            const char *name = ((const char *(*)(id, SEL))objc_msgSend)(vendorName, @selector(UTF8String));
+            if (name) {
+                strncpy(slot->description, name, sizeof(slot->description) - 1);
+                slot->description[sizeof(slot->description) - 1] = '\0';
+            }
+        }
+        slot->guid[0] = '\0';
+
+        id ext = ((id (*)(id, SEL))objc_msgSend)(ctrl, @selector(extendedGamepad));
+        if (!ext) { slot->connected = false; continue; }
+
+        /* D-pad */
+        id dpad = ((id (*)(id, SEL))objc_msgSend)(ext, @selector(dpad));
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(dpad, @selector(up)),    &slot->buttonValue[12], &slot->buttonDown[12]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(dpad, @selector(down)),  &slot->buttonValue[13], &slot->buttonDown[13]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(dpad, @selector(left)),  &slot->buttonValue[14], &slot->buttonDown[14]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(dpad, @selector(right)), &slot->buttonValue[15], &slot->buttonDown[15]);
+
+        /* Face buttons */
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonA)), &slot->buttonValue[0], &slot->buttonDown[0]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonB)), &slot->buttonValue[1], &slot->buttonDown[1]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonX)), &slot->buttonValue[2], &slot->buttonDown[2]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonY)), &slot->buttonValue[3], &slot->buttonDown[3]);
+
+        /* Bumpers */
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(leftShoulder)),  &slot->buttonValue[4], &slot->buttonDown[4]);
+        bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(rightShoulder)), &slot->buttonValue[5], &slot->buttonDown[5]);
+
+        /* Triggers (analog) */
+        {
+            id btn = ((id (*)(id, SEL))objc_msgSend)(ext, @selector(leftTrigger));
+            float v = ((float (*)(id, SEL))objc_msgSend)(btn, @selector(value));
+            slot->buttonValue[6] = v;
+            slot->buttonDown[6] = (v >= slot->triggerThreshold);
+        }
+        {
+            id btn = ((id (*)(id, SEL))objc_msgSend)(ext, @selector(rightTrigger));
+            float v = ((float (*)(id, SEL))objc_msgSend)(btn, @selector(value));
+            slot->buttonValue[7] = v;
+            slot->buttonDown[7] = (v >= slot->triggerThreshold);
+        }
+
+        /* Analog sticks (negate Y axes — GCController's yAxis follows UIKit
+         * convention where negative=down, but the engine expects negative=up
+         * matching SDL/GLFW convention). */
+        {
+            id stick = ((id (*)(id, SEL))objc_msgSend)(ext, @selector(leftThumbstick));
+            id ax = ((id (*)(id, SEL))objc_msgSend)(stick, @selector(xAxis));
+            slot->axisValue[0] = ((float (*)(id, SEL))objc_msgSend)(ax, @selector(value));
+            ax = ((id (*)(id, SEL))objc_msgSend)(stick, @selector(yAxis));
+            slot->axisValue[1] = -((float (*)(id, SEL))objc_msgSend)(ax, @selector(value));
+        }
+        {
+            id stick = ((id (*)(id, SEL))objc_msgSend)(ext, @selector(rightThumbstick));
+            id ax = ((id (*)(id, SEL))objc_msgSend)(stick, @selector(xAxis));
+            slot->axisValue[2] = ((float (*)(id, SEL))objc_msgSend)(ax, @selector(value));
+            ax = ((id (*)(id, SEL))objc_msgSend)(stick, @selector(yAxis));
+            slot->axisValue[3] = -((float (*)(id, SEL))objc_msgSend)(ax, @selector(value));
+        }
+
+        /* iOS 12.1+ additions: buttonMenu, buttonOptions, thumbstick clicks.
+         * Gate on -respondsToSelector: so older versions don't crash. */
+        if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(ext, @selector(respondsToSelector:), @selector(buttonMenu)))
+            bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonMenu)), &slot->buttonValue[9], &slot->buttonDown[9]);
+        if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(ext, @selector(respondsToSelector:), @selector(buttonOptions)))
+            bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(buttonOptions)), &slot->buttonValue[8], &slot->buttonDown[8]);
+        if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(ext, @selector(respondsToSelector:), @selector(leftThumbstickButton)))
+            bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(leftThumbstickButton)), &slot->buttonValue[10], &slot->buttonDown[10]);
+        if (((BOOL (*)(id, SEL, SEL))objc_msgSend)(ext, @selector(respondsToSelector:), @selector(rightThumbstickButton)))
+            bsGCReadButton(((id (*)(id, SEL))objc_msgSend)(ext, @selector(rightThumbstickButton)), &slot->buttonValue[11], &slot->buttonDown[11]);
+
+        /* Compute pressed/released edges */
+        for (int btn = 0; btn < GP_BUTTON_COUNT; btn++) {
+            bool wasDown = slot->buttonDownPrev[btn];
+            slot->buttonPressed[btn]  = (slot->buttonDown[btn] && !wasDown);
+            slot->buttonReleased[btn] = (!slot->buttonDown[btn] && wasDown);
+        }
+
+        g_runner->gamepads->connectedCount++;
     }
 }
 
@@ -710,6 +854,7 @@ void *platformGetProcAddress(const char *name) {
 }
 
 bool platformHandleEvents(void) {
+    bsPollGameControllers();
     bsDrainKeyEvents();
     if (atomic_exchange(&needsResize, false))
         resizeFramebuffer();
