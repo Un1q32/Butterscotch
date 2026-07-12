@@ -14,7 +14,7 @@
 #include <Availability.h>
 
 #ifndef __IPHONE_9_0
-#define UIInterfaceOrientationMask NSInteger
+#define UIInterfaceOrientationMask NSUInteger
 #endif
 
 /* Undefine macros that conflict with glad headers */
