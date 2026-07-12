@@ -16,8 +16,6 @@ void platformSetWindowTitle(const char* title) {
 }
 
 bool platformGetWindowSize(int32_t* outW, int32_t* outH) {
-    RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_BACKSPACE);
-    RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_BACKSPACE);
     if (!outW || !outH) return false;
     *outW = fbWidth;
     *outH = fbHeight;
@@ -65,7 +63,10 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
 
 #endif
 
-void platformSwapBuffers(void) {}
+void platformSwapBuffers(void) {
+    RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_BACKSPACE);
+    RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_BACKSPACE);
+}
 
 void *platformGetProcAddress(const char *name) {
     (void)name;
