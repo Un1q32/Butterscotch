@@ -384,6 +384,22 @@ static void bsPollGameControllers(void) {
 
         g_runner->gamepads->connectedCount++;
     }
+
+    /* If any controller button is active, hide the touch overlay via the
+     * main thread (UIKit calls are not safe from the game thread).  The
+     * user can tap the screen to bring the on-screen controls back. */
+    if (g_overlayView && g_runner->gamepads->connectedCount > 0) {
+        bool anyDown = false;
+        for (int s = 0; s < MAX_GAMEPADS && !anyDown; s++) {
+            if (g_runner->gamepads->slots[s].connected) {
+                for (int b = 0; b < GP_BUTTON_COUNT && !anyDown; b++) {
+                    if (g_runner->gamepads->slots[s].buttonDown[b]) anyDown = true;
+                }
+            }
+        }
+        if (anyDown)
+            [(id)g_overlayView performSelectorOnMainThread:@selector(bsNotifyControllerActive) withObject:nil waitUntilDone:NO];
+    }
 }
 
 /* ---------------------------------------------------------------------
@@ -1256,6 +1272,15 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
     (void)event;
     [self handleTouchEnd:touches];
+}
+
+/* Called from bsPollGameControllers (on the game thread) via
+ * performSelectorOnMainThread: to hide on-screen touch controls when
+ * controller buttons are pressed.  The user can tap the screen to
+ * bring them back (touchesBegan: resets keyboardConnected). */
+- (void)bsNotifyControllerActive {
+    keyboardConnected = YES;
+    [self setNeedsDisplay];
 }
 
 - (void)dealloc {
