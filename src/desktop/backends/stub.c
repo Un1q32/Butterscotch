@@ -71,9 +71,13 @@ void *platformGetProcAddress(const char *name) {
 }
 
 bool platformHandleEvents(void) {
+    static bool should_exit_next_time = false;
+    if (should_exit_next_time)
+        return true;
     RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_BACKSPACE);
     RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_BACKSPACE);
-    return getenv("DIE_IMMEDIATELY");
+    should_exit_next_time = getenv("DIE");
+    return false;
 }
 
 void platformSleepUntil(uint64_t time) {
