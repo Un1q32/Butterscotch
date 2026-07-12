@@ -874,32 +874,40 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
         [self setNeedsDisplay];
     }
 
-    if ([[presses anyObject] respondsToSelector:@selector(key)]) {
-        NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
-        for (id press in presses) {
-            id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
-            if (key) {
-                int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
-                if (gmlKey >= 0) bsEnqueueKeyEvent(gmlKey, true);
+    NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
+    BOOL handled = NO;
+    for (id press in presses) {
+        id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
+        if (key) {
+            int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
+            if (gmlKey >= 0) {
+                bsEnqueueKeyEvent(gmlKey, true);
+                handled = YES;
             }
         }
-    } else {
-        [super pressesBegan:presses withEvent:(id)event];
+    }
+    if (!handled) {
+        struct objc_super sup = { self, [UIView class] };
+        ((void(*)(struct objc_super *, SEL, id, id))objc_msgSendSuper)(&sup, @selector(pressesBegan:withEvent:), presses, event);
     }
 }
 
 - (void)pressesEnded:(NSSet *)presses withEvent:(UIEvent *)event {
-    if ([[presses anyObject] respondsToSelector:@selector(key)]) {
-        NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
-        for (id press in presses) {
-            id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
-            if (key) {
-                int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
-                if (gmlKey >= 0) bsEnqueueKeyEvent(gmlKey, false);
+    NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
+    BOOL handled = NO;
+    for (id press in presses) {
+        id key = ((id(*)(id, SEL))objc_msgSend)(press, @selector(key));
+        if (key) {
+            int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
+            if (gmlKey >= 0) {
+                bsEnqueueKeyEvent(gmlKey, false);
+                handled = YES;
             }
         }
-    } else {
-        [super pressesEnded:presses withEvent:(id)event];
+    }
+    if (!handled) {
+        struct objc_super sup = { self, [UIView class] };
+        ((void(*)(struct objc_super *, SEL, id, id))objc_msgSendSuper)(&sup, @selector(pressesEnded:withEvent:), presses, event);
     }
 }
 
