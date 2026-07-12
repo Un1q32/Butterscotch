@@ -45,6 +45,12 @@ SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.
 DESKTOP_BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
 
+ifdef DEBUG_MALLOC
+INCLUDES += $(INCLUDE)compat/debug-malloc
+HEADERS += $(wildcard compat/debug-malloc/*.h)
+SRCS += $(wildcard compat/debug-malloc/*.c)
+endif
+
 ifdef BUTTERSCOTCH_COMMIT_DATE
 DEFINES += $(DEFINE)BUTTERSCOTCH_COMMIT_DATE=\"$(BUTTERSCOTCH_COMMIT_DATE)\"
 else
