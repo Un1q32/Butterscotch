@@ -10,7 +10,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <objc/message.h>
 #include <OpenGLES/EAGL.h>
-#include <QuartzCore/CAEAGLLayer.h>
+#include <QuartzCore/QuartzCore.h>
 #include <Availability.h>
 
 #ifndef __IPHONE_9_0
@@ -574,7 +574,9 @@ static void resizeFramebuffer(void) {
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    [CATransaction flush];
     [glcontext renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
+    [CATransaction flush];
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &fbWidth);
     glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &fbHeight);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
