@@ -13,6 +13,10 @@
 #include <QuartzCore/CAEAGLLayer.h>
 #include <Availability.h>
 
+#ifndef __IPHONE_6_0
+typedef NSUInteger UIInterfaceOrientationMask;
+#endif
+
 /* Undefine macros that conflict with glad headers */
 #undef GL_UNSIGNED_SHORT_1_5_5_5_REV
 
@@ -1019,15 +1023,12 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     return interfaceOrientation == UIInterfaceOrientationPortrait;
 }
 
-/* iOS 6+ query this pair instead of the method above. NSUInteger (rather
- * than UIInterfaceOrientationMask) as the return type keeps this
- * compiling against SDKs that predate that type -- it's still called
- * correctly at runtime on OS versions that support it. */
+/* iOS 6+ query this pair instead of the method above. */
 - (BOOL)shouldAutorotate {
     return NO;
 }
 
-- (NSUInteger)supportedInterfaceOrientations {
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return 1; /* UIInterfaceOrientationMaskPortrait's raw value (1 << UIInterfaceOrientationPortrait) */
 }
 
