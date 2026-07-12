@@ -701,7 +701,12 @@ void platformSwapBuffers(void) {
 }
 
 void *platformGetProcAddress(const char *name) {
-    return dlsym(RTLD_NEXT, name);
+    static void *handle = NULL;
+    if (!handle)
+        handle = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_LAZY);
+    if (!handle)
+        handle = RTLD_NEXT; /* hope for the best */
+    return dlsym(handle, name);
 }
 
 bool platformHandleEvents(void) {
