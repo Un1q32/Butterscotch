@@ -392,8 +392,11 @@ static void bsPollGameControllers(void) {
         bool anyDown = false;
         for (int s = 0; s < MAX_GAMEPADS && !anyDown; s++) {
             if (g_runner->gamepads->slots[s].connected) {
-                for (int b = 0; b < GP_BUTTON_COUNT && !anyDown; b++) {
+                for (int b = 0; b < GP_BUTTON_COUNT && !anyDown; b++)
                     if (g_runner->gamepads->slots[s].buttonDown[b]) anyDown = true;
+                for (int a = 0; a < GP_AXIS_COUNT && !anyDown; a++) {
+                    float v = g_runner->gamepads->slots[s].axisValue[a];
+                    if (v > 0.5f || v < -0.5f) anyDown = true;
                 }
             }
         }
