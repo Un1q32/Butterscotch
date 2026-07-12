@@ -76,6 +76,44 @@ void *aligned_alloc(size_t alignment, size_t size) {
     }
   }
 
+  /* try to allocate from existing heaps again, but this time look between the
+   * gaps in allocations */
+  for (size_t i = __heap_list_size; i--;) {
+    struct __heap *heap = __heap_list[i];
+    struct __malloc_block *block = heap->last;
+    while (block->prev) {
+      void *ret = try_fit(block->prev, block, size, alignment, 0);
+      if (ret)
+        return ret;
+      block = block->prev;
+    }
+
+    /* see if there's space between the start of the heap and the first block */
+    uintptr_t ptr = (uintptr_t)heap + sizeof(struct __heap) + sizeof(void *) +
+                    sizeof(struct __malloc_block);
+    /* round up if not already aligned */
+    if ((ptr & (alignment - 1)) != 0)
+      ptr = (ptr | (alignment - 1)) + 1;
+    /* overflow check */
+    if (ptr == 0)
+      continue;
+    uintptr_t ptrsize = ptr + size;
+    /* overflow check */
+    if (ptrsize < ptr)
+      continue;
+    if (ptrsize < (uintptr_t)block) {
+      /* fit found */
+      struct __malloc_block *new_block = (struct __malloc_block *)ptr - 1;
+      /* the first block has a pointer to the start of the heap behind it */
+      ((struct __heap **)new_block)[-1] = heap;
+      new_block->size = size;
+      new_block->prev = NULL;
+      new_block->next = block;
+      block->prev = new_block;
+      return (void *)ptr;
+    }
+  }
+
   /* stupid trick to avoid having to use goto */
   do {
     /* we grow __heap_list as needed */
@@ -156,44 +194,6 @@ void *aligned_alloc(size_t alignment, size_t size) {
     __heap_list[__heap_list_size] = NULL;
     return block + 1;
   } while (0);
-
-  /* try to allocate from existing heaps again, but this time look between the
-   * gaps in allocations */
-  for (size_t i = __heap_list_size; i--;) {
-    struct __heap *heap = __heap_list[i];
-    struct __malloc_block *block = heap->last;
-    while (block->prev) {
-      void *ret = try_fit(block->prev, block, size, alignment, 0);
-      if (ret)
-        return ret;
-      block = block->prev;
-    }
-
-    /* see if there's space between the start of the heap and the first block */
-    uintptr_t ptr = (uintptr_t)heap + sizeof(struct __heap) + sizeof(void *) +
-                    sizeof(struct __malloc_block);
-    /* round up if not already aligned */
-    if ((ptr & (alignment - 1)) != 0)
-      ptr = (ptr | (alignment - 1)) + 1;
-    /* overflow check */
-    if (ptr == 0)
-      continue;
-    uintptr_t ptrsize = ptr + size;
-    /* overflow check */
-    if (ptrsize < ptr)
-      continue;
-    if (ptrsize < (uintptr_t)block) {
-      /* fit found */
-      struct __malloc_block *new_block = (struct __malloc_block *)ptr - 1;
-      /* the first block has a pointer to the start of the heap behind it */
-      ((struct __heap **)new_block)[-1] = heap;
-      new_block->size = size;
-      new_block->prev = NULL;
-      new_block->next = block;
-      block->prev = new_block;
-      return (void *)ptr;
-    }
-  }
 
   errno = ENOMEM;
   return NULL;
