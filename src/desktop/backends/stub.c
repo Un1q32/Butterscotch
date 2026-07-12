@@ -63,10 +63,7 @@ void Runner_setNextFrame(uint32_t* framebuffer, int width, int height) {
 
 #endif
 
-void platformSwapBuffers(void) {
-    RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_BACKSPACE);
-    RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_BACKSPACE);
-}
+void platformSwapBuffers(void) {}
 
 void *platformGetProcAddress(const char *name) {
     (void)name;
@@ -74,7 +71,9 @@ void *platformGetProcAddress(const char *name) {
 }
 
 bool platformHandleEvents(void) {
-    return false;
+    RunnerKeyboard_onKeyDown(g_runner->keyboard, VK_BACKSPACE);
+    RunnerKeyboard_onKeyUp(g_runner->keyboard, VK_BACKSPACE);
+    return getenv("DIE_IMMEDIATELY");
 }
 
 void platformSleepUntil(uint64_t time) {
