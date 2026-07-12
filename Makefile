@@ -101,6 +101,9 @@ SDL3_LIBS += $(shell pkg-config $(PKG_CONFIG_FLAGS) --libs sdl3)
 LIBS += $(SDL3_LIBS)
 DEFINES += $(DEFINE)USE_SDL3
 endif
+ifeq ($(DESKTOP_BACKEND),stub)
+DEFINES += $(DEFINE)USE_STUB
+endif
 
 
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
