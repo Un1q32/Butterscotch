@@ -75,6 +75,9 @@ const GLuint *hostFramebuffer;
 #endif
 
 static size_t get_used_memory(void) {
+#ifdef _BS_DEBUG_MALLOC_H_
+    return __total_heap_bytes_used();
+#endif
 #ifdef __linux__
     int fd = open("/proc/self/smaps_rollup", O_RDONLY);
     if (fd < 0)

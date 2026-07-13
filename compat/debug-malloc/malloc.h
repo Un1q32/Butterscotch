@@ -44,4 +44,6 @@ extern void *__internal_malloc(size_t);
 extern void __internal_free(void *);
 extern size_t __internal_malloc_usable_size(void *);
 
+extern size_t __total_heap_bytes_used(void);
+
 #endif
