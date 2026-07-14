@@ -1994,7 +1994,7 @@ extern int game_main(int argc, char *argv[]);
     static char arg0[] = "butterscotch";
     static char arg1[] = "--lazy-textures";
     static char arg2[] = "--lazy-rooms";
-    static char arg3[] = "--load-type=load-per-chunk";
+    static char arg3[] = "--load-type=map-file";
     static char arg4[] = "--renderer";
     static char arg5[] = "--save-folder";
     static char arg_debug[] = "--debug";
