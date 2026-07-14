@@ -43,6 +43,12 @@ INCLUDES += $(INCLUDE). \
 HEADERS := $(wildcard src/*.h) $(shell find vendor -name '*.h')
 SRCS := $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
+ifdef EVIL_MALLOC
+SRCS += $(wildcard compat/evil-malloc/*.c)
+HEADERS += $(wildcard compat/evil-malloc/*.h)
+INCLUDES += $(INCLUDE)compat/evil-malloc
+endif
+
 DESKTOP_BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
 
