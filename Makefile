@@ -124,7 +124,7 @@ endif
 
 ifdef ENABLE_GL
 SRCS += $(wildcard src/gl_common/*.c)
-INCLUDES += $(INCLUDE)src/gl_common $(INCLUDE)src/gl
+INCLUDES += $(INCLUDE)src/gl
 HEADERS += $(wildcard src/gl_common/*.h)
 ENABLE_GLAD := 1
 endif
@@ -183,7 +183,7 @@ endif
 
 ifdef ENABLE_GLAD
 SRCS += vendor/glad/src/glad.c
-INCLUDES += $(INCLUDE)vendor/glad/include
+INCLUDES += $(INCLUDE)vendor/glad/include $(INCLUDE)src/gl_common
 endif
 
 ifeq ($(OS),Windows)
