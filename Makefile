@@ -111,6 +111,7 @@ endif
 ifeq ($(DESKTOP_BACKEND),ios)
 LIBS += -framework Foundation -framework UIKit -framework OpenGLES -framework QuartzCore -framework CoreGraphics
 DEFINES += -DUSE_IOS
+ENABLE_GLAD := 1
 endif
 
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
