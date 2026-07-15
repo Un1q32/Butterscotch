@@ -29,6 +29,7 @@
 #include "debug_overlay.h"
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)) && defined(ENABLE_SW_RENDERER))
 #include <glad/glad.h>
+#include "gl_common.h"
 #endif
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL)
 #include "gl_renderer.h"
