@@ -109,7 +109,7 @@ static size_t get_used_memory(void) {
     return 0;
 }
 
-#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER))
+#if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2) || defined(USE_IOS)) && defined(ENABLE_SW_RENDERER))
 static bool platformInitGlad(void) {
     glGetString = (PFNGLGETSTRINGPROC)platformGetProcAddress("glGetString");
     if (!glGetString)
