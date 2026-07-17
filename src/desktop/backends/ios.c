@@ -947,17 +947,70 @@ void platformSleepUntil(uint64_t time) {
  * GLView, sized to the full screen (so it can draw controls in the area
  * outside the game view, and translucently over it when the game view
  * grows into that area).
+ *
+ * Each on-screen button is represented by a BSButton object (or one of
+ * its subclasses), making it easy to reposition controls — just change
+ * the button's frame and it handles hit-testing, drawing, and press /
+ * release callbacks automatically.  BSDpad is a separate class for the
+ * analog joystick (8-way directional input with visual thumb tracking).
  * ------------------------------------------------------------------- */
 
-@interface BSTouchOverlay : UIView {
-    UITouch *dpadTouch;
-    int32_t  dpadKeysDown[4]; /* up, down, left, right */
-    CGPoint  joystickThumbOffset;
-    UITouch *buttonTouches[3]; /* z, x, c */
-    UITouch *quitTouch;
-    UITouch *ffTouch;
-    BOOL keyboardConnected;
+@interface BSButton : NSObject {
+@protected
+    CGRect    _frame;
+    UITouch  *_touch;
+    BOOL      _pressed;
+    CGFloat   _hitExpansion;
+    NSString *_label;
+    CGFloat   _labelFontSize;
 }
+@property (nonatomic) CGRect frame;
+@property (nonatomic, readonly, getter=isPressed) BOOL pressed;
+- (id)initWithFrame:(CGRect)frame label:(NSString *)label font:(CGFloat)fontSize hitExpansion:(CGFloat)expansion;
+- (BOOL)containsPoint:(CGPoint)point;
+- (BOOL)handleTouchBegan:(UITouch *)touch point:(CGPoint)point;
+- (BOOL)handleTouchEnded:(UITouch *)touch;
+- (void)onPress;
+- (void)onRelease;
+- (void)drawInContext:(CGContextRef)ctx;
+@end
+
+@interface BSKeyButton : BSButton {
+    int32_t _key;
+}
+- (id)initWithFrame:(CGRect)frame key:(int32_t)key label:(NSString *)label font:(CGFloat)fontSize hitExpansion:(CGFloat)expansion;
+@end
+
+@interface BSQuitButton : BSButton
+@end
+
+@interface BSToggleKeyButton : BSKeyButton {
+    BOOL _latched;
+}
+@end
+
+@interface BSDpad : NSObject {
+    CGRect    _frame;
+    UITouch  *_touch;
+    int32_t   _keysDown[4];
+    CGPoint   _thumbOffset;
+}
+@property (nonatomic) CGRect frame;
+- (id)initWithFrame:(CGRect)frame;
+- (BOOL)handleTouchBegan:(UITouch *)touch point:(CGPoint)point;
+- (BOOL)handleTouchMoved:(UITouch *)touch point:(CGPoint)point;
+- (BOOL)handleTouchEnded:(UITouch *)touch;
+- (void)drawInContext:(CGContextRef)ctx;
+@end
+
+@interface BSTouchOverlay : UIView {
+    BSDpad           *_dpad;
+    BSKeyButton      *_actionButtons[3];
+    BSQuitButton     *_quitButton;
+    BSToggleKeyButton *_ffButton;
+    BOOL              keyboardConnected;
+}
+- (void)updateLayout;
 @end
 
 /* Maps a HID keyboard usage code (from UIKey.keyCode / GCKeyCode) to a GML
@@ -1011,6 +1064,19 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
 
 @implementation BSTouchOverlay
 
+- (void)updateLayout {
+    BSLayout layout = computeLayout(self.bounds.size);
+
+    _dpad.frame = layout.dpadFrame;
+    _quitButton.frame = layout.quitFrame;
+    _ffButton.frame = layout.ffFrame;
+
+    CGRect actionRects[3];
+    actionButtonRects(layout.buttonsFrame, actionRects);
+    for (int i = 0; i < 3; i++)
+        _actionButtons[i].frame = actionRects[i];
+}
+
 - (id)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = [UIColor clearColor];
@@ -1018,12 +1084,13 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
         self.multipleTouchEnabled = YES;
         self.userInteractionEnabled = YES;
         self.autoresizingMask = UIViewAutoresizingNone;
-        dpadTouch = nil;
-        quitTouch = nil;
-        ffTouch = nil;
-        for (int i = 0; i < 4; i++) dpadKeysDown[i] = 0;
-        joystickThumbOffset = CGPointZero;
-        for (int i = 0; i < 3; i++) buttonTouches[i] = nil;
+
+        _dpad = [[BSDpad alloc] initWithFrame:CGRectZero];
+        _quitButton = [[BSQuitButton alloc] initWithFrame:CGRectZero label:@"X" font:14.0f hitExpansion:6.0f];
+        _ffButton = [[BSToggleKeyButton alloc] initWithFrame:CGRectZero key:VK_TAB label:@">>" font:16.0f hitExpansion:6.0f];
+        _actionButtons[0] = [[BSKeyButton alloc] initWithFrame:CGRectZero key:'Z' label:@"Z" font:18.0f hitExpansion:6.0f];
+        _actionButtons[1] = [[BSKeyButton alloc] initWithFrame:CGRectZero key:'X' label:@"X" font:18.0f hitExpansion:6.0f];
+        _actionButtons[2] = [[BSKeyButton alloc] initWithFrame:CGRectZero key:'C' label:@"C" font:18.0f hitExpansion:6.0f];
     }
     return self;
 }
@@ -1080,6 +1147,7 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
     if (self.superview) {
         self.frame = self.superview.bounds;
     }
+    [self updateLayout];
     [self setNeedsDisplay];
 }
 
@@ -1111,54 +1179,11 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     if (keyboardConnected) return;
     (void)rect;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
-    BSLayout bsLayout = computeLayout(self.bounds.size);
-
-    CGFloat cx = bsLayout.dpadFrame.origin.x + bsLayout.dpadFrame.size.width / 2.0f;
-    CGFloat cy = bsLayout.dpadFrame.origin.y + bsLayout.dpadFrame.size.height / 2.0f;
-    CGFloat baseR = joystickRadius(bsLayout.dpadFrame);
-    CGRect baseRect = CGRectMake(cx - baseR, cy - baseR, baseR * 2, baseR * 2);
-
-    BOOL anyDpadDown = dpadKeysDown[0] || dpadKeysDown[1] || dpadKeysDown[2] || dpadKeysDown[3];
-    CGFloat baseAlpha = anyDpadDown ? 0.55f : 0.28f;
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, baseAlpha);
-    CGContextFillEllipseInRect(ctx, baseRect);
-    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
-    CGContextStrokeEllipseInRect(ctx, baseRect);
-
-    CGFloat thumbR = baseR * 0.35f;
-    CGFloat thumbX = cx + joystickThumbOffset.x;
-    CGFloat thumbY = cy + joystickThumbOffset.y;
-    CGRect thumbRect = CGRectMake(thumbX - thumbR, thumbY - thumbR, thumbR * 2, thumbR * 2);
-    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 0.55f);
-    CGContextFillEllipseInRect(ctx, thumbRect);
-
-    CGRect actionRects[3];
-    actionButtonRects(bsLayout.buttonsFrame, actionRects);
-    NSString *actionLabels[3] = { @"Z", @"X", @"C" };
-    UIFont *actionFont = [UIFont boldSystemFontOfSize:18.0f];
-    for (int i = 0; i < 3; i++) {
-        drawTranslucentCircle(ctx, actionRects[i], buttonTouches[i] != nil);
-        drawCenteredLabel(actionLabels[i], actionRects[i], actionFont);
-    }
-
-    drawTranslucentCircle(ctx, bsLayout.quitFrame, quitTouch != nil);
-    drawCenteredLabel(@"X", bsLayout.quitFrame, [UIFont boldSystemFontOfSize:14.0f]);
-
-    drawTranslucentCircle(ctx, bsLayout.ffFrame, ffTouch != nil);
-    drawCenteredLabel(@">>", bsLayout.ffFrame, [UIFont boldSystemFontOfSize:16.0f]);
-}
-
-- (void)updateDpadUp:(bool)up down:(bool)down left:(bool)left right:(bool)right {
-    bool newState[4] = { up, down, left, right };
-    int32_t keys[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
-    for (int i = 0; i < 4; i++) {
-        if (newState[i] && !dpadKeysDown[i]) {
-            bsEnqueueKeyEvent(keys[i], true);
-        } else if (!newState[i] && dpadKeysDown[i]) {
-            bsEnqueueKeyEvent(keys[i], false);
-        }
-        dpadKeysDown[i] = newState[i] ? 1 : 0;
-    }
+    [_dpad drawInContext:ctx];
+    for (int i = 0; i < 3; i++)
+        [_actionButtons[i] drawInContext:ctx];
+    [_quitButton drawInContext:ctx];
+    [_ffButton drawInContext:ctx];
 }
 
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
@@ -1171,59 +1196,25 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     }
 
     (void)event;
-    BSLayout bsLayout = computeLayout(self.bounds.size);
-    CGRect actionRects[3];
-    actionButtonRects(bsLayout.buttonsFrame, actionRects);
-
     for (UITouch *touch in touches) {
         CGPoint p = [touch locationInView:self];
 
-        if (!quitTouch && CGRectContainsPoint(CGRectInset(bsLayout.quitFrame, -6, -6), p)) {
-            quitTouch = [touch retain];
-            [self setNeedsDisplay];
-            continue;
-        }
-
-        if (!ffTouch && CGRectContainsPoint(CGRectInset(bsLayout.ffFrame, -6, -6), p)) {
-            ffTouch = [touch retain];
-            bsEnqueueKeyEvent(VK_TAB, true);
-            [self setNeedsDisplay];
-            continue;
-        }
-
-        if (!dpadTouch && CGRectContainsPoint(CGRectInset(bsLayout.dpadFrame, -20, -20), p)) {
-            dpadTouch = [touch retain];
-            bool up, down, left, right;
-            dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
-            [self updateDpadUp:up down:down left:left right:right];
-            joystickThumbOffset = joystickClampOffset(bsLayout.dpadFrame, p);
-            [self setNeedsDisplay];
-            continue;
-        }
+        if ([_quitButton handleTouchBegan:touch point:p]) continue;
+        if ([_ffButton handleTouchBegan:touch point:p]) continue;
+        if ([_dpad handleTouchBegan:touch point:p]) continue;
 
         for (int i = 0; i < 3; i++) {
-            if (!buttonTouches[i] && CGRectContainsPoint(CGRectInset(actionRects[i], -6, -6), p)) {
-                buttonTouches[i] = [touch retain];
-                int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
-                bsEnqueueKeyEvent(vk, true);
-                [self setNeedsDisplay];
-                break;
-            }
+            if ([_actionButtons[i] handleTouchBegan:touch point:p]) break;
         }
     }
+    [self setNeedsDisplay];
 }
 
 - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
     (void)event;
-    if (!dpadTouch) return;
-    BSLayout bsLayout = computeLayout(self.bounds.size);
     for (UITouch *touch in touches) {
-        if (touch == dpadTouch) {
-            CGPoint p = [touch locationInView:self];
-            bool up, down, left, right;
-            dpadDirectionsForPoint(bsLayout.dpadFrame, p, &up, &down, &left, &right);
-            [self updateDpadUp:up down:down left:left right:right];
-            joystickThumbOffset = joystickClampOffset(bsLayout.dpadFrame, p);
+        CGPoint p = [touch locationInView:self];
+        if ([_dpad handleTouchMoved:touch point:p]) {
             [self setNeedsDisplay];
             break;
         }
@@ -1232,39 +1223,14 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 
 - (void)handleTouchEnd:(NSSet *)touches {
     for (UITouch *touch in touches) {
-        if (touch == dpadTouch) {
-            [self updateDpadUp:false down:false left:false right:false];
-            joystickThumbOffset = CGPointZero;
-            [dpadTouch release];
-            dpadTouch = nil;
-            [self setNeedsDisplay];
-            continue;
-        }
-        if (touch == quitTouch) {
-            [quitTouch release];
-            quitTouch = nil;
-            atomic_store(&quitRequested, true);
-            [self setNeedsDisplay];
-            continue;
-        }
-        if (touch == ffTouch) {
-            bsEnqueueKeyEvent(VK_TAB, false);
-            [ffTouch release];
-            ffTouch = nil;
-            [self setNeedsDisplay];
-            continue;
-        }
+        if ([_dpad handleTouchEnded:touch]) continue;
+        if ([_quitButton handleTouchEnded:touch]) continue;
+        if ([_ffButton handleTouchEnded:touch]) continue;
         for (int i = 0; i < 3; i++) {
-            if (touch == buttonTouches[i]) {
-                int32_t vk = (i == 0) ? 'Z' : (i == 1) ? 'X' : 'C';
-                bsEnqueueKeyEvent(vk, false);
-                [buttonTouches[i] release];
-                buttonTouches[i] = nil;
-                [self setNeedsDisplay];
-                break;
-            }
+            if ([_actionButtons[i] handleTouchEnded:touch]) break;
         }
     }
+    [self setNeedsDisplay];
 }
 
 - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
@@ -1287,10 +1253,200 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
 }
 
 - (void)dealloc {
-    if (dpadTouch) [dpadTouch release];
-    if (quitTouch) [quitTouch release];
-    if (ffTouch) [ffTouch release];
-    for (int i = 0; i < 3; i++) if (buttonTouches[i]) [buttonTouches[i] release];
+    [_dpad release];
+    [_quitButton release];
+    [_ffButton release];
+    for (int i = 0; i < 3; i++) [_actionButtons[i] release];
+    [super dealloc];
+}
+
+@end
+
+/* ---------------------------------------------------------------------
+ * Button class implementations
+ * ------------------------------------------------------------------- */
+
+@implementation BSButton
+
+- (id)initWithFrame:(CGRect)frame label:(NSString *)label font:(CGFloat)fontSize hitExpansion:(CGFloat)expansion {
+    if ((self = [super init])) {
+        _frame = frame;
+        _label = [label retain];
+        _labelFontSize = fontSize;
+        _hitExpansion = expansion;
+        _touch = nil;
+        _pressed = NO;
+    }
+    return self;
+}
+
+- (BOOL)containsPoint:(CGPoint)point {
+    return CGRectContainsPoint(CGRectInset(_frame, -_hitExpansion, -_hitExpansion), point);
+}
+
+- (BOOL)handleTouchBegan:(UITouch *)touch point:(CGPoint)point {
+    if (_touch) return NO;
+    if (!CGRectContainsPoint(CGRectInset(_frame, -_hitExpansion, -_hitExpansion), point)) return NO;
+    _touch = [touch retain];
+    [self onPress];
+    return YES;
+}
+
+- (BOOL)handleTouchEnded:(UITouch *)touch {
+    if (touch != _touch) return NO;
+    [self onRelease];
+    [_touch release];
+    _touch = nil;
+    return YES;
+}
+
+- (void)onPress {
+    _pressed = YES;
+}
+
+- (void)onRelease {
+    _pressed = NO;
+}
+
+- (void)drawInContext:(CGContextRef)ctx {
+    drawTranslucentCircle(ctx, _frame, _pressed);
+    drawCenteredLabel(_label, _frame, [UIFont boldSystemFontOfSize:_labelFontSize]);
+}
+
+- (void)dealloc {
+    [_label release];
+    if (_touch) [_touch release];
+    [super dealloc];
+}
+
+@end
+
+@implementation BSKeyButton
+
+- (id)initWithFrame:(CGRect)frame key:(int32_t)key label:(NSString *)label font:(CGFloat)fontSize hitExpansion:(CGFloat)expansion {
+    if ((self = [super initWithFrame:frame label:label font:fontSize hitExpansion:expansion])) {
+        _key = key;
+    }
+    return self;
+}
+
+- (void)onPress {
+    [super onPress];
+    bsEnqueueKeyEvent(_key, true);
+}
+
+- (void)onRelease {
+    [super onRelease];
+    bsEnqueueKeyEvent(_key, false);
+}
+
+@end
+
+@implementation BSToggleKeyButton
+
+- (void)onPress {
+    _latched = !_latched;
+    _pressed = _latched;
+    bsEnqueueKeyEvent(_key, true);
+}
+
+- (void)onRelease {
+    bsEnqueueKeyEvent(_key, false);
+}
+
+@end
+
+@implementation BSQuitButton
+
+- (void)onRelease {
+    [super onRelease];
+    atomic_store(&quitRequested, true);
+}
+
+@end
+
+@implementation BSDpad
+
+- (id)initWithFrame:(CGRect)frame {
+    if ((self = [super init])) {
+        _frame = frame;
+        _touch = nil;
+        _thumbOffset = CGPointZero;
+        for (int i = 0; i < 4; i++) _keysDown[i] = 0;
+    }
+    return self;
+}
+
+- (BOOL)handleTouchBegan:(UITouch *)touch point:(CGPoint)point {
+    if (_touch) return NO;
+    if (!CGRectContainsPoint(CGRectInset(_frame, -20, -20), point)) return NO;
+    _touch = [touch retain];
+    bool up, down, left, right;
+    dpadDirectionsForPoint(_frame, point, &up, &down, &left, &right);
+    [self updateDirectionUp:up down:down left:left right:right];
+    _thumbOffset = joystickClampOffset(_frame, point);
+    return YES;
+}
+
+- (BOOL)handleTouchMoved:(UITouch *)touch point:(CGPoint)point {
+    if (touch != _touch) return NO;
+    bool up, down, left, right;
+    dpadDirectionsForPoint(_frame, point, &up, &down, &left, &right);
+    [self updateDirectionUp:up down:down left:left right:right];
+    _thumbOffset = joystickClampOffset(_frame, point);
+    return YES;
+}
+
+- (BOOL)handleTouchEnded:(UITouch *)touch {
+    if (touch != _touch) return NO;
+    static const int32_t keys[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
+    for (int i = 0; i < 4; i++) {
+        if (_keysDown[i])
+            bsEnqueueKeyEvent(keys[i], false);
+        _keysDown[i] = 0;
+    }
+    _thumbOffset = CGPointZero;
+    [_touch release];
+    _touch = nil;
+    return YES;
+}
+
+- (void)updateDirectionUp:(bool)up down:(bool)down left:(bool)left right:(bool)right {
+    bool newState[4] = { up, down, left, right };
+    static const int32_t keys[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
+    for (int i = 0; i < 4; i++) {
+        if (newState[i] && !_keysDown[i]) {
+            bsEnqueueKeyEvent(keys[i], true);
+        } else if (!newState[i] && _keysDown[i]) {
+            bsEnqueueKeyEvent(keys[i], false);
+        }
+        _keysDown[i] = newState[i] ? 1 : 0;
+    }
+}
+
+- (void)drawInContext:(CGContextRef)ctx {
+    CGFloat cx = _frame.origin.x + _frame.size.width / 2.0f;
+    CGFloat cy = _frame.origin.y + _frame.size.height / 2.0f;
+    CGFloat baseR = joystickRadius(_frame);
+    CGRect baseRect = CGRectMake(cx - baseR, cy - baseR, baseR * 2, baseR * 2);
+
+    BOOL anyDown = _keysDown[0] || _keysDown[1] || _keysDown[2] || _keysDown[3];
+    CGFloat baseAlpha = anyDown ? 0.55f : 0.28f;
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, baseAlpha);
+    CGContextFillEllipseInRect(ctx, baseRect);
+    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
+    CGContextStrokeEllipseInRect(ctx, baseRect);
+
+    CGFloat thumbR = baseR * 0.35f;
+    CGFloat thumbX = cx + _thumbOffset.x;
+    CGFloat thumbY = cy + _thumbOffset.y;
+    CGRect thumbRect = CGRectMake(thumbX - thumbR, thumbY - thumbR, thumbR * 2, thumbR * 2);
+    CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 0.55f);
+    CGContextFillEllipseInRect(ctx, thumbRect);
+}
+
+- (void)dealloc {
+    if (_touch) [_touch release];
     [super dealloc];
 }
 
