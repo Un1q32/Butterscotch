@@ -1155,8 +1155,6 @@ static void drawTranslucentCircle(CGContextRef ctx, CGRect frame, BOOL highlight
     CGFloat alpha = highlighted ? 0.55f : 0.30f;
     CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, alpha);
     CGContextFillEllipseInRect(ctx, frame);
-    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
-    CGContextStrokeEllipseInRect(ctx, frame);
 }
 
 static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
@@ -1434,8 +1432,6 @@ static void drawCenteredLabel(NSString *text, CGRect rect, UIFont *font) {
     CGFloat baseAlpha = anyDown ? 0.55f : 0.28f;
     CGContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, baseAlpha);
     CGContextFillEllipseInRect(ctx, baseRect);
-    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.6f);
-    CGContextStrokeEllipseInRect(ctx, baseRect);
 
     CGFloat thumbR = baseR * 0.35f;
     CGFloat thumbX = cx + _thumbOffset.x;
