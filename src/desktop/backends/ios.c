@@ -1102,7 +1102,6 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
 - (void)pressesBegan:(NSSet *)presses withEvent:(UIEvent *)event {
     if (!keyboardConnected) {
         keyboardConnected = YES;
-        [self setNeedsDisplay];
     }
 
     NSInteger (*msgKeyCode)(id, SEL) = (NSInteger (*)(id, SEL))objc_msgSend;
@@ -1112,10 +1111,17 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
         if (key) {
             int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
             if (gmlKey >= 0) {
-                bsEnqueueKeyEvent(gmlKey, true);
+                if (gmlKey == VK_TAB) {
+                    [_ffButton onPress];
+                } else {
+                    bsEnqueueKeyEvent(gmlKey, true);
+                }
                 handled = YES;
             }
         }
+    }
+    if (handled) {
+        [self setNeedsDisplay];
     }
     if (!handled) {
         struct objc_super sup = { self, [UIView class] };
@@ -1131,10 +1137,17 @@ static int32_t bsHidKeyCodeToGml(int32_t code) {
         if (key) {
             int32_t gmlKey = bsHidKeyCodeToGml((int32_t)msgKeyCode(key, @selector(keyCode)));
             if (gmlKey >= 0) {
-                bsEnqueueKeyEvent(gmlKey, false);
+                if (gmlKey == VK_TAB) {
+                    [_ffButton onRelease];
+                } else {
+                    bsEnqueueKeyEvent(gmlKey, false);
+                }
                 handled = YES;
             }
         }
+    }
+    if (handled) {
+        [self setNeedsDisplay];
     }
     if (!handled) {
         struct objc_super sup = { self, [UIView class] };
