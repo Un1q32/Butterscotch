@@ -315,6 +315,26 @@ static const uint8_t* findWavDataChunk(const uint8_t* data, uint32_t dataSize, u
     return nullptr;
 }
 
+// Parse WAV fmt chunk fields from a RIFF/WAV header.
+// Returns true if the data starts with "RIFF" and the fmt fields decode to non-zero values.
+// outAudioData may be nullptr if the caller only needs the data length.
+static bool parseWavHeader(const uint8_t* data, uint32_t dataSize,
+                           uint32_t* outChannels, uint32_t* outSampleRate,
+                           uint32_t* outBitsPerSample, const uint8_t** outAudioData,
+                           uint32_t* outAudioDataLen) {
+    if (data == nullptr || dataSize < 36) return false;
+    if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return false;
+    *outChannels = data[22] | (data[23] << 8);
+    *outSampleRate = data[24] | (data[25] << 8) | (data[26] << 16) | (data[27] << 24);
+    *outBitsPerSample = data[34] | (data[35] << 8);
+    uint32_t audioDataLen = 0;
+    const uint8_t* found = findWavDataChunk(data, dataSize, &audioDataLen);
+    if (outAudioData != nullptr) *outAudioData = found;
+    *outAudioDataLen = audioDataLen;
+    return found != nullptr && audioDataLen > 0
+        && *outChannels > 0 && *outSampleRate > 0 && *outBitsPerSample > 0;
+}
+
 static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t priority, bool loop) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
 
@@ -429,17 +449,8 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             uint32_t bitsPerSample = 0;
             const uint8_t* audioData = nullptr;
             uint32_t audioDataLen = 0;
-            bool hasWavHeader = (entry->dataSize >= 12 &&
-                entry->data[0] == 'R' && entry->data[1] == 'I' &&
-                entry->data[2] == 'F' && entry->data[3] == 'F');
 
-            if (hasWavHeader) {
-                channels = entry->data[22] | (entry->data[23] << 8);
-                sampleRate = entry->data[24] | (entry->data[25] << 8) |
-                             (entry->data[26] << 16) | (entry->data[27] << 24);
-                bitsPerSample = entry->data[34] | (entry->data[35] << 8);
-                audioData = findWavDataChunk(entry->data, entry->dataSize, &audioDataLen);
-            } else {
+            if (!parseWavHeader(entry->data, entry->dataSize, &channels, &sampleRate, &bitsPerSample, &audioData, &audioDataLen)) {
                 channels = 2;
                 sampleRate = 44100;
                 bitsPerSample = 16;
@@ -449,11 +460,6 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
 
             if (audioData == nullptr || audioDataLen == 0) {
                 fprintf(stderr, "Audio: No audio data for '%s'\n", sound->name);
-                return -1;
-            }
-            if (channels == 0 || sampleRate == 0 || bitsPerSample == 0) {
-                fprintf(stderr, "Audio: Invalid audio params for '%s' ch=%u rate=%u bits=%u\n",
-                    sound->name, channels, sampleRate, bitsPerSample);
                 return -1;
             }
 
@@ -884,26 +890,14 @@ static float maGetSoundLength(AudioSystem* audio, int32_t soundOrInstance) {
         if (0 > sound->audioFile || (uint32_t) sound->audioFile >= ma->base.audioGroups[sound->audioGroup]->audo.count) return 0.0f;
         AudioEntry* entry = &ma->base.audioGroups[sound->audioGroup]->audo.entries[sound->audioFile];
 
-        bool hasWavHeader = (entry->dataSize >= 12 &&
-            entry->data[0] == 'R' && entry->data[1] == 'I' &&
-            entry->data[2] == 'F' && entry->data[3] == 'F');
-
-        if (hasWavHeader) {
-            uint32_t channels = entry->data[22] | (entry->data[23] << 8);
-            uint32_t sampleRate = entry->data[24] | (entry->data[25] << 8) |
-                                  (entry->data[26] << 16) | (entry->data[27] << 24);
-            uint32_t bitsPerSample = entry->data[34] | (entry->data[35] << 8);
-            uint32_t audioDataLen = 0;
-            findWavDataChunk(entry->data, entry->dataSize, &audioDataLen);
-            if (channels > 0 && sampleRate > 0 && bitsPerSample > 0 && audioDataLen > 0) {
-                uint32_t bytesPerSample = channels * (bitsPerSample / 8);
-                if (bytesPerSample > 0)
-                    return (float) audioDataLen / (float)(sampleRate * bytesPerSample);
-            }
+        uint32_t channels, sampleRate, bitsPerSample, audioDataLen;
+        if (parseWavHeader(entry->data, entry->dataSize, &channels, &sampleRate, &bitsPerSample, nullptr, &audioDataLen)) {
+            uint32_t bytesPerSample = channels * (bitsPerSample / 8);
+            if (bytesPerSample > 0)
+                return (float) audioDataLen / (float)(sampleRate * bytesPerSample);
         } else {
             // Raw PCM: assume stereo 16-bit 44100 Hz
-            uint32_t audioDataLen = entry->dataSize;
-            return (float) audioDataLen / (float)(44100 * 2 * 2);
+            return (float) entry->dataSize / (float)(44100 * 2 * 2);
         }
         return 0.0f;
     }
