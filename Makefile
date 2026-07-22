@@ -102,6 +102,17 @@ SDL3_LIBS += $(shell $(PKG_CONFIG) $(PKG_CONFIG_FLAGS) --libs sdl3)
 LIBS += $(SDL3_LIBS)
 DEFINES += $(DEFINE)USE_SDL3
 endif
+ifeq ($(DESKTOP_BACKEND),win32)
+ifdef MSVC
+WIN32_LIBS += user32.lib gdi32.lib
+else
+WIN32_LIBS += -luser32 -lgdi32
+endif
+LIBS += $(WIN32_LIBS)
+DEFINES += $(DEFINE)USE_WIN32
+DISABLE_LEGACY_GL := 1
+DISABLE_MODERN_GL := 1
+endif
 
 
 # GNU make doesn't have a way to do OR in conditionals, stupid language for clowns
