@@ -13,6 +13,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
+#include <psapi.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
 #endif
 #ifdef __GLIBC__
 #include <malloc.h>
@@ -27,6 +31,7 @@
 #include "runner.h"
 #include "input_recording.h"
 #include "debug_overlay.h"
+#include "overlay.h"
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL) || ((defined(USE_GLFW3) || defined(USE_GLFW2)) && defined(ENABLE_SW_RENDERER))
 #include <glad/glad.h>
 #endif
@@ -75,7 +80,7 @@ const GLuint *hostFramebuffer;
 #endif
 
 static size_t get_used_memory(void) {
-#ifdef __linux__
+#if defined(__linux__)
     int fd = open("/proc/self/smaps_rollup", O_RDONLY);
     if (fd < 0)
         return 0;
@@ -102,6 +107,32 @@ static size_t get_used_memory(void) {
             p++;
         if (*p)
             p++;
+    }
+#elif defined(__APPLE__)
+    task_basic_info_data_t info;
+    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+        return info.resident_size;
+    }
+#elif defined(_WIN32)
+    typedef BOOL (WINAPI *GetProcessMemoryInfo_t)(HANDLE, PPROCESS_MEMORY_COUNTERS, DWORD);
+    static GetProcessMemoryInfo_t func = NULL;
+    static bool initialized = false;
+
+    if (!initialized) {
+        initialized = true;
+        HMODULE dll = LoadLibrary("psapi.dll");
+        if (dll) {
+            FARPROC p = GetProcAddress(dll, "GetProcessMemoryInfo");
+            memcpy(&func, &p, sizeof(func));
+        }
+    }
+
+    if (func) {
+        PROCESS_MEMORY_COUNTERS pmc;
+        pmc.cb = sizeof(pmc);
+        if (func(GetCurrentProcess(), &pmc, sizeof(pmc)))
+            return pmc.WorkingSetSize;
     }
 #endif
     return 0;
@@ -1413,6 +1444,7 @@ int main(int argc, char* argv[]) {
 #endif
             }
         }
+        Overlay_init(args.debug ? OVERLAY_STATS_ENABLED : OVERLAY_STATS_DISABLED);
         runner->debugMode = args.debug;
         runner->osType = args.osType;
         runner->setWindowSize = platformSetWindowSize;
@@ -1469,6 +1501,7 @@ int main(int argc, char* argv[]) {
         // Main loop
         bool debugPaused = false;
         bool debugShowCollisionMasks = false;
+        OverlayState overlayState = OVERLAY_STATS_ENABLED;
         bool freeCamActive = false;
         bool actuallyShuttingDown = false;
         uint64_t lastFrameTime = nowNanos();
@@ -1574,6 +1607,13 @@ int main(int argc, char* argv[]) {
                     }
 
                     free(json);
+                }
+
+                // Toggle the debug info overlay
+                if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F1)) {
+                    Overlay_toggle(runner);
+                    overlayState = Overlay_getState();
+                    fprintf(stderr, "Debug: Stats overlay %s!\n", overlayState == OVERLAY_STATS_DISABLED ? "disabled" : overlayState == OVERLAY_STATS_ENABLED ? "enabled" : "enabled with profiler");
                 }
 
                 // Toggle the collision mask debug overlay
@@ -1756,6 +1796,22 @@ int main(int argc, char* argv[]) {
                 renderer->vtable->endFrameEnd(renderer);
                 Runner_drawGUI(runner, fbWidth, fbHeight, gameW, gameH);
 
+                // Draw the debug overlay if enabled
+                if (overlayState != OVERLAY_STATS_DISABLED) {
+                    size_t memBytes = get_used_memory();
+                    static uint32_t frameCount = 0;
+                    static uint32_t fps = 0;
+                    static uint64_t then = 0;
+                    ++frameCount;
+
+                    if (lastFrameStartTime - then > 1000000000) {
+                        then = lastFrameStartTime;
+                        fps = frameCount;
+                        frameCount = 0;
+                    }
+                    Overlay_draw(runner, fps, fbWidth, fbHeight, memBytes);
+                }
+
 #if defined(ENABLE_LEGACY_GL) || defined(ENABLE_MODERN_GL)
                 // Capture screenshot if this frame matches a requested frame
                 bool shouldScreenshot = hmget(args.screenshotFrames, runner->frameCount);
@@ -1836,6 +1892,7 @@ int main(int argc, char* argv[]) {
             platformInitialized = false;
         }
 
+        Overlay_deinit();
         Runner_free(runner);
         OverlayFileSystem_destroy(overlayFs);
 #ifdef ENABLE_VM_OPCODE_PROFILER
