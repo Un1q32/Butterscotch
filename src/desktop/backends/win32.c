@@ -160,12 +160,14 @@ static LRESULT CALLBACK WindowProc(HWND h, UINT msg, WPARAM wParam, LPARAM lPara
             ReleaseCapture();
             return 0;
         }
+#ifdef GET_WHEEL_DELTA_WPARAM
         case 0x020A: {
             if (InputRecording_isPlaybackActive(globalInputRecording)) return 0;
             double delta = (double)GET_WHEEL_DELTA_WPARAM(wParam) / 120.0;
             RunnerMouse_onWheel(g_runner->mouse, delta);
             return 0;
         }
+#endif
         case WM_SIZE: {
             int32_t w = LOWORD(lParam);
             int32_t hgt = HIWORD(lParam);
