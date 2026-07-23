@@ -7,7 +7,7 @@
 #else
 #include <glad/glad.h>
 #endif
-#include <stdio.h>
+#include "stdio_compat.h"
 #include <stdlib.h>
 #include <string.h>
 #include "math_compat.h"
@@ -2337,12 +2337,12 @@ static void glDeleteSprite(Renderer* renderer, int32_t spriteIndex) {
 
 static BlendFactors glGpuGetBlendFactors(Renderer* renderer) {
     GLRenderer* gl = (GLRenderer*)renderer;
-    return (BlendFactors){
-        gl->currentSFactor, 
-        gl->currentDFactor, 
-        gl->currentSFactorAlpha, 
-        gl->currentDFactorAlpha
-    };
+    BlendFactors ret;
+    ret.src = gl->currentSFactor;
+    ret.dst = gl->currentDFactor;
+    ret.srcAlpha = gl->currentSFactorAlpha;
+    ret.dstAlpha = gl->currentDFactorAlpha;
+    return ret;
 }
 
 static int32_t glGpuGetBlendMode(Renderer* renderer) {
