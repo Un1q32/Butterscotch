@@ -142,6 +142,13 @@ SRCS += $(wildcard src/gl/*.c)
 HEADERS += $(wildcard src/gl/*.h)
 endif
 
+ifndef DISABLE_SW_RENDERER
+DEFINES += -DENABLE_SW_RENDERER
+SRCS += $(wildcard src/sw/*.c)
+HEADERS += $(wildcard src/sw/*.h)
+INCLUDES += -Isrc/sw
+endif
+
 ifdef DISABLE_WAD14
 ifdef DISABLE_WAD16
 ifdef DISABLE_WAD17
@@ -152,7 +159,9 @@ endif
 
 ifdef DISABLE_LEGACY_GL
 ifdef DISABLE_MODERN_GL
+ifdef DISABLE_SW_RENDERER
 $(error must enable at least 1 renderer)
+endif
 endif
 endif
 
