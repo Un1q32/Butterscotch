@@ -29,6 +29,7 @@ int main(int argc, char* argv[]) {
 #else
     args.renderer = SOFTWARE;
 #endif
+    args.dataWinPath = DATA_WIN_PATH;
 
     int ret = loop(args, argv[0]);
     return ret;

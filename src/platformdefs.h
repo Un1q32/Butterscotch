@@ -38,18 +38,20 @@ static const OsTypeNameEntry OS_TYPE_NAMES[] = {
 };
 #define OS_TYPE_NAMES_COUNT (sizeof(OS_TYPE_NAMES)/sizeof(OS_TYPE_NAMES[0]))
 
+enum GraphicsAPI {
+    SOFTWARE,
+    MODERN_GL,
+    LEGACY_GL
+};
+
+extern enum GraphicsAPI gfx;
+
 typedef struct {
     int key;
     // We need this dummy value, think that the ds_map is like a Java HashMap NOT a HashSet
     // (Which is funny, because in Java HashSets are backed by HashMaps lol)
     bool value;
 } FrameSetEntry;
-
-enum GraphicsAPI {
-    SOFTWARE,
-    MODERN_GL,
-    LEGACY_GL
-};
 
 typedef struct {
     const char* dataWinPath;
