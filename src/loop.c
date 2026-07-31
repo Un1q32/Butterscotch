@@ -443,6 +443,9 @@ char* collapseNewlines(const char *input) {
 
 // ===[ MAIN ]===
 int loop(CommandLineArgs args, const char *argv0) {
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
     char* currentDataWinPath = safeStrdup(args.dataWinPath);
     char** currentGameArgs = args.gameArgs;
     repeat(arrlen(args.gameArgs), i) {

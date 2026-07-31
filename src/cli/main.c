@@ -486,9 +486,6 @@ static void freeCommandLineArgs(CommandLineArgs* args) {
 
 int main(int argc, char* argv[]) {
     setbuf(stderr, NULL);
-#ifdef _WIN32
-    timeBeginPeriod(1);
-#endif
 
     CommandLineArgs args;
     parseCommandLineArgs(&args, argc, argv);
