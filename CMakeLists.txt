@@ -323,7 +323,7 @@ if(PLATFORM STREQUAL "desktop")
         set(BACKEND_LIBRARIES ${SDL3_LIBRARIES})
     endif()
     target_link_libraries(butterscotch PRIVATE ${BACKEND_LIBRARIES} ${AUDIO_LIBRARIES} ${PLATFORM_LIBRARIES})
-    target_sources(butterscotch PRIVATE src/desktop/backends/${DESKTOP_BACKEND}.c)
+    target_sources(butterscotch PRIVATE src/backends/${BACKEND}.c)
 
     # Enable AddressSanitizer by default in Debug builds
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
