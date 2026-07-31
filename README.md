@@ -91,7 +91,7 @@ The following compilers have been tested to successfully build butterscotch, old
 
 ```bash
 mkdir build && cd build
-cmake -DPLATFORM=desktop -DDESKTOP_BACKEND=glfw3 -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DPLATFORM=desktop -DBACKEND=glfw3 -DCMAKE_BUILD_TYPE=Debug ..
 make
 ```
 
