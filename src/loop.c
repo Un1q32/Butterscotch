@@ -726,16 +726,7 @@ int loop(CommandLineArgs args, const char *argv0) {
         OverlayFileSystem* overlayFs = OverlayFileSystem_create(dataWinDir, savePath);
         free(dataWinDir);
 
-        if (strcmp(args.renderer, "modern-gl") == 0)
-            gfx = MODERN_GL;
-        else if (strcmp(args.renderer, "legacy-gl") == 0)
-            gfx = LEGACY_GL;
-        else if (strcmp(args.renderer, "software") == 0)
-            gfx = SOFTWARE;
-        else {
-            logError("Unknown renderer: %s!\n", args.renderer);
-            return 1;
-        }
+        gfx = args.renderer;
 
 #ifndef ENABLE_LEGACY_GL
         if (gfx == LEGACY_GL) {

@@ -158,11 +158,11 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     // TODO: detect available driver features
     // at runtime to improve defaults.
 #if defined(ENABLE_MODERN_GL)
-    args->renderer = "modern-gl";
+    args->renderer = MODERN_GL;
 #elif defined(ENABLE_LEGACY_GL)
-    args->renderer = "legacy-gl";
+    args->renderer = LEGACY_GL;
 #else
-    args->renderer = "software";
+    args->renderer = SOFTWARE;
 #endif
 
     int opt;
@@ -326,7 +326,16 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 args->debug = true;
                 break;
             case 'g':
-                args->renderer = optarg;
+                if (strcmp(optarg, "modern-gl") == 0)
+                    args->renderer = MODERN_GL;
+                else if (strcmp(optarg, "legacy-gl") == 0)
+                    args->renderer = LEGACY_GL;
+                else if (strcmp(optarg, "software") == 0)
+                    args->renderer = SOFTWARE;
+                else {
+                    fprintf(stderr, "Unknown renderer: %s!\n", optarg);
+                    exit(1);
+                }
                 break;
             case 'z':
                 args->lazyRooms = true;
