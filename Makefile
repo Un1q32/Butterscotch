@@ -69,12 +69,12 @@ ifndef DISABLE_WAD17
 DEFINES += $(DEFINE)ENABLE_WAD17
 endif
 
-# TODO: add support for non-desktop backends
-SRCS += $(wildcard src/desktop/*.c) src/backends/$(BACKEND).c
+# TODO: add support for non-cli backends
+SRCS += $(wildcard src/cli/*.c) src/backends/$(BACKEND).c
 ifeq ($(OS),Windows)
 PKG_CONFIG_FLAGS := --static
 endif
-INCLUDES += $(INCLUDE)src/desktop
+INCLUDES += $(INCLUDE)src/cli
 ifeq ($(BACKEND),glfw3)
 GLFW3_LIBS += $(shell $(PKG_CONFIG) $(PKG_CONFIG_FLAGS) --libs glfw3)
 LIBS += $(GLFW3_LIBS)
