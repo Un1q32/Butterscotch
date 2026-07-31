@@ -7,7 +7,7 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "PLATFORM": "desktop",
+        "PLATFORM": "cli",
         "BACKEND": "glfw3",
         "ENABLE_ASAN": false,
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
