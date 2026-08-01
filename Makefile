@@ -43,6 +43,7 @@ INCLUDES += $(INCLUDE). \
 HEADERS += $(wildcard src/*.h) $(shell find vendor -name '*.h')
 SRCS += $(wildcard src/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
+PLATFORM := cli
 BACKEND := glfw3
 AUDIO_BACKEND := miniaudio
 
@@ -69,8 +70,17 @@ ifndef DISABLE_WAD17
 DEFINES += $(DEFINE)ENABLE_WAD17
 endif
 
-# TODO: add support for non-cli backends
-SRCS += $(wildcard src/cli/*.c) src/backends/$(BACKEND).c
+ifeq ($(PLATFORM),cli)
+SRCS += $(wildcard src/cli/*.c)
+else
+ifeq ($(PLATFORM),embedded)
+SRCS += $(wildcard src/embedded/*.c)
+else
+$(error unknown platform)
+endif
+endif
+
+SRCS += src/backends/$(BACKEND).c
 ifeq ($(OS),Windows)
 PKG_CONFIG_FLAGS := --static
 endif

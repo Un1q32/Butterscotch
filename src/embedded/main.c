@@ -12,7 +12,7 @@
 int main(int argc, char* argv[]) {
     setbuf(stderr, NULL);
 
-    CommandLineArgs args;
+    CommandLineArgs args = {0};
 
     args.exitAtFrame = -1;
     args.traceBytecodeAfterFrame = 0;
