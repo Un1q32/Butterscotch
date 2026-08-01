@@ -89,7 +89,7 @@ static void printUsage(const char *argv0) {
 }
 
 static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) {
-    ZERO_STRUCT(args);
+    ZERO_STRUCT(*args);
 
     static struct option longOptions[] = {
         {"help",          no_argument, nullptr, 'H'},
