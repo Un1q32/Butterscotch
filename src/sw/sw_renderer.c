@@ -7,6 +7,7 @@
 #include "text_utils.h"
 #include "pixel_convert.h"
 #include "image/image_decoder.h"
+#include "debug_font/debug_font.h"
 
 #define UNIMP() do { fprintf(stderr, "NYI %s\n", __func__); } while (0)
 //#define UNIMP() do { } while (0)
@@ -2096,6 +2097,198 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
     swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha, lineSeparation);
 }
 
+// Blits a single debug font glyph into the framebuffer, with per-pixel
+// anti-aliasing taken from the font atlas (like the GL debug text path).
+// Coordinates are in raw framebuffer space.
+static void swrDrawDebugGlyph(
+    SWRenderer* swr, const DebugFontGlyphEntry* glyph,
+    float dx, float dy, float dw, float dh,
+    uintpixel_t color, int baseSa, int baseDa
+)
+{
+    if (dx + dw <= 0.0f) return;
+    if (dy + dh <= 0.0f) return;
+    if (dx >= (float) swr->width) return;
+    if (dy >= (float) swr->height) return;
+    
+    int x0 = swrFloor(dx);
+    int y0 = swrFloor(dy);
+    int x1 = swrCeiling(dx + dw);
+    int y1 = swrCeiling(dy + dh);
+    
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > swr->width) x1 = swr->width;
+    if (y1 > swr->height) y1 = swr->height;
+    
+    int dwi = x1 - x0;
+    int dhi = y1 - y0;
+    if (dwi <= 0 || dhi <= 0) return;
+    
+    int sw = glyph->w;
+    int sh = glyph->h;
+    int sx = glyph->x;
+    int sy = glyph->y;
+    
+    for (int py = 0; py < dhi; py++)
+    {
+        uintpixel_t* line = &swr->fb[(y0 + py) * swr->fbPitch + x0];
+        int ty = sy + (py * sh) / dhi;
+        const uint8_t* trow = &debugFontPixels[ty * DEBUGFONT_ATLAS_W];
+        for (int px = 0; px < dwi; px++)
+        {
+            int tx = sx + (px * sw) / dwi;
+            int t = trow[tx];
+            if (t == 0) continue;
+            int sa = (baseSa * t) / 255;
+            int da = (baseDa == 256) ? 256 : 256 - sa;
+            alphaBlend(&line[px], color, sa, da);
+        }
+    }
+}
+
+static void swrDrawDebugGlyphRotated(
+    SWRenderer* swr, const DebugFontGlyphEntry* glyph,
+    float dx, float dy, float dw, float dh,
+    float cosA, float sinA, float ox, float oy,
+    uintpixel_t color, int baseSa, int baseDa
+)
+{
+    // AABB of the rotated glyph rect
+    float cnrx[4], cnry[4];
+    cnrx[0] = dx;      cnry[0] = dy;
+    cnrx[1] = dx + dw; cnry[1] = dy;
+    cnrx[2] = dx + dw; cnry[2] = dy + dh;
+    cnrx[3] = dx;      cnry[3] = dy + dh;
+    
+    float minXf = FLT_MAX, minYf = FLT_MAX, maxXf = -FLT_MAX, maxYf = -FLT_MAX;
+    for (int i = 0; i < 4; i++)
+    {
+        float cx = cnrx[i] - ox;
+        float cy = cnry[i] - oy;
+        float rx = cosA * cx - sinA * cy + ox;
+        float ry = sinA * cx + cosA * cy + oy;
+        if (minXf > rx) minXf = rx;
+        if (maxXf < rx) maxXf = rx;
+        if (minYf > ry) minYf = ry;
+        if (maxYf < ry) maxYf = ry;
+    }
+    
+    int minX = swrFloor(minXf);
+    int minY = swrFloor(minYf);
+    int maxX = swrCeiling(maxXf);
+    int maxY = swrCeiling(maxYf);
+    
+    if (maxX <= 0) return;
+    if (maxY <= 0) return;
+    if (minX >= swr->width) return;
+    if (minY >= swr->height) return;
+    
+    int minXc = swrMax(minX, 0);
+    int minYc = swrMax(minY, 0);
+    int maxXc = swrMin(maxX, swr->width);
+    int maxYc = swrMin(maxY, swr->height);
+    
+    if (minXc >= maxXc || minYc >= maxYc) return;
+    
+    int sw = glyph->w, sh = glyph->h, sx = glyph->x, sy = glyph->y;
+    float sw_dw = (float) sw / dw;
+    float sh_dh = (float) sh / dh;
+    
+    for (int cy = minYc; cy < maxYc; cy++)
+    {
+        uintpixel_t* line = &swr->fb[cy * swr->fbPitch];
+        for (int cx = minXc; cx < maxXc; cx++)
+        {
+            float oxf = (float) cx + 0.5f - ox;
+            float oyf = (float) cy + 0.5f - oy;
+            float lx = cosA * oxf + sinA * oyf;
+            float ly = -sinA * oxf + cosA * oyf;
+            lx += ox - dx;
+            ly += oy - dy;
+            if (lx < 0 || ly < 0 || lx >= dw || ly >= dh) continue;
+            int tx = sx + (int)(lx * sw_dw);
+            int ty = sy + (int)(ly * sh_dh);
+            if (tx >= sx + sw) tx = sx + sw - 1;
+            if (ty >= sy + sh) ty = sy + sh - 1;
+            int t = debugFontPixels[ty * DEBUGFONT_ATLAS_W + tx];
+            if (t == 0) continue;
+            int sa = (baseSa * t) / 255;
+            int da = (baseDa == 256) ? 256 : 256 - sa;
+            alphaBlend(&line[cx], color, sa, da);
+        }
+    }
+}
+
+static void swrDrawDebugText(
+    SWRenderer* swr, const char* text,
+    float x, float y, float xscale, float yscale, float angleDeg,
+    uintpixel_t color, int alpha
+)
+{
+    if (text == NULL) return;
+    if (xscale == 0.0f || yscale == 0.0f) return;
+    
+    bool mustRotate = swrMustRotateTolerant(angleDeg);
+    float cosA = 1.0f, sinA = 0.0f;
+    if (UNLIKELY(mustRotate))
+    {
+        float angleRad = -angleDeg * M_PI / 180.0f;
+        cosA = cosf(angleRad);
+        sinA = sinf(angleRad);
+    }
+    
+    int baseSa = swrCalcSrcAlpha(swr, alpha);
+    int baseDa = swrCalcDstAlpha(swr, alpha);
+    
+    int32_t len = (int32_t) strlen(text);
+    float cursorY = 0;
+    int32_t lineStart = 0;
+    
+    for (int32_t i = 0; len >= i; i++)
+    {
+        if (i == len || text[i] == '\n')
+        {
+            int32_t lineLen = i - lineStart;
+            float pen = 0;
+            for (int32_t j = 0; j < lineLen; j++)
+            {
+                uint8_t c = (uint8_t) text[lineStart + j];
+                const DebugFontGlyphEntry* glyph;
+                if (DEBUGFONT_FIRST_CP > c || c > DEBUGFONT_LAST_CP)
+                    glyph = NULL;
+                else
+                    glyph = &debugFontGlyphs[c - DEBUGFONT_FIRST_CP];
+                if (glyph == NULL) continue;
+                if (glyph->w > 0 && glyph->h > 0)
+                {
+                    float gx = x + (pen + (float) glyph->xoffset) * xscale;
+                    float gy = y + (cursorY + (float) glyph->yoffset) * yscale;
+                    float gw = (float) glyph->w * xscale;
+                    float gh = (float) glyph->h * yscale;
+                    
+                    if (UNLIKELY(mustRotate))
+                        swrDrawDebugGlyphRotated(swr, glyph, gx, gy, gw, gh, cosA, sinA, x, y, color, baseSa, baseDa);
+                    else
+                        swrDrawDebugGlyph(swr, glyph, gx, gy, gw, gh, color, baseSa, baseDa);
+                }
+                pen += (float) glyph->xadvance;
+            }
+            cursorY += (float) DEBUGFONT_LINE_HEIGHT;
+            lineStart = i + 1;
+        }
+    }
+}
+
+static void SWRenderer_drawDebugText(Renderer* renderer, const char* text, float x, float y,
+                                     float xscale, float yscale, float angleDeg, float lineSeparation)
+{
+    (void) lineSeparation;
+    
+    SWRenderer* swr = (SWRenderer*) renderer;
+    swrDrawDebugText(swr, text, x, y, xscale, yscale, angleDeg, swrConvertPixel(renderer->drawColor), swrIntAlpha(renderer->drawAlpha));
+}
+
 static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
                                        float originX, float originY, float x, float y,
                                        float xscale, float yscale, bool tileX, bool tileY,
@@ -2950,6 +3143,7 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawLineColor            = SWRenderer_drawLineColor;
     swrVtable.drawText                 = SWRenderer_drawText;
     swrVtable.drawTextColor            = SWRenderer_drawTextColor;
+    swrVtable.drawDebugText            = SWRenderer_drawDebugText;
     swrVtable.flush                    = SWRenderer_flush;
     swrVtable.clearScreen              = SWRenderer_clearScreen;
     swrVtable.createSpriteFromSurface  = SWRenderer_createSpriteFromSurface;
