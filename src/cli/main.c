@@ -540,6 +540,7 @@ int main(int argc, char* argv[]) {
 
     CommandLineArgs args;
     parseCommandLineArgs(&args, argc, argv);
+    logColour = !args.disableLogColours;
     int ret = loop(args, argv[0]);
     freeCommandLineArgs(&args);
     return ret;
