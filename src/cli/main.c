@@ -26,9 +26,38 @@ static void printOsTypeNames(FILE* out) {
     }
 }
 
+static bool logColour;
+
+void platformLog(const logType type, const char *format, va_list va) {
+    FILE *out = stderr;
+    const char* colourPrefix = ANSI_COLOUR_CODE_RESET;
+    const char* textPrefix = "";
+    switch (type) {
+        case LOG_TYPE_NORMAL:
+            out = stdout;
+            break;
+        case LOG_TYPE_WARNING:
+            colourPrefix = ANSI_COLOUR_CODE_BOLD_YELLOW;
+            textPrefix = "Warning: ";
+            break;
+        case LOG_TYPE_ERROR:
+            colourPrefix = ANSI_COLOUR_CODE_BOLD_RED;
+            textPrefix = "Error: ";
+            break;
+        case LOG_TYPE_DEBUG:
+            colourPrefix = ANSI_COLOUR_CODE_BOLD_PURPLE;
+            textPrefix = "Debug: ";
+            break;
+    }
+
+    if (logColour) fputs(colourPrefix, out);
+    fputs(textPrefix, out);
+    if (logColour) fputs(ANSI_COLOUR_CODE_RESET, out);
+    vfprintf(out, format, va);
+}
+
 static void printUsage(const char *argv0) {
-    fprintf(
-        stderr,
+    logInfo(
         "Usage: %s <path to data.win or game.unx>\n"
         "    --help                                 - Show this message\n"
         "    --screenshot <filename>                - Specify the filename for screenshots\n"
@@ -81,6 +110,8 @@ static void printUsage(const char *argv0) {
         "    --lazy-textures                        - Load textures into VRAM on first use, improving startup times\n"
         "    --lazy-audio                           - Load audio into RAM on first use, reducing memory usage\n"
         "    --load-type <type>                     - Specify how data.win is loaded, per-chunk or all at once\n"
+        "    --disable-log-colours                  - Disable colours for warning, error, and debug logs\n"
+        "    --disable-log-colors                   - Same as --disable-log-colours, but different spelling\n"
 #ifdef EABLE_VM_OPCODE_PROFILER
         "    --profile-opcodes                      - Rank which GML opcodes were executed the most\n"
 #endif
@@ -141,6 +172,8 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
         {"lazy-textures", no_argument, nullptr, 'L'},
         {"lazy-audio", no_argument, nullptr, 'K'},
         {"load-type", required_argument, nullptr, 999},
+        {"disable-log-colours", no_argument, nullptr, 1003},
+        {"disable-log-colors", no_argument, nullptr, 1003},
 #ifdef ENABLE_VM_OPCODE_PROFILER
         {"profile-opcodes", no_argument, nullptr, 'Q'},
 #endif
@@ -155,6 +188,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->osType = OS_WINDOWS;
     args->profilerFramesBetween = 0;
     args->loadType = DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME;
+    args->disableLogColours = !isatty(1); // 1 == stdout
     // TODO: detect available driver features
     // at runtime to improve defaults.
 #if defined(ENABLE_MODERN_GL)
@@ -178,7 +212,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s'\n", optarg);
+                    logError("Invalid frame number '%s'\n", optarg);
                     exit(1);
                 }
 
@@ -192,7 +226,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s' for --screenshot-surfaces-at-frame\n", optarg);
+                    logError("Invalid frame number '%s' for --screenshot-surfaces-at-frame\n", optarg);
                     exit(1);
                 }
                 hmput(args->screenshotSurfacesFrames, frame, true);
@@ -263,7 +297,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s' for --exit-at-frame\n", optarg);
+                    logError("Invalid frame number '%s' for --exit-at-frame\n", optarg);
                     exit(1);
                 }
                 args->exitAtFrame = frame;
@@ -273,7 +307,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s' for --trace-bytecode-after-frame\n", optarg);
+                    logError("Invalid frame number '%s' for --trace-bytecode-after-frame\n", optarg);
                     exit(1);
                 }
                 args->traceBytecodeAfterFrame = frame;
@@ -283,7 +317,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s' for --dump-frame\n", optarg);
+                    logError("Invalid frame number '%s' for --dump-frame\n", optarg);
                     exit(1);
                 }
                 hmput(args->dumpFrames, frame, true);
@@ -293,7 +327,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int frame = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || 0 > frame) {
-                    fprintf(stderr, "Error: Invalid frame number '%s' for --dump-frame-json\n", optarg);
+                    logError("Invalid frame number '%s' for --dump-frame-json\n", optarg);
                     exit(1);
                 }
                 hmput(args->dumpJsonFrames, frame, true);
@@ -306,7 +340,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 double speed = strtod(optarg, &endPtr);
                 if (*endPtr != '\0' || speed <= 0.0) {
-                    fprintf(stderr, "Error: Invalid speed multiplier '%s' for --speed (must be > 0)\n", optarg);
+                    logError("Invalid speed multiplier '%s' for --speed (must be > 0)\n", optarg);
                     exit(1);
                 }
                 args->speedMultiplier = speed;
@@ -316,7 +350,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 double speed = strtod(optarg, &endPtr);
                 if (*endPtr != '\0' || speed <= 0.0) {
-                    fprintf(stderr, "Error: Invalid speed '%s' for --fast-forward-speed (must be > 0)\n", optarg);
+                    logError("Invalid speed '%s' for --fast-forward-speed (must be > 0)\n", optarg);
                     exit(1);
                 }
                 args->fastForwardSpeed = speed;
@@ -333,7 +367,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 else if (strcmp(optarg, "software") == 0)
                     args->renderer = SOFTWARE;
                 else {
-                    fprintf(stderr, "Unknown renderer: %s!\n", optarg);
+                    logError("Unknown renderer: %s!\n", optarg);
                     exit(1);
                 }
                 break;
@@ -356,7 +390,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int seedVal = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0') {
-                    fprintf(stderr, "Error: Invalid seed value '%s' for --seed\n", optarg);
+                    logError("Invalid seed value '%s' for --seed\n", optarg);
                     exit(1);
                 }
                 args->seed = seedVal;
@@ -373,7 +407,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 char* endPtr;
                 int framesBetween = strtol(optarg, &endPtr, 10);
                 if (*endPtr != '\0' || framesBetween <= 0) {
-                    fprintf(stderr, "Error: Invalid frame count '%s' for --profile-gml-scripts (must be > 0)\n", optarg);
+                    logError("Invalid frame count '%s' for --profile-gml-scripts (must be > 0)\n", optarg);
                     exit(1);
                 }
                 args->profilerFramesBetween = framesBetween;
@@ -397,16 +431,16 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
 #endif
             case 'O':
                 if (!parseOsTypeArg(optarg, &args->osType)) {
-                    fprintf(stderr, "Error: Invalid --os-type value '%s' (expected: ", optarg);
+                    logError("Invalid --os-type value '%s' (expected: ", optarg);
                     printOsTypeNames(stderr);
-                    fprintf(stderr, ")\n");
+                    logError(")\n");
                     exit(1);
                 }
                 break;
             case 'w': {
                 int32_t w = 0, h = 0;
                 if (sscanf(optarg, "%dx%d", &w, &h) != 2 || 0 >= w || 0 >= h) {
-                    fprintf(stderr, "Error: Invalid --window-size value '%s' (expected WxH, e.g. 960x544)\n", optarg);
+                    logError("Invalid --window-size value '%s' (expected WxH, e.g. 960x544)\n", optarg);
                     exit(1);
                 }
                 args->windowWidth = w;
@@ -421,7 +455,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 } else if (strcmp(optarg, "load-per-chunk") == 0) {
                     args->loadType = DATAWINLOADTYPE_LOAD_PER_CHUNK;
                 } else {
-                    fprintf(stderr, "Error: Unknown load type '%s'\n", optarg);
+                    logError("Unknown load type '%s'\n", optarg);
                     exit(1);
                 }
                 break;
@@ -439,11 +473,14 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
                 } else if ((ratio = strtod(optarg, &endPtr)), *endPtr == '\0' && ratio > 0.0) {
                     args->widescreenAspect = (float) ratio;
                 } else {
-                    fprintf(stderr, "Error: Invalid --widescreen-hack value '%s' (expected W:H like 16:9, or a decimal like 1.7778)\n", optarg);
+                    logError("Invalid --widescreen-hack value '%s' (expected W:H like 16:9, or a decimal like 1.7778)\n", optarg);
                     exit(1);
                 }
                 break;
             }
+            case 1003:
+                args->disableLogColours = true;
+                break;
             default:
                 printUsage(argv[0]);
                 exit(1);
@@ -451,24 +488,24 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     }
 
     if (optind >= argc) {
-        fprintf(stderr, "Usage: %s <path to data.win or game.unx>\n", argv[0]);
+        printUsage(argv[0]);
         exit(1);
     }
 
     args->dataWinPath = argv[optind];
 
     if (hmlen(args->screenshotFrames) > 0 && args->screenshotPattern == nullptr) {
-        fprintf(stderr, "Error: --screenshot-at-frame requires --screenshot to be set\n");
+        logError("--screenshot-at-frame requires --screenshot to be set\n");
         exit(1);
     }
 
     if (hmlen(args->screenshotSurfacesFrames) > 0 && args->screenshotSurfacesPattern == nullptr) {
-        fprintf(stderr, "Error: --screenshot-surfaces-at-frame requires --screenshot-surfaces to be set\n");
+        logError("--screenshot-surfaces-at-frame requires --screenshot-surfaces to be set\n");
         exit(1);
     }
 
     if (args->headless && args->speedMultiplier != 1.0) {
-        fprintf(stderr, "You can't set the speed multiplier while running in headless mode! Headless mode always run in real time\n");
+        logError("You can't set the speed multiplier while running in headless mode! Headless mode always run in real time\n");
         exit(1);
     }
 }

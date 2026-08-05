@@ -107,6 +107,7 @@ typedef struct {
 #ifdef ENABLE_VM_OPCODE_PROFILER
     bool opcodeProfiler;
 #endif
+    bool disableLogColours;
 } CommandLineArgs;
 
 bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless);
