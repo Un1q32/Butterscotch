@@ -1874,7 +1874,7 @@ int main(int argc, char* argv[]) {
             ++frames;
             if (t != now) {
                 char buf[16];
-                snprintf(buf, sizeof(buf), "FPS: %u\n", frames);
+                snprintf(buf, sizeof(buf), "FPS: %u", frames);
                 platformSetWindowTitle(buf);
                 t = now;
                 frames = 0;
