@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [title-fps]
   pull_request:
     branches: [main]
 
