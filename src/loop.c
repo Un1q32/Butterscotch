@@ -1312,6 +1312,18 @@ int loop(CommandLineArgs args, const char *argv0) {
                     logInfo("Memory use right now: %zu bytes (%.1f MB)\n", bytes_used, bytes_used / 1024.0f / 1024.0f);
             }
 
+            static uint32_t frames = 0;
+            static time_t t = 0;
+            time_t now = time(NULL);
+            ++frames;
+            if (t != now) {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "FPS: %u", frames);
+                platformSetWindowTitle(buf);
+                t = now;
+                frames = 0;
+            }
+
             // Limit frame rate to room speed (skip in headless mode for max speed!!)
             if (!args.headless && runner->currentRoom->speed > 0) {
                 bool fastForwardTabNow = RunnerKeyboard_checkPressed(runner->keyboard, VK_TAB);
