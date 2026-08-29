@@ -67,11 +67,25 @@ typedef struct {
     int32_t batchCount;
     GLuint currentTextureId;
 
-    GLuint* glTextures;       // one GL texture per TXTR page
-    int32_t* textureWidths;   // needed for UV normalization
+    // On the desktop/ES path each entry is one extracted sub-region (a TPAG item) rather
+    // than a whole TXTR page: we decode the owning page once and upload only the used
+    // rectangle, so unused areas never occupy VRAM. textureCount == dataWin->tpag.count.
+    // On PLATFORM_VITA (legacy optimized path) entries remain whole pages and textureCount
+    // is the page count.
+    GLuint* glTextures;       // one GL texture per TPAG item (or per page on Vita)
+    int32_t* textureWidths;   // extracted texture pixel dims (TPAG sourceWidth/Height, or page dims on Vita)
     int32_t* textureHeights;
-    bool* textureLoaded;      // lazy loading: true once PNG decoded and uploaded
+    bool* textureLoaded;      // lazy loading: true once decoded and uploaded
     uint32_t textureCount;
+
+    // Desktop/ES single-entry decoded-page cache: the most recently decoded whole TXTR page
+    // is kept in system RAM so that extracting additional TPAG sub-rectangles from the same
+    // page reuses the decoded RGBA buffer instead of re-decoding. Evicted whenever a different
+    // page is decoded. Not used on PLATFORM_VITA (page-based whole-page uploads).
+    uint32_t textureCachePageId; // page whose decoded pixels are cached (UINT32_MAX == none)
+    uint8_t* textureCachePixels; // full decoded RGBA buffer of that page (owned by the cache)
+    int32_t textureCacheW;
+    int32_t textureCacheH;
 
     GLuint whiteTexture; // 1x1 white pixel for drawing primitives (rectangles, lines, etc.)
 
@@ -111,7 +125,10 @@ typedef struct {
     GLShaderUniform* uTexture;
 } GLRenderer;
 
-bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t pageId);
+// Loads (decodes + uploads) a single texture. On the desktop/ES path `index` is a TPAG
+// index and only that sub-region of its TXTR page is uploaded; on PLATFORM_VITA it is a
+// page index and the whole page is uploaded. Returns true once the texture is ready.
+bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index);
 Renderer* GLRenderer_create(void);
 
 #endif /* _BS_GL_RENDERER_H_ */

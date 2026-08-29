@@ -897,17 +897,20 @@ int loop(CommandLineArgs args, const char *argv0) {
         Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem, args.seed);
 
         if (!args.lazyTextures) {
-            repeat(runner->dataWin->txtr.count, i) {
 #ifdef ENABLE_MODERN_GL
-                if (gfx == MODERN_GL)
-                    GLRenderer_ensureTextureLoaded((GLRenderer*) renderer, (int32_t) i);
+            if (gfx == MODERN_GL) {
+                // The modern GL renderer keys textures by TPAG (one extracted texture per TPAG item).
+                for (uint32_t i = 0; i < runner->dataWin->tpag.count; i++)
+                    GLRenderer_ensureTextureLoaded((GLRenderer*) renderer, i);
+            }
 #endif
 
 #ifdef ENABLE_LEGACY_GL
-                if (gfx == LEGACY_GL)
+            if (gfx == LEGACY_GL) {
+                repeat(runner->dataWin->txtr.count, i)
                     GLLegacyRenderer_ensureTextureLoaded((GLLegacyRenderer*) renderer, (int32_t) i);
-#endif
             }
+#endif
         }
         runner->debugMode = args.debug;
         runner->osType = args.osType;

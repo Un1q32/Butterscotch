@@ -628,14 +628,17 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->vertexData = (Vertex *)safeMalloc(MAX_QUADS * VERTICES_PER_QUAD * sizeof(Vertex));
 #endif
 
-    // Prepare texture slots for lazy loading (PNG decode deferred to first use)
+    // Prepare texture slots for lazy loading (decode deferred to first use).
+    // Each slot is one TexturePageItem (an individual texture extracted from a TXTR page)
+    // on the desktop/ES path, so we size the arrays by the TPAG count. Only PLATFORM_VITA's
+    // legacy optimized path keeps whole pages, indexed by page count.
 #if defined(PLATFORM_VITA)
     if (VitaTextures_Active())
         gl->textureCount = VitaTextures_GetPageCount();
     else
         gl->textureCount = dataWin->txtr.count;
 #else
-    gl->textureCount = dataWin->txtr.count;
+    gl->textureCount = dataWin->tpag.count;
 #endif
     gl->glTextures = (GLuint *)safeMalloc(gl->textureCount * sizeof(GLuint));
     gl->textureWidths = (int32_t *)safeMalloc(gl->textureCount * sizeof(int32_t));
@@ -665,12 +668,19 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->batchCount = 0;
     gl->currentTextureId = 0;
 
-    // Save original counts so we know which slots are from data.win vs dynamic
+    // No decoded page cached yet.
+    gl->textureCachePageId = UINT32_MAX;
+    gl->textureCachePixels = nullptr;
+    gl->textureCacheW = 0;
+    gl->textureCacheH = 0;
+
+    // Save original counts so we know which slots are from data.win vs dynamic.
+    // On the desktop/ES path textures are keyed by TPAG, so this is the TPAG count.
     gl->originalTexturePageCount = gl->textureCount;
     gl->originalTpagCount = dataWin->tpag.count;
     gl->originalSpriteCount = dataWin->sprt.count;
 
-    logInfo("GL: Renderer initialized (%u texture pages)\n", gl->textureCount);
+    logInfo("GL: Renderer initialized (%u textures)\n", gl->textureCount);
 }
 
 static void glGpuSetShader(Renderer* renderer, int32_t shaderIndex) {
@@ -810,6 +820,7 @@ static void glDestroy(Renderer* renderer) {
     free(gl->textureWidths);
     free(gl->textureHeights);
     free(gl->textureLoaded);
+    free(gl->textureCachePixels);
     free(gl->uWorldViewProjection);
     free(gl->uFogColor);
     free(gl->uAlphaTestRef);
@@ -1037,26 +1048,42 @@ static void glClearScreen(Renderer* renderer, uint32_t color, float alpha) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
-// Lazily decodes and uploads a TXTR page on first access.
+// Lazily decodes and uploads a single texture on first access.
+// On the desktop/ES path `index` is a TPAG index: we decode the whole TXTR page once to get
+// its RGBA pixels, then upload only the exact sub-rectangle used by that TPAG item. The full
+// page is never uploaded, so unused areas of the page consume no VRAM.
 // Returns true if the texture is ready, false if it failed to decode.
-bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t pageId) {
-    if (gl->textureLoaded[pageId]) return (gl->textureWidths[pageId] != 0);
+bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
+    if (gl->textureLoaded[index]) return (gl->textureWidths[index] != 0);
 
-    gl->textureLoaded[pageId] = true;
+    gl->textureLoaded[index] = true;
+
+    DataWin* dw = gl->base.dataWin;
 
 #if defined(PLATFORM_VITA)
     if (VitaTextures_Active()) {
-        glBindTexture(GL_TEXTURE_2D, gl->glTextures[pageId]);
-        if (!VitaTextures_LoadPage(pageId, &gl->textureWidths[pageId], &gl->textureHeights[pageId])) {
-            logError("GL: Failed to load Vita TXTR page %u", pageId);
+        // Vita legacy path: upload the whole page (index is a page id here).
+        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+        if (!VitaTextures_LoadPage(index, &gl->textureWidths[index], &gl->textureHeights[index])) {
+            logError("GL: Failed to load Vita TXTR page %u", index);
             return false;
         }
-        logInfo("GL: Loaded TXTR page %u (%dx%d)\n", pageId, gl->textureWidths[pageId], gl->textureHeights[pageId]);
+        logInfo("GL: Loaded TXTR page %u (%dx%d)\n", index, gl->textureWidths[index], gl->textureHeights[index]);
         return true;
     }
+    // Vita without VitaTextures: decode and upload the whole page (index is a page id).
+    if (dw->txtr.count <= index) return false;
+    uint32_t pageId = index;
+    int su = 0, sv = 0, rw = 0, rh = 0;
+#else
+    if (dw->tpag.count <= index) return false;
+    TexturePageItem* tpag = &dw->tpag.items[index];
+    int16_t pageId = tpag->texturePageId;
+    if (0 > pageId || dw->txtr.count <= (uint32_t) pageId) return false;
+    int su = tpag->sourceX, sv = tpag->sourceY;
+    int rw = tpag->sourceWidth, rh = tpag->sourceHeight;
 #endif
 
-    DataWin* dw = gl->base.dataWin;
     Texture* txtr = &dw->txtr.textures[pageId];
 
     DataWin_loadTxtrIfNeeded(dw, pageId);
@@ -1072,16 +1099,39 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t pageId) {
         free(txtr->blobData);
         txtr->blobData = nullptr;
     }
+#if defined(PLATFORM_VITA)
+    // Whole page path: set the rect to the decoded page and keep the original 0,0 offset.
+    su = 0; sv = 0; rw = w; rh = h;
+#else
+    // Clamp the TPAG source rect to the decoded page bounds.
+    if ((uint32_t) su + (uint32_t) rw > (uint32_t) w) rw = w - su;
+    if ((uint32_t) sv + (uint32_t) rh > (uint32_t) h) rh = h - sv;
+    if (rw < 1) rw = 1;
+    if (rh < 1) rh = 1;
+#endif
 
-    gl->textureWidths[pageId] = w;
-    gl->textureHeights[pageId] = h;
+    gl->textureWidths[index] = rw;
+    gl->textureHeights[index] = rh;
 
-    glBindTexture(GL_TEXTURE_2D, gl->glTextures[pageId]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    // Extract only the used rectangle into a fresh RGBA buffer (on Vita the whole page).
+    uint8_t* outPx;
+    if (su == 0 && sv == 0 && rw == w && rh == h) {
+        outPx = pixels; // upload the decoded buffer directly
+    } else {
+        outPx = (uint8_t *)safeMalloc((size_t) rw * (size_t) rh * 4);
+        for (int32_t row = 0; row < rh; row++) {
+            memcpy(outPx + (size_t) row * rw * 4,
+                   pixels + ((size_t) (sv + row) * w + su) * 4,
+                   (size_t) rw * 4);
+        }
+        free(pixels);
+    }
 
-    free(pixels);
+    glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPx);
+    if (outPx != pixels) free(outPx);
 
-    bool isPOT = (w & (w - 1)) == 0 && (h & (h - 1)) == 0;
+    bool isPOT = (rw & (rw - 1)) == 0 && (rh & (rh - 1)) == 0;
     GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1089,15 +1139,20 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t pageId) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
 
-    logInfo("GL: Loaded TXTR page %u (%dx%d)\n", pageId, gl->textureWidths[pageId], gl->textureHeights[pageId]);
+    logInfo("GL: Loaded texture %u (%dx%d)\n", index, rw, rh);
     return true;
 }
 
-// Resolves a TPAG index to a loaded GL texture. Returns false if drawing should be skipped.
-static bool resolveSpriteTexture(GLRenderer* gl, int32_t tpagIndex, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH) {
+// Resolves a TPAG index to a loaded GL texture plus the UV rect that spans the whole TPAG
+// region in that texture's UV space. On the desktop/ES path the texture is exactly the TPAG's
+// sub-rectangle, so the full-region UVs are (0,0)-(1,1); on Vita the texture is the whole page
+// and the UVs are page-relative. Returns false if drawing should be skipped.
+static bool resolveSpriteTexture(GLRenderer* gl, int32_t tpagIndex, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH, float* outU0, float* outV0, float* outU1, float* outV1) {
     DataWin* dw = gl->base.dataWin;
     if (0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex) return false;
     TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+
+#if defined(PLATFORM_VITA)
     int16_t pageId = tpag->texturePageId;
     if (0 > pageId || gl->textureCount <= (uint32_t) pageId) return false;
     if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pageId)) return false;
@@ -1105,6 +1160,23 @@ static bool resolveSpriteTexture(GLRenderer* gl, int32_t tpagIndex, TexturePageI
     *outTexId = gl->glTextures[pageId];
     *outTexW = gl->textureWidths[pageId];
     *outTexH = gl->textureHeights[pageId];
+    if (outU0) {
+        float w = (float) *outTexW, h = (float) *outTexH;
+        *outU0 = (float) tpag->sourceX / w;
+        *outV0 = (float) tpag->sourceY / h;
+        *outU1 = (float) (tpag->sourceX + tpag->sourceWidth) / w;
+        *outV1 = (float) (tpag->sourceY + tpag->sourceHeight) / h;
+    }
+#else
+    if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) tpagIndex)) return false;
+    *outTpag = tpag;
+    *outTexId = gl->glTextures[tpagIndex];
+    *outTexW = gl->textureWidths[tpagIndex];
+    *outTexH = gl->textureHeights[tpagIndex];
+    if (outU0) {
+        *outU0 = 0.0f; *outV0 = 0.0f; *outU1 = 1.0f; *outV1 = 1.0f;
+    }
+#endif
     return true;
 }
 
@@ -1232,13 +1304,8 @@ static void glDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y
     TexturePageItem* tpag;
     GLuint texId;
     int32_t texW, texH;
-    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH)) return;
-
-    // Compute normalized UVs from TPAG source rect
-    float u0 = (float) tpag->sourceX / (float) texW;
-    float v0 = (float) tpag->sourceY / (float) texH;
-    float u1 = (float) (tpag->sourceX + tpag->sourceWidth) / (float) texW;
-    float v1 = (float) (tpag->sourceY + tpag->sourceHeight) / (float) texH;
+    float u0, v0, u1, v1;
+    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH, &u0, &v0, &u1, &v1)) return;
 
     // Use targetWidth/Height (draw size in bounding rect), not sourceWidth/Height (texture sample size).
     // They differ when the texture was auto-downscaled by GMS to fit a texture page.
@@ -1365,17 +1432,13 @@ static void glDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float origi
     TexturePageItem* tpag;
     GLuint texId;
     int32_t texW, texH;
-    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH)) return;
+    float u0, v0, u1, v1;
+    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH, &u0, &v0, &u1, &v1)) return;
 
     float axScale = fabsf(xscale);
     float ayScale = fabsf(yscale);
     float tileW = (float) tpag->boundingWidth * axScale;
     float tileH = (float) tpag->boundingHeight * ayScale;
-
-    float u0 = (float) tpag->sourceX / (float) texW;
-    float v0 = (float) tpag->sourceY / (float) texH;
-    float u1 = (float) (tpag->sourceX + tpag->sourceWidth) / (float) texW;
-    float v1 = (float) (tpag->sourceY + tpag->sourceHeight) / (float) texH;
 
     // Use targetWidth/Height (draw size in bounding rect), not sourceWidth/Height (texture sample size).
     // They differ when the texture was auto-downscaled by GMS to fit a texture page.
@@ -1413,24 +1476,19 @@ static void glDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float origi
 
 static void glDrawSpritePartColor(Renderer* renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4, float alpha) {
     GLRenderer* gl = (GLRenderer*) renderer;
-    DataWin* dw = renderer->dataWin;
+    TexturePageItem* tpag;
+    GLuint texId;
+    int32_t texW, texH;
+    float u0b, v0b, u1b, v1b;
+    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH, &u0b, &v0b, &u1b, &v1b)) return;
 
-    if (0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex) return;
-
-    TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
-    int16_t pageId = tpag->texturePageId;
-    if (0 > pageId || gl->textureCount <= (uint32_t) pageId) return;
-    if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pageId)) return;
-
-    GLuint texId = gl->glTextures[pageId];
-    int32_t texW = gl->textureWidths[pageId];
-    int32_t texH = gl->textureHeights[pageId];
-
-    // Compute UVs for the sub-region within the atlas
-    float u0 = (float) (tpag->sourceX + srcOffX) / (float) texW;
-    float v0 = (float) (tpag->sourceY + srcOffY) / (float) texH;
-    float u1 = (float) (tpag->sourceX + srcOffX + srcW) / (float) texW;
-    float v1 = (float) (tpag->sourceY + srcOffY + srcH) / (float) texH;
+    // Compute UVs for the sub-region. u0b/v0b is the origin of the TPAG region in the resolved
+    // texture's UV space (0 on the desktop/ES per-tpag path, page-relative on Vita), so the
+    // sub-region is that base plus the offset scaled by this texture's pixel dimensions.
+    float u0 = u0b + (float) srcOffX / (float) texW;
+    float v0 = v0b + (float) srcOffY / (float) texH;
+    float u1 = u0b + (float) (srcOffX + srcW) / (float) texW;
+    float v1 = v0b + (float) (srcOffY + srcH) / (float) texH;
 
     // Convert BGR colors to RGB bytes
     uint8_t r1 = (uint8_t) BGR_R(color1), g1 = (uint8_t) BGR_G(color1), b1 = (uint8_t) BGR_B(color1);
@@ -1472,12 +1530,8 @@ static void glDrawSpritePos(Renderer* renderer, int32_t tpagIndex, float x1, flo
     TexturePageItem* tpag;
     GLuint texId;
     int32_t texW, texH;
-    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH)) return;
-
-    float u0 = (float) tpag->sourceX / (float) texW;
-    float v0 = (float) tpag->sourceY / (float) texH;
-    float u1 = (float) (tpag->sourceX + tpag->sourceWidth) / (float) texW;
-    float v1 = (float) (tpag->sourceY + tpag->sourceHeight) / (float) texH;
+    float u0, v0, u1, v1;
+    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH, &u0, &v0, &u1, &v1)) return;
 
     emitTexturedQuad(gl, texId, x1, y1, x2, y2, x3, y3, x4, y4, u0, v0, u1, v1, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, alpha);
 }
@@ -1800,6 +1854,7 @@ typedef struct {
     TexturePageItem* fontTpag; // single TPAG for regular fonts (nullptr for sprite fonts)
     GLuint texId;
     int32_t texW, texH;
+    float fontU0, fontV0; // UV origin of the font TPAG region in the resolved texture's space
     Sprite* spriteFontSprite; // source sprite for sprite fonts (nullptr for regular fonts)
 } GlFontState;
 
@@ -1811,20 +1866,20 @@ static bool glResolveFontState(GLRenderer* gl, DataWin* dw, Font* font, GlFontSt
     state->texId = 0;
     state->texW = 0;
     state->texH = 0;
+    state->fontU0 = 0.0f;
+    state->fontV0 = 0.0f;
     state->spriteFontSprite = nullptr;
 
     if (!font->isSpriteFont) {
         int32_t fontTpagIndex = font->tpagIndex;
         if (0 > fontTpagIndex) return false;
 
-        state->fontTpag = &dw->tpag.items[fontTpagIndex];
-        int16_t pageId = state->fontTpag->texturePageId;
-        if (0 > pageId || (uint32_t) pageId >= gl->textureCount) return false;
-        if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pageId)) return false;
-
-        state->texId = gl->glTextures[pageId];
-        state->texW = gl->textureWidths[pageId];
-        state->texH = gl->textureHeights[pageId];
+        TexturePageItem* tpag;
+        float u0, v0, u1, v1;
+        if (!resolveSpriteTexture(gl, fontTpagIndex, &tpag, &state->texId, &state->texW, &state->texH, &u0, &v0, &u1, &v1)) return false;
+        state->fontTpag = tpag;
+        state->fontU0 = u0;
+        state->fontV0 = v0;
     } else if (font->spriteIndex >= 0 && dw->sprt.count > (uint32_t) font->spriteIndex) {
         state->spriteFontSprite = &dw->sprt.sprites[font->spriteIndex];
     }
@@ -1833,7 +1888,7 @@ static bool glResolveFontState(GLRenderer* gl, DataWin* dw, Font* font, GlFontSt
 
 // Resolves UV coordinates, texture ID, and local position for a single glyph
 // Returns false if the glyph can't be drawn
-static bool glResolveGlyph(GLRenderer* gl, DataWin* dw, GlFontState* state, FontGlyph* glyph, float cursorX, float cursorY, GLuint* outTexId, float* outU0, float* outV0, float* outU1, float* outV1, float* outLocalX0, float* outLocalY0) {
+static bool glResolveGlyph(GLRenderer* gl, GlFontState* state, FontGlyph* glyph, float cursorX, float cursorY, GLuint* outTexId, float* outU0, float* outV0, float* outU1, float* outV1, float* outLocalX0, float* outLocalY0) {
     Font* font = state->font;
     if (font->isSpriteFont && state->spriteFontSprite != nullptr) {
         Sprite* sprite = state->spriteFontSprite;
@@ -1843,19 +1898,9 @@ static bool glResolveGlyph(GLRenderer* gl, DataWin* dw, GlFontState* state, Font
         int32_t tpagIdx = sprite->tpagIndices[glyphIndex];
         if (0 > tpagIdx) return false;
 
-        TexturePageItem* glyphTpag = &dw->tpag.items[tpagIdx];
-        int16_t pid = glyphTpag->texturePageId;
-        if (0 > pid || (uint32_t) pid >= gl->textureCount) return false;
-        if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pid)) return false;
-
-        *outTexId = gl->glTextures[pid];
-        int32_t tw = gl->textureWidths[pid];
-        int32_t th = gl->textureHeights[pid];
-
-        *outU0 = (float) glyphTpag->sourceX / (float) tw;
-        *outV0 = (float) glyphTpag->sourceY / (float) th;
-        *outU1 = (float) (glyphTpag->sourceX + glyphTpag->sourceWidth) / (float) tw;
-        *outV1 = (float) (glyphTpag->sourceY + glyphTpag->sourceHeight) / (float) th;
+        TexturePageItem* glyphTpag;
+        int32_t gw, gh;
+        if (!resolveSpriteTexture(gl, tpagIdx, &glyphTpag, outTexId, &gw, &gh, outU0, outV0, outU1, outV1)) return false;
 
         // Sprite-font glyphs sit at the cell offset. GM 2023.2+ subtracts the sprite origin, pre-2023.2 it cancels.
         // (See GameMaker-HTML5's commit a7c5b909209d5a28602fedfe2031965386a99921)
@@ -1863,10 +1908,12 @@ static bool glResolveGlyph(GLRenderer* gl, DataWin* dw, GlFontState* state, Font
         *outLocalY0 = cursorY + (float) (int32_t) glyphTpag->targetY - (float) font->spriteOriginYAdjust;
     } else {
         *outTexId = state->texId;
-        *outU0 = (float) (state->fontTpag->sourceX + glyph->sourceX) / (float) state->texW;
-        *outV0 = (float) (state->fontTpag->sourceY + glyph->sourceY) / (float) state->texH;
-        *outU1 = (float) (state->fontTpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float) state->texW;
-        *outV1 = (float) (state->fontTpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float) state->texH;
+        // Regular-font glyphs sample a sub-rectangle of the font's single TPAG texture, offset
+        // by the TPAG region's UV origin within the resolved texture.
+        *outU0 = state->fontU0 + (float) glyph->sourceX / (float) state->texW;
+        *outV0 = state->fontV0 + (float) glyph->sourceY / (float) state->texH;
+        *outU1 = state->fontU0 + (float) (glyph->sourceX + glyph->sourceWidth) / (float) state->texW;
+        *outV1 = state->fontV0 + (float) (glyph->sourceY + glyph->sourceHeight) / (float) state->texH;
 
         *outLocalX0 = cursorX + glyph->offset;
         *outLocalY0 = cursorY;
@@ -1988,7 +2035,7 @@ static void drawText(
                     float localX0, localY0;
                     GLuint glyphTexId;
 
-                    if (glResolveGlyph(gl, dw, &fontState, glyph, cursorX, cursorY, &glyphTexId, &u0, &v0, &u1, &v1, &localX0, &localY0)) {
+                    if (glResolveGlyph(gl, &fontState, glyph, cursorX, cursorY, &glyphTexId, &u0, &v0, &u1, &v1, &localX0, &localY0)) {
                         float localX1 = localX0 + (float) glyph->sourceWidth;
                         float localY1 = localY0 + (float) glyph->sourceHeight;
 
@@ -2084,6 +2131,9 @@ static void glDrawTextColor(Renderer* renderer, const char* text, float x, float
 // ===[ Dynamic Sprite Creation/Deletion ]===
 
 // Finds a free dynamic texture page slot (glTextures[i] == 0), or appends a new one.
+// The VITA page-based path uses these page slots; the desktop/ES path instead keys textures
+// by TPAG (see findOrAllocTpagSlot) so this helper is only needed for PLATFORM_VITA.
+#if defined(PLATFORM_VITA)
 static uint32_t findOrAllocTexturePageSlot(GLRenderer* gl) {
     // Scan dynamic range for a reusable slot
     for (uint32_t i = gl->originalTexturePageCount; gl->textureCount > i; i++) {
@@ -2102,9 +2152,13 @@ static uint32_t findOrAllocTexturePageSlot(GLRenderer* gl) {
     gl->textureLoaded[newPageId] = false;
     return newPageId;
 }
+#endif
 
 // Finds a free dynamic TPAG slot (texturePageId == -1), or appends a new one.
-static uint32_t findOrAllocTpagSlot(DataWin* dw, uint32_t originalTpagCount) {
+// On the desktop/ES path textures are keyed by TPAG, so growing the TPAG table also grows
+// the renderer's TPAG-keyed GL texture arrays here. On PLATFORM_VITA (page-keyed) the caller
+// still allocates a separate page slot via findOrAllocTexturePageSlot.
+static uint32_t findOrAllocTpagSlot(GLRenderer* gl, DataWin* dw, uint32_t originalTpagCount) {
     for (uint32_t i = originalTpagCount; dw->tpag.count > i; i++) {
         if (dw->tpag.items[i].texturePageId == -1) return i;
     }
@@ -2113,6 +2167,21 @@ static uint32_t findOrAllocTpagSlot(DataWin* dw, uint32_t originalTpagCount) {
     dw->tpag.items = (TexturePageItem *)safeRealloc(dw->tpag.items, dw->tpag.count * sizeof(TexturePageItem));
     memset(&dw->tpag.items[newIndex], 0, sizeof(TexturePageItem));
     dw->tpag.items[newIndex].texturePageId = -1;
+#if !defined(PLATFORM_VITA)
+    // Desktop/ES: grow the TPAG-keyed GL texture arrays to match the new TPAG count.
+    uint32_t newCount = dw->tpag.count;
+    gl->glTextures = (GLuint *)safeRealloc(gl->glTextures, newCount * sizeof(GLuint));
+    gl->textureWidths = (int32_t *)safeRealloc(gl->textureWidths, newCount * sizeof(int32_t));
+    gl->textureHeights = (int32_t *)safeRealloc(gl->textureHeights, newCount * sizeof(int32_t));
+    gl->textureLoaded = (bool *)safeRealloc(gl->textureLoaded, newCount * sizeof(bool));
+    for (uint32_t k = gl->textureCount; k < newCount; k++) {
+        gl->glTextures[k] = 0;
+        gl->textureWidths[k] = 0;
+        gl->textureHeights[k] = 0;
+        gl->textureLoaded[k] = false;
+    }
+    gl->textureCount = newCount;
+#endif
     return newIndex;
 }
 
@@ -2525,14 +2594,16 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
 
     free(pixels);
 
-    // Find or allocate slots for texture page, TPAG, and sprite
+    // Find or allocate slots for TPAG (and a separate page slot on the Vita page-keyed path).
+#if defined(PLATFORM_VITA)
     uint32_t pageId = findOrAllocTexturePageSlot(gl);
     gl->glTextures[pageId] = newTexId;
     gl->textureWidths[pageId] = w;
     gl->textureHeights[pageId] = h;
     gl->textureLoaded[pageId] = true;
+#endif
 
-    uint32_t tpagIndex = findOrAllocTpagSlot(dw, gl->originalTpagCount);
+    uint32_t tpagIndex = findOrAllocTpagSlot(gl, dw, gl->originalTpagCount);
     TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
     tpag->sourceX = 0;
     tpag->sourceY = 0;
@@ -2544,7 +2615,16 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
     tpag->targetHeight = (uint16_t) h;
     tpag->boundingWidth = (uint16_t) w;
     tpag->boundingHeight = (uint16_t) h;
+#if defined(PLATFORM_VITA)
     tpag->texturePageId = (int16_t) pageId;
+#else
+    // Desktop/ES: the TPAG owns its own GL texture slot (the whole captured region).
+    tpag->texturePageId = 0;
+    gl->glTextures[tpagIndex] = newTexId;
+    gl->textureWidths[tpagIndex] = w;
+    gl->textureHeights[tpagIndex] = h;
+    gl->textureLoaded[tpagIndex] = true;
+#endif
 
     uint32_t spriteIndex = DataWin_allocSpriteSlot(dw, gl->originalSpriteCount);
     Sprite* sprite = &dw->sprt.sprites[spriteIndex];
@@ -2584,11 +2664,19 @@ static void glDeleteSprite(Renderer* renderer, int32_t spriteIndex) {
         int32_t tpagIdx = sprite->tpagIndices[i];
         if (tpagIdx >= 0 && (uint32_t) tpagIdx >= gl->originalTpagCount) {
             TexturePageItem* tpag = &dw->tpag.items[tpagIdx];
+#if defined(PLATFORM_VITA)
             int16_t pageId = tpag->texturePageId;
             if (pageId >= 0 && gl->textureCount > (uint32_t) pageId) {
                 glDeleteTextures(1, &gl->glTextures[pageId]);
                 gl->glTextures[pageId] = 0;
             }
+#else
+            // Desktop/ES: the TPAG owns its own TPAG-keyed GL texture slot.
+            if (gl->textureCount > (uint32_t) tpagIdx) {
+                glDeleteTextures(1, &gl->glTextures[tpagIdx]);
+                gl->glTextures[tpagIdx] = 0;
+            }
+#endif
             // Mark TPAG slot as free for reuse
             tpag->texturePageId = -1;
         }
@@ -2828,14 +2916,15 @@ static uint32_t glSpriteGetTexture(Renderer* renderer, int32_t tpagIndex) {
     TexturePageItem* tpag;
     GLuint texId;
     int32_t texW, texH;
-    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH)) return 0;
+    if (!resolveSpriteTexture(gl, tpagIndex, &tpag, &texId, &texW, &texH, nullptr, nullptr, nullptr, nullptr)) return 0;
     return (uint32_t) (tpagIndex + 1);
 }
 
 // Decode a texture handle produced by glSpriteGetTexture (sprite/tpag) or glSurfaceGetTexture (surface)
 // back into its GL id and pixel size. *outTpag is set to NULL for surface handles (no tpag sub-region).
-// Returns false for the 0 ("no texture") handle or an unresolvable one.
-static bool glResolveTextureHandle(GLRenderer* gl, uint32_t texHandle, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH) {
+// If non-NULL, the UV out-params receive the full-region UV rect for the tpag handle in the resolved
+// texture's space (0..1 on the desktop/ES per-tpag path). Returns false for the 0 ("no texture") handle.
+static bool glResolveTextureHandle(GLRenderer* gl, uint32_t texHandle, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH, float* outU0, float* outV0, float* outU1, float* outV1) {
     if (texHandle == 0) return false;
     if (texHandle & GL_SURFACE_TEXTURE_FLAG) {
         uint32_t sid = texHandle & ~GL_SURFACE_TEXTURE_FLAG;
@@ -2844,9 +2933,10 @@ static bool glResolveTextureHandle(GLRenderer* gl, uint32_t texHandle, TexturePa
         *outTexId = gl->surfaceTexture[sid];
         *outTexW = gl->surfaceWidth[sid];
         *outTexH = gl->surfaceHeight[sid];
+        if (outU0) { *outU0 = 0.0f; *outV0 = 0.0f; *outU1 = 1.0f; *outV1 = 1.0f; }
         return true;
     }
-    return resolveSpriteTexture(gl, (int32_t) texHandle - 1, outTpag, outTexId, outTexW, outTexH);
+    return resolveSpriteTexture(gl, (int32_t) texHandle - 1, outTpag, outTexId, outTexW, outTexH, outU0, outV0, outU1, outV1);
 }
 
 // surface_get_texture: returns a handle that texture_get_texel_*/texture_get_uvs/texture_set_stage resolve.
@@ -2867,7 +2957,7 @@ static void glTextureSetStage(Renderer* renderer, int32_t slot, uint32_t texHand
     TexturePageItem* tpag;
     GLuint texID = 0;
     int32_t texW, texH;
-    glResolveTextureHandle(gl, texHandle, &tpag, &texID, &texW, &texH);
+    glResolveTextureHandle(gl, texHandle, &tpag, &texID, &texW, &texH, nullptr, nullptr, nullptr, nullptr);
     if (slot == 0) {
         gl->currentTextureId = texID;
     }
@@ -2907,7 +2997,7 @@ static float glTextureGetTexelWidth(Renderer* renderer, uint32_t texHandle) {
     TexturePageItem* tpag;
     GLuint texId;
     int32_t width = 0, height = 0;
-    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height) || 0 >= width) return 1.0f;
+    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height, nullptr, nullptr, nullptr, nullptr) || 0 >= width) return 1.0f;
     return 1.0f / (float) width;
 }
 
@@ -2916,7 +3006,7 @@ static float glTextureGetTexelHeight(Renderer* renderer, uint32_t texHandle) {
     TexturePageItem* tpag;
     GLuint texId;
     int32_t width = 0, height = 0;
-    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height) || 0 >= height) return 1.0f;
+    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height, nullptr, nullptr, nullptr, nullptr) || 0 >= height) return 1.0f;
     return 1.0f / (float) height;
 }
 
@@ -2925,18 +3015,9 @@ static bool glTextureGetUVs(Renderer* renderer, uint32_t texHandle, float* outUV
     TexturePageItem* tpag;
     GLuint texId;
     int32_t width = 0, height = 0;
-    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height) || 0 >= width || 0 >= height) return false;
-    // Surface handles cover the whole texture (no tpag sub-region).
-    if (tpag == nullptr) {
-        outUVs[0] = 0.0f; outUVs[1] = 0.0f; outUVs[2] = 1.0f; outUVs[3] = 1.0f;
-        return true;
-    }
-    float divW = 1.0f / (float) width;
-    float divH = 1.0f / (float) height;
-    outUVs[0] = (float) tpag->sourceX * divW;                              // left
-    outUVs[1] = (float) tpag->sourceY * divH;                             // top
-    outUVs[2] = outUVs[0] + (float) tpag->sourceWidth * divW;            // right
-    outUVs[3] = outUVs[1] + (float) tpag->sourceHeight * divH;           // bottom
+    float u0, v0, u1, v1;
+    if (!glResolveTextureHandle(gl, texHandle, &tpag, &texId, &width, &height, &u0, &v0, &u1, &v1) || 0 >= width || 0 >= height) return false;
+    outUVs[0] = u0; outUVs[1] = v0; outUVs[2] = u1; outUVs[3] = v1;
     return true;
 }
 
