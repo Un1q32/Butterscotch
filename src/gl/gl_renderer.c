@@ -1074,7 +1074,6 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
     // Vita without VitaTextures: decode and upload the whole page (index is a page id).
     if (dw->txtr.count <= index) return false;
     uint32_t pageId = index;
-    int su = 0, sv = 0, rw = 0, rh = 0;
 #else
     if (dw->tpag.count <= index) return false;
     TexturePageItem* tpag = &dw->tpag.items[index];
@@ -1084,6 +1083,8 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
     int rw = tpag->sourceWidth, rh = tpag->sourceHeight;
 #endif
 
+#if defined(PLATFORM_VITA)
+    // Vita path: index is a page id; decode and upload the whole page.
     Texture* txtr = &dw->txtr.textures[pageId];
 
     DataWin_loadTxtrIfNeeded(dw, pageId);
@@ -1099,37 +1100,81 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
         free(txtr->blobData);
         txtr->blobData = nullptr;
     }
-#if defined(PLATFORM_VITA)
-    // Whole page path: set the rect to the decoded page and keep the original 0,0 offset.
-    su = 0; sv = 0; rw = w; rh = h;
+
+    gl->textureWidths[index] = w;
+    gl->textureHeights[index] = h;
+
+    glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    free(pixels);
+
+    bool isPOT = (w & (w - 1)) == 0 && (h & (h - 1)) == 0;
+    GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
+
+    logInfo("GL: Loaded TXTR page %u (%dx%d)\n", pageId, w, h);
 #else
+    // Desktop/ES path: index is a TPAG index. Keep the whole decoded page in a single-entry
+    // cache so that many TPAG sub-rects from the same TXTR page reuse the decoded RGBA buffer
+    // instead of re-decoding the page for every texture.
+    Texture* txtr = &dw->txtr.textures[pageId];
+
+    int pageW, pageH;
+    uint8_t* pagePixels;
+    if (gl->textureCachePageId == (uint32_t) pageId && gl->textureCachePixels != nullptr) {
+        // Cache hit: reuse the decoded page.
+        pagePixels = gl->textureCachePixels;
+        pageW = gl->textureCacheW;
+        pageH = gl->textureCacheH;
+    } else {
+        // Cache miss: decode (and cache) this page, evicting whichever page was cached before.
+        DataWin_loadTxtrIfNeeded(dw, pageId);
+        bool gm2022_5 = DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0);
+        pagePixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t) txtr->blobSize, gm2022_5, &pageW, &pageH);
+        if (pagePixels == nullptr) {
+            logWarn("GL: Failed to decode TXTR page %u\n", pageId);
+            return false;
+        }
+        if (!txtr->mapped) {
+            free(txtr->blobData);
+            txtr->blobData = nullptr;
+        }
+        free(gl->textureCachePixels);
+        gl->textureCachePixels = pagePixels;
+        gl->textureCacheW = pageW;
+        gl->textureCacheH = pageH;
+        gl->textureCachePageId = (uint32_t) pageId;
+    }
+
     // Clamp the TPAG source rect to the decoded page bounds.
-    if ((uint32_t) su + (uint32_t) rw > (uint32_t) w) rw = w - su;
-    if ((uint32_t) sv + (uint32_t) rh > (uint32_t) h) rh = h - sv;
+    if ((uint32_t) su + (uint32_t) rw > (uint32_t) pageW) rw = pageW - su;
+    if ((uint32_t) sv + (uint32_t) rh > (uint32_t) pageH) rh = pageH - sv;
     if (rw < 1) rw = 1;
     if (rh < 1) rh = 1;
-#endif
 
     gl->textureWidths[index] = rw;
     gl->textureHeights[index] = rh;
 
-    // Extract only the used rectangle into a fresh RGBA buffer (on Vita the whole page).
-    uint8_t* outPx;
-    if (su == 0 && sv == 0 && rw == w && rh == h) {
-        outPx = pixels; // upload the decoded buffer directly
+    // Upload the used rectangle. The whole-page case uploads straight from the cache; the
+    // sub-rect case copies out (the cache keeps the full page for the next TPAG to reuse).
+    if (su == 0 && sv == 0 && rw == pageW && rh == pageH) {
+        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, pagePixels);
     } else {
-        outPx = (uint8_t *)safeMalloc((size_t) rw * (size_t) rh * 4);
+        uint8_t* outPx = (uint8_t *)safeMalloc((size_t) rw * (size_t) rh * 4);
         for (int32_t row = 0; row < rh; row++) {
             memcpy(outPx + (size_t) row * rw * 4,
-                   pixels + ((size_t) (sv + row) * w + su) * 4,
+                   pagePixels + ((size_t) (sv + row) * pageW + su) * 4,
                    (size_t) rw * 4);
         }
-        free(pixels);
+        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPx);
+        free(outPx);
     }
-
-    glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPx);
-    if (outPx != pixels) free(outPx);
 
     bool isPOT = (rw & (rw - 1)) == 0 && (rh & (rh - 1)) == 0;
     GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
@@ -1140,6 +1185,7 @@ bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
 
     logInfo("GL: Loaded texture %u (%dx%d)\n", index, rw, rh);
+#endif
     return true;
 }
 
