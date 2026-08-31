@@ -851,7 +851,7 @@ int loop(CommandLineArgs args, const char *argv0) {
 #endif
 #ifdef ENABLE_MODERN_GL
         if (gfx == MODERN_GL) {
-            renderer = GLRenderer_create();
+            renderer = GLRenderer_create(args.pagelessTextures, args.pageCacheSize);
             hostFramebuffer = &((GLRenderer *)renderer)->hostFramebuffer;
         }
 #endif

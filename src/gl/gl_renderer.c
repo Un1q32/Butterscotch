@@ -2983,7 +2983,7 @@ static RendererVtable glVtable;
 
 // ===[ Public API ]===
 
-Renderer* GLRenderer_create(void) {
+Renderer* GLRenderer_create(bool pagelessTextures, uint8_t pageCacheSize) {
     GLRenderer* gl = (GLRenderer *)safeCalloc(1, sizeof(GLRenderer));
     gl->base.vtable = &glVtable;
     glVtable.init = glInit;
@@ -3039,22 +3039,22 @@ Renderer* GLRenderer_create(void) {
     glVtable.drawSurfaceTiled = glDrawSurfaceTiled;
     glVtable.surfaceResize = glSurfaceResize;
     glVtable.surfaceFree = glSurfaceFree;
-    glVtable.gpuSetShader = glGpuSetShader,
-    glVtable.gpuResetShader = glGpuResetShader,
-    glVtable.shaderGetUniform = glShaderGetUniform,
-    glVtable.shaderSetUniformF = glShaderSetUniformF,
-    glVtable.shaderSetUniformFArray = glShaderSetUniformFArray,
-    glVtable.shaderSetUniformI = glShaderSetUniformI,
-    glVtable.spriteGetTexture = glSpriteGetTexture,
-    glVtable.surfaceGetTexture = glSurfaceGetTexture,
-    glVtable.textureGetTexelWidth = glTextureGetTexelWidth,
-    glVtable.textureGetTexelHeight = glTextureGetTexelHeight,
-    glVtable.textureGetUVs = glTextureGetUVs,
-    glVtable.shaderGetSamplerIndex = glShaderGetSamplerIndex,
-    glVtable.textureSetStage = glTextureSetStage,
-    glVtable.shaderIsCompiled = glShaderIsCompiled,
-    glVtable.shadersSupported = glShadersSupported,
-    glVtable.setMatrix = glSetMatrix,
+    glVtable.gpuSetShader = glGpuSetShader;
+    glVtable.gpuResetShader = glGpuResetShader;
+    glVtable.shaderGetUniform = glShaderGetUniform;
+    glVtable.shaderSetUniformF = glShaderSetUniformF;
+    glVtable.shaderSetUniformFArray = glShaderSetUniformFArray;
+    glVtable.shaderSetUniformI = glShaderSetUniformI;
+    glVtable.spriteGetTexture = glSpriteGetTexture;
+    glVtable.surfaceGetTexture = glSurfaceGetTexture;
+    glVtable.textureGetTexelWidth = glTextureGetTexelWidth;
+    glVtable.textureGetTexelHeight = glTextureGetTexelHeight;
+    glVtable.textureGetUVs = glTextureGetUVs;
+    glVtable.shaderGetSamplerIndex = glShaderGetSamplerIndex;
+    glVtable.textureSetStage = glTextureSetStage;
+    glVtable.shaderIsCompiled = glShaderIsCompiled;
+    glVtable.shadersSupported = glShadersSupported;
+    glVtable.setMatrix = glSetMatrix;
 
     gl->base.drawColor = 0xFFFFFF; // white (BGR)
     gl->base.drawAlpha = 1.0f;
@@ -3064,5 +3064,6 @@ Renderer* GLRenderer_create(void) {
     gl->base.circlePrecision = 24;
     gl->base.currentShader = -1;
     gl->base.cameraCurrent = 0;
+    gl->
     return (Renderer*) gl;
 }

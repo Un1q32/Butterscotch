@@ -128,6 +128,8 @@ static void printUsage(const char *argv0) {
 #ifdef EABLE_VM_OPCODE_PROFILER
         "    --profile-opcodes                      - Rank which GML opcodes were executed the most\n"
 #endif
+        "    --pageless-textures                    - Load textures individually instead of by page, uses much less memory but cause more stuttering, implies --lazy-textures\n"
+        "    --texture-page-cache-size <size>       - Controls the size of the texture page cache, larger caches use more memory but decrease stutter\n"
         , argv0
     );
 }
@@ -198,6 +200,8 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
 #ifdef ENABLE_VM_OPCODE_PROFILER
         {"profile-opcodes", no_argument, nullptr, 'Q'},
 #endif
+        {"paged-textures", no_argument, nullptr, 1001},
+        {"texture-page-cache-size", required_argument, nullptr, 1002},
         {nullptr,               0,                 nullptr,  0 }
     };
 
@@ -214,6 +218,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->profilerFramesBetween = 0;
     args->loadType = DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME;
     args->disableLogColours = !isatty(1); // 1 == stdout
+    args->pageCacheSize = 1;
     // TODO: detect available driver features
     // at runtime to improve defaults.
 #if defined(ENABLE_MODERN_GL)
@@ -515,6 +520,19 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
             }
             case 1003:
                 args->disableLogColours = true;
+                break;
+            case 1001:
+                args->pagelessTextures = true;
+                args->lazyTextures = true;
+                break;
+            case 1002:
+                char* endPtr;
+                int cacheSize = strtol(optarg, &endptr, 10);
+                if (*endptr != '\0' || cacheSize <= 0) {
+                    logerror("invalid cache size '%s' for --texture-page-cache-size (must be > 0)\n", optarg);
+                    exit(1);
+                }
+                args->pageCacheSize = cacheSize;
                 break;
             default:
                 printUsage(argv[0]);

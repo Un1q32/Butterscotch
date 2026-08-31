@@ -120,6 +120,8 @@ typedef struct {
     bool opcodeProfiler;
 #endif
     bool disableLogColours;
+    bool pagelessTextures;
+    uint8_t pageCacheSize;
 } CommandLineArgs;
 
 bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless);
