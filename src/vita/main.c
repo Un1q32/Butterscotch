@@ -41,6 +41,10 @@ int main(int argc, char* argv[]) {
     args.lazyRooms = true;
     args.lazyTextures = true;
     args.lazyAudio = true;
+    // Keep a small decoded-page cache to reduce re-decoding stutter.
+    // pagelessTextures stays false (paged mode) by default; if VitaTextures is active,
+    // GLRenderer_create forces paged mode anyway.
+    args.pageCacheSize = 1;
 #if defined(ENABLE_MODERN_GL)
     args.renderer = MODERN_GL;
 #elif defined(ENABLE_LEGACY_GL)

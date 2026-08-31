@@ -352,7 +352,7 @@ static bool startRunnerFromPath(const char* dataWinPath, const char* savesPath, 
     }
 
     VMContext* vm = VM_create(dataWin);
-    Renderer* renderer = GLRenderer_create();
+    Renderer* renderer = GLRenderer_create(false, 0);
     ((GLRenderer*) renderer)->hostFramebuffer = gHostFramebuffer;
     OverlayFileSystem* overlayFs = OverlayFileSystem_create(bundleDir, savesPath);
     free(bundleDir);

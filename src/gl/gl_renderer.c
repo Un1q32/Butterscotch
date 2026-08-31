@@ -448,6 +448,22 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
         abort();
     }
 
+    // ===[ CPU-side decoded-page cache ]===
+    // When enabled, recently decoded TXTR pages are kept in system RAM so that other
+    // TPAG items on the same page (pageless mode) or re-loads after GPU eviction
+    // (paged mode) don't have to re-decode the PNG data.  The cache is a flat array;
+    // on a miss the oldest entry is evicted.  A size of 0 disables caching entirely.
+    if (gl->pageCacheSize > 0) {
+        gl->txtrPageCache = (PageCacheEntry *)safeMalloc(gl->pageCacheSize * sizeof(PageCacheEntry));
+        repeat(gl->pageCacheSize, i) {
+            gl->txtrPageCache[i].pageId  = UINT32_MAX; // empty slot
+            gl->txtrPageCache[i].width   = 0;
+            gl->txtrPageCache[i].height  = 0;
+            gl->txtrPageCache[i].pixels  = nullptr;
+        }
+        logInfo("GL: Page cache enabled (%zu entries)\n", gl->pageCacheSize);
+    }
+
     char vertSrc[1024];
     char fragSrc[1024];
     const char* vertHeader = "";
@@ -628,18 +644,23 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->vertexData = (Vertex *)safeMalloc(MAX_QUADS * VERTICES_PER_QUAD * sizeof(Vertex));
 #endif
 
-    // Prepare texture slots for lazy loading (decode deferred to first use).
-    // Each slot is one TexturePageItem (an individual texture extracted from a TXTR page)
-    // on the desktop/ES path, so we size the arrays by the TPAG count. Only PLATFORM_VITA's
-    // legacy optimized path keeps whole pages, indexed by page count.
+    // ===[ Allocate texture arrays ]===
+    // The size depends on the current texture loading mode:
+    //   - VitaTextures active: use VitaTextures page count (external compressed format)
+    //   - pagelessTextures == true (pageless mode): tpag.count – one GL texture per TPAG
+    //   - pagelessTextures == false (paged mode): txtr.count – one GL texture per TXTR page
 #if defined(PLATFORM_VITA)
-    if (VitaTextures_Active())
+    if (VitaTextures_Active()) {
         gl->textureCount = VitaTextures_GetPageCount();
-    else
-        gl->textureCount = dataWin->txtr.count;
-#else
-    gl->textureCount = dataWin->tpag.count;
+    } else
 #endif
+    if (gl->pagelessTextures) {
+        // Pageless: one GL texture per TPAG item (the extracted sub-rectangle).
+        gl->textureCount = dataWin->tpag.count;
+    } else {
+        // Paged: one GL texture per TXTR page (the whole decoded page).
+        gl->textureCount = dataWin->txtr.count;
+    }
     gl->glTextures = (GLuint *)safeMalloc(gl->textureCount * sizeof(GLuint));
     gl->textureWidths = (int32_t *)safeMalloc(gl->textureCount * sizeof(int32_t));
     gl->textureHeights = (int32_t *)safeMalloc(gl->textureCount * sizeof(int32_t));
@@ -668,19 +689,14 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->batchCount = 0;
     gl->currentTextureId = 0;
 
-    // No decoded page cached yet.
-    gl->textureCachePageId = UINT32_MAX;
-    gl->textureCachePixels = nullptr;
-    gl->textureCacheW = 0;
-    gl->textureCacheH = 0;
-
     // Save original counts so we know which slots are from data.win vs dynamic.
-    // On the desktop/ES path textures are keyed by TPAG, so this is the TPAG count.
+    // Dynamic sprites created at runtime get slots beyond these boundaries.
     gl->originalTexturePageCount = gl->textureCount;
     gl->originalTpagCount = dataWin->tpag.count;
     gl->originalSpriteCount = dataWin->sprt.count;
 
-    logInfo("GL: Renderer initialized (%u textures)\n", gl->textureCount);
+    logInfo("GL: Renderer initialized (%u %s)\n", gl->textureCount,
+            gl->pagelessTextures ? "textures (pageless)" : "texture pages");
 }
 
 static void glGpuSetShader(Renderer* renderer, int32_t shaderIndex) {
@@ -820,7 +836,15 @@ static void glDestroy(Renderer* renderer) {
     free(gl->textureWidths);
     free(gl->textureHeights);
     free(gl->textureLoaded);
-    free(gl->textureCachePixels);
+
+    // Free the CPU-side decoded-page cache
+    if (gl->txtrPageCache != nullptr) {
+        repeat(gl->pageCacheSize, i) {
+            free(gl->txtrPageCache[i].pixels);
+        }
+        free(gl->txtrPageCache);
+    }
+
     free(gl->uWorldViewProjection);
     free(gl->uFogColor);
     free(gl->uAlphaTestRef);
@@ -1048,181 +1072,302 @@ static void glClearScreen(Renderer* renderer, uint32_t color, float alpha) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
-// Lazily decodes and uploads a single texture on first access.
-// On the desktop/ES path `index` is a TPAG index: we decode the whole TXTR page once to get
-// its RGBA pixels, then upload only the exact sub-rectangle used by that TPAG item. The full
-// page is never uploaded, so unused areas of the page consume no VRAM.
-// Returns true if the texture is ready, false if it failed to decode.
-bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
-    if (gl->textureLoaded[index]) return (gl->textureWidths[index] != 0);
+// ===========================================================================
+// ==[ Texture Decoding & Cache ]=============================================
+// ===========================================================================
 
-    gl->textureLoaded[index] = true;
-
-    DataWin* dw = gl->base.dataWin;
-
-#if defined(PLATFORM_VITA)
-    if (VitaTextures_Active()) {
-        // Vita legacy path: upload the whole page (index is a page id here).
-        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
-        if (!VitaTextures_LoadPage(index, &gl->textureWidths[index], &gl->textureHeights[index])) {
-            logError("GL: Failed to load Vita TXTR page %u", index);
-            return false;
+// Look up a decoded TXTR page in the CPU-side cache.  Returns a pointer to the cached
+// RGBA pixels and sets *outW/*outH, or returns nullptr on a cache miss.
+// On a hit the entry is promoted to the most-recently-used position so that the entry
+// the store path evicts (index 0) is always the least-recently-used one.
+static uint8_t* pageCacheLookup(GLRenderer* gl, uint32_t pageId, int32_t* outW, int32_t* outH) {
+    if (gl->txtrPageCache == nullptr) return nullptr;
+    repeat(gl->pageCacheSize, i) {
+        if (gl->txtrPageCache[i].pageId == pageId) {
+            PageCacheEntry hit = gl->txtrPageCache[i];
+            *outW = (int32_t) hit.width;
+            *outH = (int32_t) hit.height;
+            // Promote the hit entry to the MRU slot: shift everything after it left
+            // by one, then place it at the end (index pageCacheSize-1).
+            if (i != gl->pageCacheSize - 1) {
+                for (size_t k = i; k + 1 < gl->pageCacheSize; k++) {
+                    gl->txtrPageCache[k] = gl->txtrPageCache[k + 1];
+                }
+                gl->txtrPageCache[gl->pageCacheSize - 1] = hit;
+            }
+            return hit.pixels;
         }
-        logInfo("GL: Loaded TXTR page %u (%dx%d)\n", index, gl->textureWidths[index], gl->textureHeights[index]);
-        return true;
     }
-    // Vita without VitaTextures: decode and upload the whole page (index is a page id).
-    if (dw->txtr.count <= index) return false;
-    uint32_t pageId = index;
-#else
-    if (dw->tpag.count <= index) return false;
-    TexturePageItem* tpag = &dw->tpag.items[index];
-    int16_t pageId = tpag->texturePageId;
-    if (0 > pageId || dw->txtr.count <= (uint32_t) pageId) return false;
-    int su = tpag->sourceX, sv = tpag->sourceY;
-    int rw = tpag->sourceWidth, rh = tpag->sourceHeight;
-#endif
+    return nullptr;
+}
 
-#if defined(PLATFORM_VITA)
-    // Vita path: index is a page id; decode and upload the whole page.
+// Store a decoded TXTR page in the CPU-side cache.  Takes ownership of `pixels`
+// (the cache will free it on eviction).  Evicts the least-recently-used entry when full.
+static void pageCacheStore(GLRenderer* gl, uint32_t pageId, int32_t w, int32_t h, uint8_t* pixels) {
+    if (gl->txtrPageCache == nullptr) { free(pixels); return; }
+
+    // The array is kept ordered from least- (index 0) to most-recently-used (end).
+    // An insertion is just: drop the LRU if the cache is full, then append the new
+    // page at the MRU position.  (pageCacheLookup maintains order on hits.)
+    size_t count = 0;
+    repeat(gl->pageCacheSize, i) {
+        if (gl->txtrPageCache[i].pageId != UINT32_MAX) count++;
+    }
+
+    // If the cache is full we must give up one slot: evict the LRU at index 0.  Otherwise
+    // the new entry goes into the first free slot, but we must keep the LRU ordering, so
+    // compact the live entries toward the front first.
+    size_t insertAt;
+    if (count == gl->pageCacheSize) {
+        // Full: evict index 0 (LRU) and shift everything left.
+        free(gl->txtrPageCache[0].pixels);
+        for (size_t i = 0; i + 1 < gl->pageCacheSize; i++) {
+            gl->txtrPageCache[i] = gl->txtrPageCache[i + 1];
+        }
+        insertAt = gl->pageCacheSize - 1;
+    } else {
+        // Not full: compact live entries toward the front so the new entry lands at the
+        // end (MRU), preserving the existing least-to-most-recent ordering.
+        size_t write = 0;
+        repeat(gl->pageCacheSize, i) {
+            if (gl->txtrPageCache[i].pageId != UINT32_MAX) {
+                if (write != i) gl->txtrPageCache[write] = gl->txtrPageCache[i];
+                write++;
+            }
+        }
+        insertAt = write;
+    }
+
+    gl->txtrPageCache[insertAt].pageId  = pageId;
+    gl->txtrPageCache[insertAt].width   = (uint32_t) w;
+    gl->txtrPageCache[insertAt].height  = (uint32_t) h;
+    gl->txtrPageCache[insertAt].pixels  = pixels;
+}
+
+// Decode a TXTR page to RGBA pixels, using the cache when possible.
+// On success returns pixels and sets *outW/*outH, and sets *outFromCache to indicate
+// whether the returned pointer belongs to the cache (do NOT free) or is freshly decoded
+// (the caller owns it and MUST free).  Returns nullptr on failure (and *outFromCache=false).
+static uint8_t* decodeTxtrPage(GLRenderer* gl, DataWin* dw, uint32_t pageId, int32_t* outW, int32_t* outH, bool* outFromCache) {
+    // Try the cache first – a cache hit returns a pointer the caller must NOT free.
+    uint8_t* cached = pageCacheLookup(gl, pageId, outW, outH);
+    if (cached != nullptr) {
+        *outFromCache = true;
+        return cached;
+    }
+
+    *outFromCache = false;
+
+    // Cache miss – decode from the blob
     Texture* txtr = &dw->txtr.textures[pageId];
-
     DataWin_loadTxtrIfNeeded(dw, pageId);
-
-    int w, h;
     bool gm2022_5 = DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0);
-    uint8_t* pixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t) txtr->blobSize, gm2022_5, &w, &h);
+    uint8_t* pixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t) txtr->blobSize, gm2022_5, outW, outH);
     if (pixels == nullptr) {
         logWarn("GL: Failed to decode TXTR page %u\n", pageId);
-        return false;
+        return nullptr;
     }
+    // Free the compressed blob now that we've decoded it (unless it's memory-mapped)
     if (!txtr->mapped) {
         free(txtr->blobData);
         txtr->blobData = nullptr;
     }
 
-    gl->textureWidths[index] = w;
-    gl->textureHeights[index] = h;
+    // Store a copy in the cache (the cache owns its copy; we return a separate pointer
+    // so the caller can extract a sub-rectangle without corrupting the cached page).
+    if (gl->txtrPageCache != nullptr) {
+        uint8_t* cacheCopy = (uint8_t *)safeMalloc((size_t) (*outW) * (size_t) (*outH) * 4);
+        memcpy(cacheCopy, pixels, (size_t) (*outW) * (size_t) (*outH) * 4);
+        pageCacheStore(gl, pageId, *outW, *outH, cacheCopy);
+    }
 
-    glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    free(pixels);
+    return pixels;
+}
 
-    bool isPOT = (w & (w - 1)) == 0 && (h & (h - 1)) == 0;
-    GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+// ===========================================================================
+// ==[ Texture Upload ]======================================================
+// ===========================================================================
 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
+// Lazily decodes and uploads a texture on first access.
+//
+// In **pageless mode** (`gl->pagelessTextures == true`), `index` is a TPAG index:
+//   1. Look up which TXTR page the TPAG belongs to via tpag->texturePageId.
+//   2. Decode that page (using the cache when possible).
+//   3. Copy out the exact sub-rectangle this TPAG uses and upload it to its own
+//      GL texture.  Unused areas of the page occupy no VRAM.
+//
+// In **paged mode** (`gl->pagelessTextures == false`), `index` is a TXTR page id:
+//   1. Decode the whole page and upload it as a single GL texture.
+//   2. TPAGs sample sub-regions of this texture via UV coordinates at draw time.
+//
+// On PLATFORM_VITA with VitaTextures active, the texture is loaded from the external
+// compressed file regardless of the mode setting.
+//
+// Returns true once the texture is ready, false if it failed to decode.
+bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index) {
+    if (gl->textureLoaded[index]) return (gl->textureWidths[index] != 0);
+    gl->textureLoaded[index] = true;
 
-    logInfo("GL: Loaded TXTR page %u (%dx%d)\n", pageId, w, h);
-#else
-    // Desktop/ES path: index is a TPAG index. Keep the whole decoded page in a single-entry
-    // cache so that many TPAG sub-rects from the same TXTR page reuse the decoded RGBA buffer
-    // instead of re-decoding the page for every texture.
-    Texture* txtr = &dw->txtr.textures[pageId];
+    DataWin* dw = gl->base.dataWin;
 
-    int pageW, pageH;
-    uint8_t* pagePixels;
-    if (gl->textureCachePageId == (uint32_t) pageId && gl->textureCachePixels != nullptr) {
-        // Cache hit: reuse the decoded page.
-        pagePixels = gl->textureCachePixels;
-        pageW = gl->textureCacheW;
-        pageH = gl->textureCacheH;
-    } else {
-        // Cache miss: decode (and cache) this page, evicting whichever page was cached before.
-        DataWin_loadTxtrIfNeeded(dw, pageId);
-        bool gm2022_5 = DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0);
-        pagePixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t) txtr->blobSize, gm2022_5, &pageW, &pageH);
-        if (pagePixels == nullptr) {
-            logWarn("GL: Failed to decode TXTR page %u\n", pageId);
+#if defined(PLATFORM_VITA)
+    // ============================================================
+    // VitaTextures: external compressed texture file (always page-based)
+    // ============================================================
+    if (VitaTextures_Active()) {
+        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+        if (!VitaTextures_LoadPage(index, &gl->textureWidths[index], &gl->textureHeights[index])) {
+            logError("GL: Failed to load Vita TXTR page %u", index);
             return false;
         }
-        if (!txtr->mapped) {
-            free(txtr->blobData);
-            txtr->blobData = nullptr;
-        }
-        free(gl->textureCachePixels);
-        gl->textureCachePixels = pagePixels;
-        gl->textureCacheW = pageW;
-        gl->textureCacheH = pageH;
-        gl->textureCachePageId = (uint32_t) pageId;
+        logInfo("GL: Loaded Vita TXTR page %u (%dx%d)\n", index, gl->textureWidths[index], gl->textureHeights[index]);
+        return true;
     }
-
-    // Clamp the TPAG source rect to the decoded page bounds.
-    if ((uint32_t) su + (uint32_t) rw > (uint32_t) pageW) rw = pageW - su;
-    if ((uint32_t) sv + (uint32_t) rh > (uint32_t) pageH) rh = pageH - sv;
-    if (rw < 1) rw = 1;
-    if (rh < 1) rh = 1;
-
-    gl->textureWidths[index] = rw;
-    gl->textureHeights[index] = rh;
-
-    // Upload the used rectangle. The whole-page case uploads straight from the cache; the
-    // sub-rect case copies out (the cache keeps the full page for the next TPAG to reuse).
-    if (su == 0 && sv == 0 && rw == pageW && rh == pageH) {
-        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, pagePixels);
-    } else {
-        uint8_t* outPx = (uint8_t *)safeMalloc((size_t) rw * (size_t) rh * 4);
-        for (int32_t row = 0; row < rh; row++) {
-            memcpy(outPx + (size_t) row * rw * 4,
-                   pagePixels + ((size_t) (sv + row) * pageW + su) * 4,
-                   (size_t) rw * 4);
-        }
-        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPx);
-        free(outPx);
-    }
-
-    bool isPOT = (rw & (rw - 1)) == 0 && (rh & (rh - 1)) == 0;
-    GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
-
-    logInfo("GL: Loaded texture %u (%dx%d)\n", index, rw, rh);
 #endif
+
+    if (gl->pagelessTextures) {
+        // ============================================================
+        // PAGELESS MODE: index is a TPAG index.
+        // Decode the owning TXTR page, extract the sub-rectangle for
+        // this TPAG, and upload only that sub-rectangle.
+        // ============================================================
+        if (dw->tpag.count <= index) return false;
+        TexturePageItem* tpag = &dw->tpag.items[index];
+        int16_t pageId = tpag->texturePageId;
+        if (0 > pageId || dw->txtr.count <= (uint32_t) pageId) return false;
+
+        int pageW, pageH;
+        bool fromCache;
+        uint8_t* pagePixels = decodeTxtrPage(gl, dw, (uint32_t) pageId, &pageW, &pageH, &fromCache);
+        if (pagePixels == nullptr) return false;
+
+        // Source rectangle within the decoded page
+        int su = tpag->sourceX, sv = tpag->sourceY;
+        int rw = tpag->sourceWidth, rh = tpag->sourceHeight;
+
+        // Clamp to decoded page bounds (safety)
+        if (su + rw > pageW) rw = pageW - su;
+        if (sv + rh > pageH) rh = pageH - sv;
+        if (rw < 1) rw = 1;
+        if (rh < 1) rh = 1;
+
+        gl->textureWidths[index]  = rw;
+        gl->textureHeights[index] = rh;
+
+        // Upload the sub-rectangle.  If the TPAG covers the entire page we can
+        // upload straight from the decode buffer; otherwise we must copy it out.
+        if (su == 0 && sv == 0 && rw == pageW && rh == pageH) {
+            glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, pagePixels);
+        } else {
+            uint8_t* outPx = (uint8_t *)safeMalloc((size_t) rw * (size_t) rh * 4);
+            for (int32_t row = 0; row < rh; row++) {
+                memcpy(outPx + (size_t) row * rw * 4,
+                       pagePixels + ((size_t) (sv + row) * pageW + su) * 4,
+                       (size_t) rw * 4);
+            }
+            glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPx);
+            free(outPx);
+        }
+
+        // Free the freshly decoded page buffer unless it came from the cache
+        // (the cache keeps its own copy).
+        if (!fromCache) free(pagePixels);
+
+        bool isPOT = (rw & (rw - 1)) == 0 && (rh & (rh - 1)) == 0;
+        GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
+
+        logInfo("GL: Loaded texture %u (TPAG %u, sub-rect %dx%d)\n", index, pageId, rw, rh);
+
+    } else {
+        // ============================================================
+        // PAGED MODE: index is a TXTR page id.
+        // Decode the whole page and upload it as one GL texture.
+        // TPAGs will sample sub-regions via UV coordinates at draw time.
+        // ============================================================
+        if (dw->txtr.count <= index) return false;
+
+        int pageW, pageH;
+        bool fromCache;
+        uint8_t* pagePixels = decodeTxtrPage(gl, dw, index, &pageW, &pageH, &fromCache);
+        if (pagePixels == nullptr) return false;
+
+        gl->textureWidths[index]  = pageW;
+        gl->textureHeights[index] = pageH;
+
+        glBindTexture(GL_TEXTURE_2D, gl->glTextures[index]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, pageW, pageH, 0, GL_RGBA, GL_UNSIGNED_BYTE, pagePixels);
+
+        // Free the freshly decoded page buffer unless it came from the cache
+        if (!fromCache) free(pagePixels);
+
+        bool isPOT = (pageW & (pageW - 1)) == 0 && (pageH & (pageH - 1)) == 0;
+        GLint wrapMode = isPOT ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapMode);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapMode);
+
+        logInfo("GL: Loaded TXTR page %u (%dx%d)\n", index, pageW, pageH);
+    }
+
     return true;
 }
 
-// Resolves a TPAG index to a loaded GL texture plus the UV rect that spans the whole TPAG
-// region in that texture's UV space. On the desktop/ES path the texture is exactly the TPAG's
-// sub-rectangle, so the full-region UVs are (0,0)-(1,1); on Vita the texture is the whole page
-// and the UVs are page-relative. Returns false if drawing should be skipped.
+// ===========================================================================
+// ==[ Sprite Texture Resolution ]===========================================
+// ===========================================================================
+
+// Resolves a TPAG index to a loaded GL texture, the pixel dimensions of that texture,
+// and the UV rectangle that selects the TPAG's region within the texture.
+//
+// In pageless mode the GL texture IS the TPAG's sub-rectangle, so UVs are (0,0)-(1,1).
+// In paged mode the GL texture is the whole TXTR page, so UVs map the TPAG's source
+// coordinates into the page's normalised UV space.
+//
+// Returns false if the TPAG index is out of range or the texture failed to load.
 static bool resolveSpriteTexture(GLRenderer* gl, int32_t tpagIndex, TexturePageItem** outTpag, GLuint* outTexId, int32_t* outTexW, int32_t* outTexH, float* outU0, float* outV0, float* outU1, float* outV1) {
     DataWin* dw = gl->base.dataWin;
     if (0 > tpagIndex || dw->tpag.count <= (uint32_t) tpagIndex) return false;
     TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
 
-#if defined(PLATFORM_VITA)
-    int16_t pageId = tpag->texturePageId;
-    if (0 > pageId || gl->textureCount <= (uint32_t) pageId) return false;
-    if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pageId)) return false;
-    *outTpag = tpag;
-    *outTexId = gl->glTextures[pageId];
-    *outTexW = gl->textureWidths[pageId];
-    *outTexH = gl->textureHeights[pageId];
-    if (outU0) {
-        float w = (float) *outTexW, h = (float) *outTexH;
-        *outU0 = (float) tpag->sourceX / w;
-        *outV0 = (float) tpag->sourceY / h;
-        *outU1 = (float) (tpag->sourceX + tpag->sourceWidth) / w;
-        *outV1 = (float) (tpag->sourceY + tpag->sourceHeight) / h;
+    if (gl->pagelessTextures) {
+        // Pageless: the texture array is keyed by TPAG index, and the GL texture is
+        // exactly the sub-rect for this TPAG.  (We only need pageId to be valid here,
+        // but the array access is by tpagIndex.)
+        int16_t pageId = tpag->texturePageId;
+        if (0 > pageId) return false;
+        if ((uint32_t) tpagIndex >= gl->textureCount) return false;
+        if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) tpagIndex)) return false;
+        *outTpag  = tpag;
+        *outTexId = gl->glTextures[tpagIndex];
+        *outTexW  = gl->textureWidths[tpagIndex];
+        *outTexH  = gl->textureHeights[tpagIndex];
+        // UVs cover the entire sub-rect texture
+        if (outU0) { *outU0 = 0.0f; *outV0 = 0.0f; *outU1 = 1.0f; *outV1 = 1.0f; }
+    } else {
+        // Paged: look up via the page – the GL texture is the whole TXTR page
+        int16_t pageId = tpag->texturePageId;
+        if (0 > pageId || gl->textureCount <= (uint32_t) pageId) return false;
+        if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) pageId)) return false;
+        *outTpag  = tpag;
+        *outTexId = gl->glTextures[pageId];
+        *outTexW  = gl->textureWidths[pageId];
+        *outTexH  = gl->textureHeights[pageId];
+        // UVs map the TPAG's source rect into the page's normalised UV space
+        if (outU0) {
+            float w = (float) *outTexW, h = (float) *outTexH;
+            *outU0 = (float) tpag->sourceX / w;
+            *outV0 = (float) tpag->sourceY / h;
+            *outU1 = (float) (tpag->sourceX + tpag->sourceWidth) / w;
+            *outV1 = (float) (tpag->sourceY + tpag->sourceHeight) / h;
+        }
     }
-#else
-    if (!GLRenderer_ensureTextureLoaded(gl, (uint32_t) tpagIndex)) return false;
-    *outTpag = tpag;
-    *outTexId = gl->glTextures[tpagIndex];
-    *outTexW = gl->textureWidths[tpagIndex];
-    *outTexH = gl->textureHeights[tpagIndex];
-    if (outU0) {
-        *outU0 = 0.0f; *outV0 = 0.0f; *outU1 = 1.0f; *outV1 = 1.0f;
-    }
-#endif
     return true;
 }
 
@@ -2177,9 +2322,8 @@ static void glDrawTextColor(Renderer* renderer, const char* text, float x, float
 // ===[ Dynamic Sprite Creation/Deletion ]===
 
 // Finds a free dynamic texture page slot (glTextures[i] == 0), or appends a new one.
-// The VITA page-based path uses these page slots; the desktop/ES path instead keys textures
-// by TPAG (see findOrAllocTpagSlot) so this helper is only needed for PLATFORM_VITA.
-#if defined(PLATFORM_VITA)
+// Used in paged mode (and on PLATFORM_VITA with VitaTextures): dynamic sprites created at
+// runtime get their own whole-page slot, indexed by page id.
 static uint32_t findOrAllocTexturePageSlot(GLRenderer* gl) {
     // Scan dynamic range for a reusable slot
     for (uint32_t i = gl->originalTexturePageCount; gl->textureCount > i; i++) {
@@ -2198,12 +2342,12 @@ static uint32_t findOrAllocTexturePageSlot(GLRenderer* gl) {
     gl->textureLoaded[newPageId] = false;
     return newPageId;
 }
-#endif
 
 // Finds a free dynamic TPAG slot (texturePageId == -1), or appends a new one.
-// On the desktop/ES path textures are keyed by TPAG, so growing the TPAG table also grows
-// the renderer's TPAG-keyed GL texture arrays here. On PLATFORM_VITA (page-keyed) the caller
-// still allocates a separate page slot via findOrAllocTexturePageSlot.
+//
+// In pageless mode the GL texture arrays are keyed by TPAG, so growing the TPAG table also
+// grows the renderer's TPAG-keyed GL texture arrays here.  In paged mode (and VitaTextures)
+// the caller still allocates a separate page slot via findOrAllocTexturePageSlot.
 static uint32_t findOrAllocTpagSlot(GLRenderer* gl, DataWin* dw, uint32_t originalTpagCount) {
     for (uint32_t i = originalTpagCount; dw->tpag.count > i; i++) {
         if (dw->tpag.items[i].texturePageId == -1) return i;
@@ -2213,21 +2357,23 @@ static uint32_t findOrAllocTpagSlot(GLRenderer* gl, DataWin* dw, uint32_t origin
     dw->tpag.items = (TexturePageItem *)safeRealloc(dw->tpag.items, dw->tpag.count * sizeof(TexturePageItem));
     memset(&dw->tpag.items[newIndex], 0, sizeof(TexturePageItem));
     dw->tpag.items[newIndex].texturePageId = -1;
-#if !defined(PLATFORM_VITA)
-    // Desktop/ES: grow the TPAG-keyed GL texture arrays to match the new TPAG count.
-    uint32_t newCount = dw->tpag.count;
-    gl->glTextures = (GLuint *)safeRealloc(gl->glTextures, newCount * sizeof(GLuint));
-    gl->textureWidths = (int32_t *)safeRealloc(gl->textureWidths, newCount * sizeof(int32_t));
-    gl->textureHeights = (int32_t *)safeRealloc(gl->textureHeights, newCount * sizeof(int32_t));
-    gl->textureLoaded = (bool *)safeRealloc(gl->textureLoaded, newCount * sizeof(bool));
-    for (uint32_t k = gl->textureCount; k < newCount; k++) {
-        gl->glTextures[k] = 0;
-        gl->textureWidths[k] = 0;
-        gl->textureHeights[k] = 0;
-        gl->textureLoaded[k] = false;
+
+    // In pageless mode, grow the TPAG-keyed GL texture arrays to match the new TPAG count.
+    // (In paged mode the caller uses a separate page slot.)
+    if (gl->pagelessTextures) {
+        uint32_t newCount = dw->tpag.count;
+        gl->glTextures = (GLuint *)safeRealloc(gl->glTextures, newCount * sizeof(GLuint));
+        gl->textureWidths = (int32_t *)safeRealloc(gl->textureWidths, newCount * sizeof(int32_t));
+        gl->textureHeights = (int32_t *)safeRealloc(gl->textureHeights, newCount * sizeof(int32_t));
+        gl->textureLoaded = (bool *)safeRealloc(gl->textureLoaded, newCount * sizeof(bool));
+        for (uint32_t k = gl->textureCount; k < newCount; k++) {
+            gl->glTextures[k] = 0;
+            gl->textureWidths[k] = 0;
+            gl->textureHeights[k] = 0;
+            gl->textureLoaded[k] = false;
+        }
+        gl->textureCount = newCount;
     }
-    gl->textureCount = newCount;
-#endif
     return newIndex;
 }
 
@@ -2640,14 +2786,18 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
 
     free(pixels);
 
-    // Find or allocate slots for TPAG (and a separate page slot on the Vita page-keyed path).
-#if defined(PLATFORM_VITA)
-    uint32_t pageId = findOrAllocTexturePageSlot(gl);
-    gl->glTextures[pageId] = newTexId;
-    gl->textureWidths[pageId] = w;
-    gl->textureHeights[pageId] = h;
-    gl->textureLoaded[pageId] = true;
-#endif
+    // Find or allocate a slot for the dynamic sprite's GL texture.
+    // In paged mode we allocate a dedicated page slot holding the whole captured region;
+    // in pageless mode the TPAG itself owns a GL texture slot (grown by findOrAllocTpagSlot).
+    bool usePageSlot = !gl->pagelessTextures;
+    uint32_t pageId = 0;
+    if (usePageSlot) {
+        pageId = findOrAllocTexturePageSlot(gl);
+        gl->glTextures[pageId] = newTexId;
+        gl->textureWidths[pageId] = w;
+        gl->textureHeights[pageId] = h;
+        gl->textureLoaded[pageId] = true;
+    }
 
     uint32_t tpagIndex = findOrAllocTpagSlot(gl, dw, gl->originalTpagCount);
     TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
@@ -2661,16 +2811,18 @@ static int32_t glCreateSpriteFromSurface(Renderer* renderer, int32_t surfaceID, 
     tpag->targetHeight = (uint16_t) h;
     tpag->boundingWidth = (uint16_t) w;
     tpag->boundingHeight = (uint16_t) h;
-#if defined(PLATFORM_VITA)
-    tpag->texturePageId = (int16_t) pageId;
-#else
-    // Desktop/ES: the TPAG owns its own GL texture slot (the whole captured region).
-    tpag->texturePageId = 0;
-    gl->glTextures[tpagIndex] = newTexId;
-    gl->textureWidths[tpagIndex] = w;
-    gl->textureHeights[tpagIndex] = h;
-    gl->textureLoaded[tpagIndex] = true;
-#endif
+    if (usePageSlot) {
+        // Paged mode: the TPAG references the whole-page texture slot we just allocated.
+        tpag->texturePageId = (int16_t) pageId;
+    } else {
+        // Pageless mode: the TPAG owns its own GL texture slot containing the whole
+        // captured region (it IS the whole region, so it covers the entire texture).
+        tpag->texturePageId = 0;
+        gl->glTextures[tpagIndex] = newTexId;
+        gl->textureWidths[tpagIndex] = w;
+        gl->textureHeights[tpagIndex] = h;
+        gl->textureLoaded[tpagIndex] = true;
+    }
 
     uint32_t spriteIndex = DataWin_allocSpriteSlot(dw, gl->originalSpriteCount);
     Sprite* sprite = &dw->sprt.sprites[spriteIndex];
@@ -2710,19 +2862,20 @@ static void glDeleteSprite(Renderer* renderer, int32_t spriteIndex) {
         int32_t tpagIdx = sprite->tpagIndices[i];
         if (tpagIdx >= 0 && (uint32_t) tpagIdx >= gl->originalTpagCount) {
             TexturePageItem* tpag = &dw->tpag.items[tpagIdx];
-#if defined(PLATFORM_VITA)
-            int16_t pageId = tpag->texturePageId;
-            if (pageId >= 0 && gl->textureCount > (uint32_t) pageId) {
-                glDeleteTextures(1, &gl->glTextures[pageId]);
-                gl->glTextures[pageId] = 0;
+            if (gl->pagelessTextures) {
+                // Pageless: the TPAG owns its own slot in the TPAG-keyed GL texture arrays.
+                if (gl->textureCount > (uint32_t) tpagIdx) {
+                    glDeleteTextures(1, &gl->glTextures[tpagIdx]);
+                    gl->glTextures[tpagIdx] = 0;
+                }
+            } else {
+                // Paged: the TPAG references a separate page slot; delete that whole-page texture.
+                int16_t pageId = tpag->texturePageId;
+                if (pageId >= 0 && gl->textureCount > (uint32_t) pageId) {
+                    glDeleteTextures(1, &gl->glTextures[pageId]);
+                    gl->glTextures[pageId] = 0;
+                }
             }
-#else
-            // Desktop/ES: the TPAG owns its own TPAG-keyed GL texture slot.
-            if (gl->textureCount > (uint32_t) tpagIdx) {
-                glDeleteTextures(1, &gl->glTextures[tpagIdx]);
-                gl->glTextures[tpagIdx] = 0;
-            }
-#endif
             // Mark TPAG slot as free for reuse
             tpag->texturePageId = -1;
         }
@@ -3110,8 +3263,21 @@ static RendererVtable glVtable;
 
 // ===[ Public API ]===
 
-Renderer* GLRenderer_create(void) {
+Renderer* GLRenderer_create(bool pagelessTextures, size_t pageCacheSize) {
     GLRenderer* gl = (GLRenderer *)safeCalloc(1, sizeof(GLRenderer));
+
+    // ===[ Texture loading mode ]===
+    // The caller asks for a mode via `pagelessTextures`, but PLATFORM_VITA with the
+    // VitaTextures feature active MUST use paged mode: it loads whole TXTR pages from
+    // an external compressed file, so per-TPAG sub-rect extraction isn't possible.
+    gl->pagelessTextures = pagelessTextures;
+#if defined(PLATFORM_VITA)
+    if (VitaTextures_Active()) {
+        gl->pagelessTextures = false;
+        logInfo("GL: VitaTextures active – forcing paged texture mode\n");
+    }
+#endif
+    gl->pageCacheSize   = pageCacheSize;
     gl->base.vtable = &glVtable;
     glVtable.init = glInit;
     glVtable.destroy = glDestroy;

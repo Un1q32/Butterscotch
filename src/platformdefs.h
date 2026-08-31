@@ -121,6 +121,20 @@ typedef struct {
     bool opcodeProfiler;
 #endif
     bool disableLogColours;
+
+    // Texture loading mode: when true, each TPAG item gets its own GL texture (the
+    // exact sub-rectangle is extracted from the TXTR page).  Uses less VRAM but can
+    // cause more stuttering because the owning TXTR page must be decoded each time a
+    // new TPAG from the same page is first drawn.  When false (the default), each
+    // TXTR page is uploaded as a single GL texture and TPAGs sample sub-regions via
+    // UV coordinates – uses more VRAM but avoids redundant decoding.
+    bool pagelessTextures;
+
+    // Number of decoded TXTR pages to keep in the CPU-side page cache.  A larger
+    // cache reduces re-decoding at the cost of more system RAM.  Only meaningful
+    // when pagelessTextures is true (in paged mode every page is already kept as a
+    // GL texture, so the cache is only useful for re-loading after GPU eviction).
+    uint8_t pageCacheSize;
 } CommandLineArgs;
 
 bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless);

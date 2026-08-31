@@ -46,6 +46,19 @@ typedef struct {
     uint8_t r, g, b, a;
 } Vertex;
 
+// ===[ Texture Page Cache ]===
+// When pagelessTextures is enabled, decoded TXTR pages are cached in CPU RAM so that
+// multiple TPAG sub-rectangles from the same page don't each trigger a full PNG decode.
+// The cache is a fixed-size array kept ordered from least- (index 0) to most-recently-used
+// (end): a lookup hit promotes the entry to the MRU position, and an insert when full
+// evicts index 0 (the LRU), so the most recently used pages are always retained.
+typedef struct {
+    uint32_t pageId;  // which TXTR page is cached here (UINT32_MAX == slot is empty)
+    uint32_t width;   // decoded page width in pixels
+    uint32_t height;  // decoded page height in pixels
+    uint8_t* pixels;  // full decoded RGBA buffer (owned by the cache – freed on eviction)
+} PageCacheEntry;
+
 // Exposed in the header so platform-specific code (main.c) can access FBO fields for screenshots.
 typedef struct {
     Renderer base; // Must be first field for struct embedding
@@ -67,25 +80,29 @@ typedef struct {
     int32_t batchCount;
     GLuint currentTextureId;
 
-    // On the desktop/ES path each entry is one extracted sub-region (a TPAG item) rather
-    // than a whole TXTR page: we decode the owning page once and upload only the used
-    // rectangle, so unused areas never occupy VRAM. textureCount == dataWin->tpag.count.
-    // On PLATFORM_VITA (legacy optimized path) entries remain whole pages and textureCount
-    // is the page count.
-    GLuint* glTextures;       // one GL texture per TPAG item (or per page on Vita)
-    int32_t* textureWidths;   // extracted texture pixel dims (TPAG sourceWidth/Height, or page dims on Vita)
+    // ===[ Texture Arrays ]===
+    // In pageless mode (pagelessTextures == true): textureCount == tpag.count, and each
+    // entry is one extracted sub-region (a TPAG item).  The GL texture contains only the
+    // used rectangle so unused page areas occupy no VRAM.
+    // In paged mode (pagelessTextures == false): textureCount == txtr.count, and each
+    // entry is a whole decoded TXTR page.  TPAGs sample sub-regions via UV coordinates.
+    // On PLATFORM_VITA with VitaTextures active, entries are always whole pages regardless
+    // of the pagelessTextures flag (external compressed format).
+    GLuint* glTextures;
+    int32_t* textureWidths;
     int32_t* textureHeights;
-    bool* textureLoaded;      // lazy loading: true once decoded and uploaded
+    bool* textureLoaded;   // lazy loading: true once decoded and uploaded
     uint32_t textureCount;
 
-    // Desktop/ES single-entry decoded-page cache: the most recently decoded whole TXTR page
-    // is kept in system RAM so that extracting additional TPAG sub-rectangles from the same
-    // page reuses the decoded RGBA buffer instead of re-decoding. Evicted whenever a different
-    // page is decoded. Not used on PLATFORM_VITA (page-based whole-page uploads).
-    uint32_t textureCachePageId; // page whose decoded pixels are cached (UINT32_MAX == none)
-    uint8_t* textureCachePixels; // full decoded RGBA buffer of that page (owned by the cache)
-    int32_t textureCacheW;
-    int32_t textureCacheH;
+    // ===[ Texture Loading Mode ]===
+    bool pagelessTextures; // true = individual TPAG textures, false = whole TXTR pages
+
+    // ===[ CPU-side Decoded-Page Cache ]===
+    // Stores the most recently decoded TXTR pages in system RAM so they can be reused
+    // without re-decoding (useful in pageless mode where many TPAGs share a page, and
+    // in paged mode for re-loading after GPU memory pressure).
+    size_t pageCacheSize;          // number of cache entries (0 = cache disabled)
+    PageCacheEntry* txtrPageCache; // array of pageCacheSize entries
 
     GLuint whiteTexture; // 1x1 white pixel for drawing primitives (rectangles, lines, etc.)
 
@@ -125,10 +142,13 @@ typedef struct {
     GLShaderUniform* uTexture;
 } GLRenderer;
 
-// Loads (decodes + uploads) a single texture. On the desktop/ES path `index` is a TPAG
-// index and only that sub-region of its TXTR page is uploaded; on PLATFORM_VITA it is a
-// page index and the whole page is uploaded. Returns true once the texture is ready.
+// Loads (decodes + uploads) a texture.  In pageless mode `index` is a TPAG index and
+// only that sub-region of its TXTR page is uploaded; in paged mode `index` is a TXTR
+// page index and the whole page is uploaded.  Returns true once the texture is ready.
 bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t index);
-Renderer* GLRenderer_create(void);
+
+// Creates the GL renderer.  pagelessTextures selects individual-TPAG vs whole-page
+// mode; pageCacheSize sets how many decoded pages to keep in the CPU-side cache.
+Renderer* GLRenderer_create(bool pagelessTextures, size_t pageCacheSize);
 
 #endif /* _BS_GL_RENDERER_H_ */

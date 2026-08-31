@@ -867,7 +867,7 @@ int loop(CommandLineArgs args, const char *argv0) {
 #endif
 #ifdef ENABLE_MODERN_GL
         if (gfx == MODERN_GL) {
-            renderer = GLRenderer_create();
+            renderer = GLRenderer_create(args.pagelessTextures, args.pageCacheSize);
             hostFramebuffer = &((GLRenderer *)renderer)->hostFramebuffer;
         }
 #endif
@@ -899,8 +899,10 @@ int loop(CommandLineArgs args, const char *argv0) {
         if (!args.lazyTextures) {
 #ifdef ENABLE_MODERN_GL
             if (gfx == MODERN_GL) {
-                // The modern GL renderer keys textures by TPAG (one extracted texture per TPAG item).
-                for (uint32_t i = 0; i < runner->dataWin->tpag.count; i++)
+                // Preload all textures up front.  This only runs when lazy textures are
+                // disabled, which happens only in paged mode (pageless textures always
+                // imply lazy), so the renderer is keyed by TXTR page.
+                for (uint32_t i = 0; i < runner->dataWin->txtr.count; i++)
                     GLRenderer_ensureTextureLoaded((GLRenderer*) renderer, i);
             }
 #endif
