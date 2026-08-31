@@ -448,6 +448,15 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
         abort();
     }
 
+    gl->pagelessTextures = true; // TODO: wire up to cli
+    if (gl->pagelessTextures) {
+        gl->pageCacheSize = 3; // TODO: wire up to cli
+        gl->txtrPageCache = safeMalloc(gl->pageCacheSize * sizeof(PageCacheEntry));
+        repeat(gl->pageCacheSize, i) {
+            gl->txtrPageCache[i].pageId = UINT32_MAX; // UINT32_MAX means none
+        }
+    }
+
     char vertSrc[1024];
     char fragSrc[1024];
     const char* vertHeader = "";
@@ -2983,7 +2992,7 @@ static RendererVtable glVtable;
 
 // ===[ Public API ]===
 
-Renderer* GLRenderer_create(bool pagelessTextures, uint8_t pageCacheSize) {
+Renderer* GLRenderer_create(void) {
     GLRenderer* gl = (GLRenderer *)safeCalloc(1, sizeof(GLRenderer));
     gl->base.vtable = &glVtable;
     glVtable.init = glInit;
@@ -3064,6 +3073,5 @@ Renderer* GLRenderer_create(bool pagelessTextures, uint8_t pageCacheSize) {
     gl->base.circlePrecision = 24;
     gl->base.currentShader = -1;
     gl->base.cameraCurrent = 0;
-    gl->
     return (Renderer*) gl;
 }

@@ -46,6 +46,13 @@ typedef struct {
     uint8_t r, g, b, a;
 } Vertex;
 
+typedef struct {
+    uint32_t pageId; // page whose decoded pixels are cached (UINT32_MAX == none)
+    uint32_t width;
+    uint32_t height;
+    uint8_t* pixels; // full decoded RGBA buffer of that page (owned by the cache)
+} PageCacheEntry;
+
 // Exposed in the header so platform-specific code (main.c) can access FBO fields for screenshots.
 typedef struct {
     Renderer base; // Must be first field for struct embedding
@@ -67,11 +74,14 @@ typedef struct {
     int32_t batchCount;
     GLuint currentTextureId;
 
-    GLuint* glTextures;       // one GL texture per TXTR page
-    int32_t* textureWidths;   // needed for UV normalization
+    GLuint* glTextures;
+    int32_t* textureWidths;
     int32_t* textureHeights;
-    bool* textureLoaded;      // lazy loading: true once PNG decoded and uploaded
+    bool* textureLoaded; // lazy loading: true once decoded and uploaded
     uint32_t textureCount;
+    bool pagelessTextures;
+    size_t pageCacheSize;
+    PageCacheEntry *txtrPageCache;
 
     GLuint whiteTexture; // 1x1 white pixel for drawing primitives (rectangles, lines, etc.)
 
