@@ -448,6 +448,20 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
         abort();
     }
 
+    // ===[ CPU-side decoded-page cache ]===
+    // When enabled, recently decoded TXTR pages are kept in system RAM so that other
+    // TPAG items on the same page (pageless mode) or re-loads after GPU eviction
+    // (paged mode) don't have to re-decode the PNG data.  The cache is a flat array;
+    // on a miss the oldest entry is evicted.  A size of 0 disables caching entirely.
+    if (gl->pageCacheSize > 0) {
+        gl->txtrPageCache = (PageCacheEntry *)safeMalloc(gl->pageCacheSize * sizeof(PageCacheEntry));
+        repeat(gl->pageCacheSize, i) {
+            gl->txtrPageCache[i].pageId = UINT32_MAX; // empty slot
+            gl->txtrPageCache[i].pixels = nullptr;
+        }
+        logInfo("GL: Page cache enabled (%zu entries)\n", gl->pageCacheSize);
+    }
+
     gl->pagelessTextures = true; // TODO: wire up to cli
     if (gl->pagelessTextures) {
         gl->pageCacheSize = 3; // TODO: wire up to cli
@@ -631,21 +645,25 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     }
 
     // Allocate CPU-side vertex buffer
-#if PLATFORM_VITA
+#ifdef PLATFORM_VITA
     gl->vertexData = (Vertex *)vglAllocFromScratch(MAX_QUADS * VERTICES_PER_QUAD * sizeof(Vertex));
 #else
     gl->vertexData = (Vertex *)safeMalloc(MAX_QUADS * VERTICES_PER_QUAD * sizeof(Vertex));
 #endif
 
     // Prepare texture slots for lazy loading (PNG decode deferred to first use)
-#if defined(PLATFORM_VITA)
+#ifdef PLATFORM_VITA
     if (VitaTextures_Active())
         gl->textureCount = VitaTextures_GetPageCount();
     else
-        gl->textureCount = dataWin->txtr.count;
-#else
-    gl->textureCount = dataWin->txtr.count;
 #endif
+    if (gl->pagelessTextures) {
+        // Pageless: one GL texture per TPAG item (the extracted sub-rectangle).
+        gl->textureCount = dataWin->tpag.count;
+    } else {
+        // Paged: one GL texture per TXTR page (the whole decoded page).
+        gl->textureCount = dataWin->txtr.count;
+    }
     gl->glTextures = (GLuint *)safeMalloc(gl->textureCount * sizeof(GLuint));
     gl->textureWidths = (int32_t *)safeMalloc(gl->textureCount * sizeof(int32_t));
     gl->textureHeights = (int32_t *)safeMalloc(gl->textureCount * sizeof(int32_t));
@@ -679,7 +697,7 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->originalTpagCount = dataWin->tpag.count;
     gl->originalSpriteCount = dataWin->sprt.count;
 
-    logInfo("GL: Renderer initialized (%u texture pages)\n", gl->textureCount);
+    logInfo("GL: Renderer initialized (%u %s)\n", gl->textureCount, gl->pagelessTextures ? "textures" : "texture pages");
 }
 
 static void glGpuSetShader(Renderer* renderer, int32_t shaderIndex) {
@@ -819,6 +837,12 @@ static void glDestroy(Renderer* renderer) {
     free(gl->textureWidths);
     free(gl->textureHeights);
     free(gl->textureLoaded);
+    if (gl->txtrPageCache != nullptr) {
+        repeat(gl->pageCacheSize, i) {
+            free(gl->txtrPageCache[i].pixels);
+        }
+        free(gl->txtrPageCache);
+    }
     free(gl->uWorldViewProjection);
     free(gl->uFogColor);
     free(gl->uAlphaTestRef);
@@ -2992,8 +3016,18 @@ static RendererVtable glVtable;
 
 // ===[ Public API ]===
 
-Renderer* GLRenderer_create(void) {
+Renderer* GLRenderer_create(bool pagelessTextures, uint32_t pageCacheSize) {
     GLRenderer* gl = (GLRenderer *)safeCalloc(1, sizeof(GLRenderer));
+    gl->pagelessTextures = pagelessTextures;
+    gl->pageCacheSize = pageCacheSize;
+#if defined(PLATFORM_VITA)
+    if (VitaTextures_Active()) {
+        gl->pagelessTextures = false;
+        logInfo("GL: VitaTextures active – forcing paged texture mode\n");
+    }
+#endif
+    if (!gl->pagelessTextures)
+        gl->pageCacheSize = 0;
     gl->base.vtable = &glVtable;
     glVtable.init = glInit;
     glVtable.destroy = glDestroy;

@@ -218,7 +218,7 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->profilerFramesBetween = 0;
     args->loadType = DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME;
     args->disableLogColours = !isatty(1); // 1 == stdout
-    args->pageCacheSize = 1;
+    args->pageCacheSize = 3;
     // TODO: detect available driver features
     // at runtime to improve defaults.
 #if defined(ENABLE_MODERN_GL)
