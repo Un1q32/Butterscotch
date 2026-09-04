@@ -122,6 +122,6 @@ typedef struct {
 } GLRenderer;
 
 bool GLRenderer_ensureTextureLoaded(GLRenderer* gl, uint32_t pageId);
-Renderer* GLRenderer_create(void);
+Renderer* GLRenderer_create(bool pagelessTextures, size_t pageCacheSize);
 
 #endif /* _BS_GL_RENDERER_H_ */

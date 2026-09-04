@@ -275,7 +275,7 @@ void startRunner(const char* gamePath, const char* savesPath) {
     // Initialize VM
     VMContext* vm = VM_create(dataWin);
 
-    Renderer* renderer = GLRenderer_create();
+    Renderer* renderer = GLRenderer_create(false, 0);
 
     // Bundle path = directory containing data.win, e.g. "/butterscotch/games/undertale/".
     // Save path = whatever the worker passed in, e.g. "/butterscotch/saves/undertale/".
