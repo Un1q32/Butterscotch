@@ -651,7 +651,11 @@ static void glInit(Renderer* renderer, DataWin* dataWin) {
     gl->vertexData = (Vertex *)safeMalloc(MAX_QUADS * VERTICES_PER_QUAD * sizeof(Vertex));
 #endif
 
-    // Prepare texture slots for lazy loading (PNG decode deferred to first use)
+    // ===[ Allocate texture arrays ]===
+    // The size depends on the current texture loading mode:
+    //   - VitaTextures active: use VitaTextures page count (external compressed format)
+    //   - pagelessTextures == true (pageless mode): tpag.count – one GL texture per TPAG
+    //   - pagelessTextures == false (paged mode): txtr.count – one GL texture per TXTR page
 #ifdef PLATFORM_VITA
     if (VitaTextures_Active())
         gl->textureCount = VitaTextures_GetPageCount();
