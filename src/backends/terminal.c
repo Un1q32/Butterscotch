@@ -363,7 +363,7 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
         const char *noColor = getenv("NO_COLOR");
         bool noColorSet = noColor != NULL && noColor[0] != '\0';
         g_truecolor = getenv("TRUECOLOR") != NULL;
-        g_color256 = !g_truecolor && getenv("256COLOR") != NULL;
+        g_color256 = !g_truecolor && getenv("TWOFIVESIXCOLOR") != NULL;
         /* 16 colours is the default for terminals without truecolor or
          * 256-colour support; monochrome is opt-in via NO_COLOR. */
         g_color16 = !g_truecolor && !g_color256 && !noColorSet;
