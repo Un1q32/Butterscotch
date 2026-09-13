@@ -24,13 +24,16 @@
  * framebuffer as ASCII art on stdout.
  *
  * Cells are ~twice as tall as wide, so the framebuffer is rendered at
- * cols x (rows*2) and each cell averages its 1x2 pixel block.
+ * cols x (rows*2) and each cell averages its 1x2 pixel block. Frames are
+ * emitted differentially with absolute cursor addressing (no CR/LF on
+ * the wire), so unchanged frames cost zero bytes.
  *
- * Colour support is selected via environment variables:
- *   TRUECOLOR set (to anything) -> 24-bit truecolor escapes
- *   256COLOR  set (to anything) -> xterm 256-colour escapes
- *   NO_COLOR  set (non-empty)   -> plain monochrome ASCII
- *   none of the above           -> 16-colour ANSI escapes
+ * Colour support is selected via environment variables (a leading digit
+ * is not a valid shell identifier, so the 256-colour flag spells it out):
+ *   TRUECOLOR      set (to anything) -> 24-bit truecolor escapes
+ *   TWOFIVESIXCOLOR set (to anything) -> xterm 256-colour escapes
+ *   NO_COLOR       set (non-empty)   -> plain monochrome ASCII
+ *   none of the above                -> 16-colour ANSI escapes
  */
 
 static Runner *g_runner = NULL;
@@ -51,11 +54,18 @@ static bool g_ttyOut = false;
 static bool g_ttyIn = false;
 static bool g_altScreen = false;
 
+/* Previous-frame state for differential updates. */
+static char *s_prevCh = NULL;
+static int *s_prevCol = NULL;
+static char *s_curCh = NULL;
+static int *s_curCol = NULL;
+static int s_prevCols = 0, s_prevRows = 0;
+static bool s_prevValid = false;
+static int s_termColor = -1; /* colour active on the terminal, -1 = unknown */
+
 #ifndef _WIN32
 static struct termios g_origTermios;
 static bool g_rawEnabled = false;
-static int g_origStdinFlags = 0;
-static bool g_stdinFlagsSaved = false;
 #else
 static DWORD g_origConsoleMode = 0;
 static bool g_consoleModeSaved = false;
@@ -397,14 +407,13 @@ bool platformInit(int32_t reqW, int32_t reqH, const char *title, bool headless) 
             raw.c_cc[VTIME] = 0;
             if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) g_rawEnabled = true;
         }
-        {
-            int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-            if (flags >= 0) {
-                g_origStdinFlags = flags;
-                g_stdinFlagsSaved = true;
-                (void)fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
-            }
-        }
+        /* NOTE: stdin is deliberately left in blocking mode. VMIN=0/VTIME=0
+         * above already makes read() return immediately, and setting
+         * O_NONBLOCK here would be actively harmful: stdin and stdout
+         * usually refer to the same open tty description (e.g. after the
+         * test harness's dup2, or a shell that dup'd one open), so the flag
+         * would leak onto stdout and large frame writes would fail with
+         * EAGAIN partway, leaving stale cells from old frames on screen. */
     }
 #else
     if (g_ttyIn) {
@@ -458,10 +467,6 @@ void platformExit(void) {
         (void)tcsetattr(STDIN_FILENO, TCSANOW, &g_origTermios);
         g_rawEnabled = false;
     }
-    if (g_stdinFlagsSaved) {
-        (void)fcntl(STDIN_FILENO, F_SETFL, g_origStdinFlags);
-        g_stdinFlagsSaved = false;
-    }
 #else
     if (g_consoleModeSaved) {
         HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
@@ -469,6 +474,13 @@ void platformExit(void) {
         g_consoleModeSaved = false;
     }
 #endif
+    free(s_prevCh); s_prevCh = NULL;
+    free(s_prevCol); s_prevCol = NULL;
+    free(s_curCh); s_curCh = NULL;
+    free(s_curCol); s_curCol = NULL;
+    s_prevCols = 0; s_prevRows = 0;
+    s_prevValid = false;
+    s_termColor = -1;
     g_initialized = false;
     g_fb = NULL;
 }
@@ -535,14 +547,98 @@ void platformSetNextFramebuffer(uint32_t *framebuffer, int width, int height) {
     g_fbH = height;
 }
 
+/* Worst-case output bytes for one cell (escape + glyph) in the active mode. */
+static size_t termPerCell(void) {
+    if (g_truecolor) return 20; /* "\x1b[38;2;RRR;GGG;BBBm" + char */
+    if (g_color256) return 12;  /* "\x1b[38;5;NNNm" + char */
+    if (g_color16) return 6;    /* "\x1b[9Xm" + char */
+    return 1;                   /* monochrome: just the char */
+}
+
+/* Reduces one framebuffer cell to its ASCII glyph + colour key. */
+static void termComputeCell(int tx, int ty, int cols, int rows, char *outCh, int *outKey) {
+    unsigned long sumR = 0, sumG = 0, sumB = 0;
+    unsigned long count = 0;
+    int r, g, b, lum, idx;
+    if (g_fbW == cols && g_fbH == rows * 2) {
+        /* Fast path: average the two vertically stacked pixels. */
+        uint32_t px0 = g_fb[(size_t)(ty * 2) * (size_t)g_fbW + (size_t)tx];
+        uint32_t px1 = g_fb[(size_t)(ty * 2 + 1) * (size_t)g_fbW + (size_t)tx];
+        sumB = (unsigned long)(px0 & 0xFFu) + (unsigned long)(px1 & 0xFFu);
+        sumG = (unsigned long)((px0 >> 8) & 0xFFu) + (unsigned long)((px1 >> 8) & 0xFFu);
+        sumR = (unsigned long)((px0 >> 16) & 0xFFu) + (unsigned long)((px1 >> 16) & 0xFFu);
+        count = 2;
+    } else {
+        /* Generic fallback: box-sample (resize races, non-tty sizes). */
+        int y0 = ty * g_fbH / rows;
+        int y1 = (ty + 1) * g_fbH / rows;
+        int x0 = tx * g_fbW / cols;
+        int x1 = (tx + 1) * g_fbW / cols;
+        int rw, rh, stepX, stepY, y, x;
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y0 < 0) y0 = 0;
+        if (y1 > g_fbH) y1 = g_fbH;
+        if (x1 <= x0) x1 = x0 + 1;
+        if (x0 < 0) x0 = 0;
+        if (x1 > g_fbW) x1 = g_fbW;
+        rw = x1 - x0;
+        rh = y1 - y0;
+        stepX = (rw + 7) / 8;
+        stepY = (rh + 7) / 8;
+        if (stepX < 1) stepX = 1;
+        if (stepY < 1) stepY = 1;
+        for (y = y0; y < y1; y += stepY) {
+            for (x = x0; x < x1; x += stepX) {
+                uint32_t px = g_fb[(size_t)y * (size_t)g_fbW + (size_t)x];
+                sumB += (unsigned long)(px & 0xFFu);
+                sumG += (unsigned long)((px >> 8) & 0xFFu);
+                sumR += (unsigned long)((px >> 16) & 0xFFu);
+                count++;
+            }
+        }
+    }
+    if (count == 0) { r = 0; g = 0; b = 0; }
+    else { r = (int)(sumR / count); g = (int)(sumG / count); b = (int)(sumB / count); }
+
+    /* Rec. 601 luma for the glyph ramp. */
+    lum = (r * 299 + g * 587 + b * 114) / 1000;
+    idx = lum * (kRampLen - 1) / 255;
+    if (idx < 0) idx = 0;
+    if (idx >= kRampLen) idx = kRampLen - 1;
+    *outCh = kRamp[idx];
+
+    if (g_truecolor) *outKey = (r << 16) | (g << 8) | b;
+    else if (g_color256) *outKey = rgbToXterm256(r, g, b);
+    else if (g_color16) *outKey = rgbToAnsi16(r, g, b);
+    else *outKey = 0;
+}
+
+/* Appends the colour escape for key. Returns false if it wouldn't fit. */
+static bool termEmitColor(char **pp, size_t *lenp, size_t cap, int key) {
+    char *p = *pp;
+    size_t len = *lenp;
+    int n;
+    if (g_truecolor) {
+        n = snprintf(p, cap - len, "\x1b[38;2;%d;%d;%dm", (key >> 16) & 255, (key >> 8) & 255, key & 255);
+    } else if (g_color256) {
+        n = snprintf(p, cap - len, "\x1b[38;5;%dm", key);
+    } else {
+        n = snprintf(p, cap - len, "\x1b[%dm", key < 8 ? 30 + key : 90 + (key - 8));
+    }
+    if (n < 0 || (size_t)n >= cap - len) return false;
+    *pp = p + n;
+    *lenp = len + (size_t)n;
+    return true;
+}
+
 static void termPresent(void) {
     int cols, rows;
-    size_t cap, len;
-    char *buf;
-    char *p;
+    size_t n, i;
     int tx, ty;
-    int lastR, lastG, lastB, lastIdx;
-    bool useColor;
+    bool useColor, full;
+    long changed, runs;
+    size_t cap, len;
+    char *buf, *p;
 
     if (g_fb == NULL || g_fbW <= 0 || g_fbH <= 0) return;
     if (g_headless) return;
@@ -551,153 +647,198 @@ static void termPresent(void) {
     if (cols < 1) cols = 80;
     if (rows < 1) rows = 24;
 
-    /* Worst case per cell: "\x1b[38;2;RRR;GGG;BBBm" (19 bytes) + 1 char.
-     * Plus CR LF per row, reset codes, and the home + synchronized-output
-     * sequences. */
-    cap = (size_t)cols * (size_t)rows * 22 + (size_t)rows * 8 + 64;
+    n = (size_t)cols * (size_t)rows;
+
+    /* (Re)allocate the cell buffers when the grid changes; the previous
+     * frame is then invalid so the next present fully redraws. */
+    if (cols != s_prevCols || rows != s_prevRows) {
+        free(s_prevCh); s_prevCh = NULL;
+        free(s_prevCol); s_prevCol = NULL;
+        free(s_curCh); s_curCh = NULL;
+        free(s_curCol); s_curCol = NULL;
+        s_prevCh = (char *)malloc(n);
+        s_prevCol = (int *)malloc(n * sizeof(int));
+        s_curCh = (char *)malloc(n);
+        s_curCol = (int *)malloc(n * sizeof(int));
+        if (s_prevCh == NULL || s_prevCol == NULL || s_curCh == NULL || s_curCol == NULL) {
+            free(s_prevCh); s_prevCh = NULL;
+            free(s_prevCol); s_prevCol = NULL;
+            free(s_curCh); s_curCh = NULL;
+            free(s_curCol); s_curCol = NULL;
+            s_prevCols = 0; s_prevRows = 0;
+            s_prevValid = false;
+            return;
+        }
+        s_prevCols = cols;
+        s_prevRows = rows;
+        s_prevValid = false;
+    }
+
+    useColor = g_truecolor || g_color256 || g_color16;
+    full = !s_prevValid;
+
+    /* Pass 1: reduce every cell, diff against the previous frame. */
+    changed = 0;
+    for (ty = 0; ty < rows; ty++) {
+        for (tx = 0; tx < cols; tx++) {
+            char ch;
+            int key;
+            i = (size_t)ty * (size_t)cols + (size_t)tx;
+            termComputeCell(tx, ty, cols, rows, &ch, &key);
+            s_curCh[i] = ch;
+            s_curCol[i] = key;
+            if (full || ch != s_prevCh[i] || key != s_prevCol[i]) changed++;
+        }
+    }
+    /* Identical frame: emit zero bytes. */
+    if (!full && changed == 0) return;
+
+    /* Count runs so the output buffer is sized exactly for this update:
+     * changed cells at the active mode's worst case, one absolute cursor
+     * address per run, plus framing. Lower colour modes allocate less. */
+    if (full) {
+        runs = rows;
+    } else {
+        runs = 0;
+        for (ty = 0; ty < rows; ty++) {
+            bool inRun = false;
+            for (tx = 0; tx < cols; tx++) {
+                i = (size_t)ty * (size_t)cols + (size_t)tx;
+                if (s_curCh[i] != s_prevCh[i] || s_curCol[i] != s_prevCol[i]) {
+                    if (!inRun) { runs++; inRun = true; }
+                } else {
+                    inRun = false;
+                }
+            }
+        }
+    }
+
+    if (g_ttyOut) {
+        cap = 19 + (size_t)runs * 16 + (size_t)changed * termPerCell() + 4 + 32;
+    } else {
+        cap = n * (termPerCell() + 1) + (size_t)rows + 32;
+    }
     buf = (char *)malloc(cap);
     if (buf == NULL) return;
     p = buf;
     len = 0;
 
-    useColor = g_truecolor || g_color256 || g_color16;
-
     if (g_ttyOut) {
-        /* DEC synchronized output: terminals that support it (kitty,
-         * wezterm, Windows Terminal, foot, recent VTE, ...) buffer the
-         * frame and present it atomically instead of showing it sweep
-         * down the screen half-drawn. Others ignore the sequence. */
-        memcpy(p, "\x1b[?2026h\x1b[H", 11);
-        p += 11; len += 11;
-    }
-
-    lastR = -1; lastG = -1; lastB = -1; lastIdx = -1;
-
-    /* NOTE: the framebuffer is normally cols x (rows*2) since the render
-     * resolution tracks the terminal size with doubled height, so the 1x2
-     * averaging branch below is the hot path. The box sampler only runs
-     * during resize races or non-tty fallback sizes. */
-    for (ty = 0; ty < rows; ty++) {
-        for (tx = 0; tx < cols; tx++) {
-            unsigned long sumR = 0, sumG = 0, sumB = 0;
-            unsigned long count = 0;
-            int r, g, b, lum, idx;
-            char ch;
-            if (g_fbW == cols && g_fbH == rows * 2 && tx >= 0 && tx < g_fbW) {
-                /* Fast path: average the two vertically stacked pixels
-                 * covered by this cell. */
-                int y0 = ty * 2;
-                uint32_t px0 = g_fb[(size_t)y0 * (size_t)g_fbW + (size_t)tx];
-                uint32_t px1 = g_fb[(size_t)(y0 + 1) * (size_t)g_fbW + (size_t)tx];
-                sumB = (unsigned long)(px0 & 0xFFu) + (unsigned long)(px1 & 0xFFu);
-                sumG = (unsigned long)((px0 >> 8) & 0xFFu) + (unsigned long)((px1 >> 8) & 0xFFu);
-                sumR = (unsigned long)((px0 >> 16) & 0xFFu) + (unsigned long)((px1 >> 16) & 0xFFu);
-                count = 2;
-            } else {
-                /* Generic fallback: box-sample the cell's source region,
-                 * striding so very large regions cap at ~8x8 taps. */
-                int y0 = ty * g_fbH / rows;
-                int y1 = (ty + 1) * g_fbH / rows;
-                int x0 = tx * g_fbW / cols;
-                int x1 = (tx + 1) * g_fbW / cols;
-                int rw, rh, stepX, stepY, y, x;
-                if (y1 <= y0) y1 = y0 + 1;
-                if (y0 < 0) y0 = 0;
-                if (y1 > g_fbH) y1 = g_fbH;
-                if (x1 <= x0) x1 = x0 + 1;
-                if (x0 < 0) x0 = 0;
-                if (x1 > g_fbW) x1 = g_fbW;
-                rw = x1 - x0;
-                rh = y1 - y0;
-                stepX = (rw + 7) / 8;
-                stepY = (rh + 7) / 8;
-                if (stepX < 1) stepX = 1;
-                if (stepY < 1) stepY = 1;
-                for (y = y0; y < y1; y += stepY) {
-                    for (x = x0; x < x1; x += stepX) {
-                        uint32_t px = g_fb[(size_t)y * (size_t)g_fbW + (size_t)x];
-                        sumB += (unsigned long)(px & 0xFFu);
-                        sumG += (unsigned long)((px >> 8) & 0xFFu);
-                        sumR += (unsigned long)((px >> 16) & 0xFFu);
-                        count++;
+        /* Absolute cursor addressing: no CR/LF bytes on the wire, so a
+         * frame can never scroll the screen no matter what. Only changed
+         * runs are emitted, inside synchronized output so the update
+         * presents atomically where supported. */
+        bool force = true;
+        bool ok = true;
+        memcpy(p, "\x1b[?2026h", 8);
+        p += 8;
+        len += 8;
+        for (ty = 0; ok && ty < rows; ty++) {
+            int runStart = -1;
+            for (tx = 0; ok && tx <= cols; tx++) {
+                bool dirty;
+                if (tx < cols) {
+                    i = (size_t)ty * (size_t)cols + (size_t)tx;
+                    dirty = full || s_curCh[i] != s_prevCh[i] || s_curCol[i] != s_prevCol[i];
+                } else {
+                    dirty = false;
+                }
+                if (dirty && runStart < 0) runStart = tx;
+                if (!dirty && runStart >= 0) {
+                    int x, nn;
+                    nn = snprintf(p, cap - len, "\x1b[%d;%dH", ty + 1, runStart + 1);
+                    if (nn < 0 || (size_t)nn >= cap - len) { ok = false; break; }
+                    p += nn;
+                    len += (size_t)nn;
+                    for (x = runStart; x < tx; x++) {
+                        int key;
+                        i = (size_t)ty * (size_t)cols + (size_t)x;
+                        key = s_curCol[i];
+                        if (useColor && (force || key != s_termColor)) {
+                            if (!termEmitColor(&p, &len, cap, key)) { ok = false; break; }
+                            s_termColor = key;
+                            force = false;
+                        }
+                        if (len + 1 >= cap) { ok = false; break; }
+                        *p++ = s_curCh[i];
+                        len++;
                     }
+                    runStart = -1;
                 }
             }
-            if (count == 0) { r = 0; g = 0; b = 0; }
-            else { r = (int)(sumR / count); g = (int)(sumG / count); b = (int)(sumB / count); }
-
-            /* Rec. 601 luma for the glyph ramp. */
-            lum = (r * 299 + g * 587 + b * 114) / 1000;
-            idx = lum * (kRampLen - 1) / 255;
-            if (idx < 0) idx = 0;
-            if (idx >= kRampLen) idx = kRampLen - 1;
-            ch = kRamp[idx];
-
-            if (g_truecolor) {
-                if (r != lastR || g != lastG || b != lastB) {
-                    int n = snprintf(p, cap - len, "\x1b[38;2;%d;%d;%dm", r, g, b);
-                    if (n < 0 || (size_t)n >= cap - len) break;
-                    p += n; len += (size_t)n;
-                    lastR = r; lastG = g; lastB = b;
-                }
-                if (len + 1 >= cap) break;
-                *p++ = ch; len++;
-            } else if (g_color256) {
-                int ci = rgbToXterm256(r, g, b);
-                if (ci != lastIdx) {
-                    int n = snprintf(p, cap - len, "\x1b[38;5;%dm", ci);
-                    if (n < 0 || (size_t)n >= cap - len) break;
-                    p += n; len += (size_t)n;
-                    lastIdx = ci;
-                }
-                if (len + 1 >= cap) break;
-                *p++ = ch; len++;
-            } else if (g_color16) {
-                int ci = rgbToAnsi16(r, g, b);
-                if (ci != lastIdx) {
-                    int code = ci < 8 ? 30 + ci : 90 + (ci - 8);
-                    int n = snprintf(p, cap - len, "\x1b[%dm", code);
-                    if (n < 0 || (size_t)n >= cap - len) break;
-                    p += n; len += (size_t)n;
-                    lastIdx = ci;
-                }
-                if (len + 1 >= cap) break;
-                *p++ = ch; len++;
+        }
+        if (ok && useColor) {
+            if (len + 4 >= cap) {
+                ok = false;
             } else {
-                (void)useColor;
-                if (len + 1 >= cap) break;
-                *p++ = ch; len++;
+                memcpy(p, "\x1b[0m", 4);
+                p += 4;
+                len += 4;
+                s_termColor = -1;
             }
         }
-        if (useColor) {
-            if (len + 4 < cap) { memcpy(p, "\x1b[0m", 4); p += 4; len += 4; }
-            lastR = -1; lastG = -1; lastB = -1; lastIdx = -1;
-        }
-        if (ty + 1 < rows) {
-            /* CR LF, not bare LF: with OPOST on the extra CR is harmless,
-             * and if output processing is ever off the CR is required to
-             * return the carriage (see the c_oflag note in platformInit). */
-            if (g_ttyOut) {
-                if (len + 2 >= cap) break;
-                *p++ = '\r'; *p++ = '\n'; len += 2;
+        if (ok) {
+            if (len + 8 >= cap) {
+                ok = false;
             } else {
-                if (len + 1 >= cap) break;
-                *p++ = '\n'; len++;
+                memcpy(p, "\x1b[?2026l", 8);
+                p += 8;
+                len += 8;
             }
-        } else if (!g_ttyOut) {
-            if (len + 1 < cap) { *p++ = '\n'; len++; }
         }
+        if (ok) {
+            (void)fwrite(buf, 1, len, stdout);
+            fflush(stdout);
+            memcpy(s_prevCh, s_curCh, n);
+            memcpy(s_prevCol, s_curCol, n * sizeof(int));
+            s_prevValid = true;
+        }
+        free(buf);
+        return;
     }
 
-    if (g_ttyOut) {
-        if (len + 8 < cap) { memcpy(p, "\x1b[?2026l", 8); p += 8; len += 8; }
+    /* Non-tty (piped): full grid with newlines, only when changed. */
+    {
+        bool force = true;
+        bool ok = true;
+        for (ty = 0; ok && ty < rows; ty++) {
+            for (tx = 0; tx < cols; tx++) {
+                int key;
+                i = (size_t)ty * (size_t)cols + (size_t)tx;
+                key = s_curCol[i];
+                if (useColor && (force || key != s_termColor)) {
+                    if (!termEmitColor(&p, &len, cap, key)) { ok = false; break; }
+                    s_termColor = key;
+                    force = false;
+                }
+                if (len + 1 >= cap) { ok = false; break; }
+                *p++ = s_curCh[i];
+                len++;
+            }
+            if (!ok) break;
+            if (len + 1 >= cap) { ok = false; break; }
+            *p++ = '\n';
+            len++;
+        }
+        if (ok && useColor) {
+            if (len + 4 >= cap) {
+                ok = false;
+            } else {
+                memcpy(p, "\x1b[0m", 4);
+                p += 4;
+                len += 4;
+                s_termColor = -1;
+            }
+        }
+        if (ok) {
+            (void)fwrite(buf, 1, len, stdout);
+            fflush(stdout);
+            memcpy(s_prevCh, s_curCh, n);
+            memcpy(s_prevCol, s_curCol, n * sizeof(int));
+            s_prevValid = true;
+        }
+        free(buf);
     }
-
-    if (len > 0) {
-        (void)fwrite(buf, 1, len, stdout);
-        fflush(stdout);
-    }
-    free(buf);
 }
 
 void platformSwapBuffers(void) {
