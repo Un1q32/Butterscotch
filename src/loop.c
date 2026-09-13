@@ -836,6 +836,12 @@ int loop(CommandLineArgs args, const char *argv0) {
             return 0;
         }
 #endif
+#ifdef USE_TERMINAL
+        if (gfx != SOFTWARE) {
+            logError("The terminal backend only supports the software renderer (use --renderer software)!\n");
+            return 0;
+        }
+#endif
 
 #ifdef ENABLE_SCREENSHOTS
         if (gfx != MODERN_GL && hmlen(args.screenshotSurfacesFrames)) {

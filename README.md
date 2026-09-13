@@ -76,6 +76,7 @@ The following backends are available for desktop platforms (Windows and POSIX sy
 * SDL 2
 * SDL 3
 * AppKit (macOS only)
+* Terminal (ASCII/half-block art via the software renderer, no window needed)
 
 The following compilers have been tested to successfully build butterscotch, older versions may work but are untested.
 * GCC 2.7 and up in C++ mode, and 3.0 and up in C99 mode

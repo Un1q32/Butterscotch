@@ -133,6 +133,9 @@ DISABLE_LEGACY_GL := 1
 DISABLE_MODERN_GL := 1
 DEFINES += $(DEFINE)USE_NOOP
 endif
+ifeq ($(BACKEND),terminal)
+DEFINES += $(DEFINE)USE_TERMINAL
+endif
 
 # Noop renderer is exclusive to noop backend; GL renderers exclusive to non-noop backends
 ifneq ($(BACKEND),noop)
