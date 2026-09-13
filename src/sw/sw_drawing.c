@@ -3,18 +3,9 @@
 #include <float.h>
 #include "text_utils.h"
 #include "sw_renderer_private.h"
+#include "debug_font/debug_font.h"
 
-// ==== Internal structures ====
-
-typedef struct
-{
-    Font* font;
-    TexturePageItem* fontTpag; // single TPAG for regular fonts (NULL for sprite fonts)
-    int fontTpagIndex;
-    int fontPageId;
-    Sprite* spriteFontSprite; // source sprite for sprite fonts (NULL for regular fonts)
-}
-SwrFontState;
+// ==== Internal structures ==== (see sw_drawing.h for SwrFontState)
 
 // ==== Internal functions ====
 
@@ -647,9 +638,74 @@ static bool swrResolveGlyph(
         
         *dx = cursorX + glyph->offset;
         *dy = cursorY;
+        // GameMaker fonts have no per-glyph Y offset, but the debug atlas does:
+        // apply the debug yoffset (from top of line) when drawing with the UI font.
+        if (font == &swr->debugUIFont && DEBUGFONT_FIRST_CP <= glyph->character && glyph->character <= DEBUGFONT_LAST_CP)
+            *dy += (float) debugFontGlyphs[glyph->character - DEBUGFONT_FIRST_CP].yoffset;
     }
     
     return true;
+}
+
+// ==== Debug UI font (drawTextUI) ====
+// drawTextUI must not depend on game fonts (data.win may ship none), so it uses
+// the embedded debug font atlas uploaded as its own SW texture. A synthetic
+// Font + SwrFontState pair is built per renderer instance and passed as real
+// pointers into swrDrawText().
+
+void swrInitDebugUIFont(SWRenderer* swr)
+{
+    if (swr->debugUIFontInitialized) return;
+    swr->debugUIFontInitialized = true;
+
+    memset(&swr->debugUIFont, 0, sizeof(swr->debugUIFont));
+    memset(&swr->debugUIFontTpag, 0, sizeof(swr->debugUIFontTpag));
+
+    swr->debugUIFont.name = "DebugUI";
+    swr->debugUIFont.displayName = "DebugUI";
+    swr->debugUIFont.scaleX = 1.0f;
+    swr->debugUIFont.scaleY = 1.0f;
+    swr->debugUIFont.ascenderOffset = 0;
+    swr->debugUIFont.maxGlyphHeight = DEBUGFONT_LINE_HEIGHT;
+    swr->debugUIFont.emSize = (float) DEBUGFONT_LINE_HEIGHT;
+    swr->debugUIFont.isSpriteFont = false;
+    swr->debugUIFont.tpagIndex = -1;
+
+    for (int i = 0; i < DEBUGFONT_GLYPH_COUNT; i++)
+    {
+        const DebugFontGlyphEntry* e = &debugFontGlyphs[i];
+        FontGlyph* g = &swr->debugUIFontGlyphs[i];
+        g->character = (uint16_t) (DEBUGFONT_FIRST_CP + i);
+        g->sourceX = e->x;
+        g->sourceY = e->y;
+        g->sourceWidth = e->w;
+        g->sourceHeight = e->h;
+        g->shift = e->xadvance;
+        g->offset = e->xoffset;
+        g->kerningCount = 0;
+        g->kerning = NULL;
+    }
+    swr->debugUIFont.glyphs = swr->debugUIFontGlyphs;
+    swr->debugUIFont.glyphCount = DEBUGFONT_GLYPH_COUNT;
+    Font_buildGlyphLUT(&swr->debugUIFont);
+}
+
+bool swrEnsureDebugFontTexture(SWRenderer* swr)
+{
+    if (swr->debugUIFontTexture) return true;
+
+    size_t pixelCount = (size_t) DEBUGFONT_ATLAS_W * (size_t) DEBUGFONT_ATLAS_H;
+    uint32_t* rgba = (uint32_t*) safeMalloc(pixelCount * 4);
+    if (rgba == NULL) return false;
+    for (size_t i = 0; i < pixelCount; i++)
+    {
+        uint8_t a = debugFontPixels[i];
+        rgba[i] = ((uint32_t) a << 24) | 0x00FFFFFFu;
+    }
+
+    swr->debugUIFontTexture = swrCreateTexture((const uint8_t*) rgba, DEBUGFONT_ATLAS_W, DEBUGFONT_ATLAS_H);
+    free(rgba);
+    return swr->debugUIFontTexture != NULL;
 }
 
 // ==== Exposed interface ====
@@ -948,20 +1004,28 @@ void swrDrawTriangle(Renderer* renderer, float x1, float y1, float x2, float y2,
     );
 }
 
-void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t color, float alpha, float lineSeparation)
+void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t color, float alpha, float lineSeparation, Font* font, SwrFontState* fs)
 {
     Renderer* renderer = &swr->base;
     DataWin* dwin = renderer->dataWin;
     
-    int32_t fontIndex = renderer->drawFont;
-    if (0 > fontIndex || dwin->font.count <= (uint32_t) fontIndex) return;
+    if (!font)
+    {
+        int32_t fontIndex = renderer->drawFont;
+        if (0 > fontIndex || dwin->font.count <= (uint32_t) fontIndex) return;
 
-    Font* font = &dwin->font.fonts[fontIndex];
+        font = &dwin->font.fonts[fontIndex];
+    }
     
     SwrFontState fontState;
     memset(&fontState, 0, sizeof fontState); // silence warning treated as error
     
-    if (!swrResolveFontState(swr, dwin, font, &fontState)) return;
+    if (!fs)
+    {
+        if (!swrResolveFontState(swr, dwin, font, &fontState)) return;
+    }
+    else
+        fontState = *fs;
     
     // TODO: do we need to mirror the way the text scrolls too?!
     float cosA = 1.0f, sinA = 0.0f, angleRad = 0.0f;
@@ -1042,7 +1106,9 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                         dx = roundf(dx * 2) / 2;
                         dy = roundf(dy * 2) / 2;
                         
-                        SWTexture* texture = swr->textures[pageId];
+                        SWTexture* texture = (font == &swr->debugUIFont && swr->debugUIFontTexture)
+                            ? swr->debugUIFontTexture
+                            : swr->textures[pageId];
                         
                         if (UNLIKELY(mustRotate))
                         {

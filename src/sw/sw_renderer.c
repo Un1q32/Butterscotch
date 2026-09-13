@@ -48,6 +48,9 @@ static void SWRenderer_destroy(Renderer* renderer)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
     
+    swrFreeTexture(swr->debugUIFontTexture);
+    swr->debugUIFontTexture = NULL;
+
     // TODO: why didn't I implement this.
     (void) swr;
     
@@ -380,7 +383,7 @@ static void SWRenderer_drawText(Renderer* renderer, const char* text, float x, f
                                 float xscale, float yscale, float angleDeg, float lineSeparation)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
-    swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha, lineSeparation);
+    swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha, lineSeparation, NULL, NULL);
 }
 
 static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float x, float y,
@@ -395,7 +398,34 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
     (void) c3;
     (void) c4;
     
-    swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha, lineSeparation);
+    swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, renderer->drawAlpha, lineSeparation, NULL, NULL);
+}
+
+static void SWRenderer_drawTextUI(Renderer* renderer, const char* text, float x, float y,
+                                  float xscale, float yscale, float angleDeg,
+                                  int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
+                                  float lineSeparation)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+
+    // TODO: allow c2, c3, c4 (matches drawTextColor)
+    (void) c2;
+    (void) c3;
+    (void) c4;
+
+    if (!text) return;
+    swrInitDebugUIFont(swr);
+    if (!swrEnsureDebugFontTexture(swr)) return;
+
+    SwrFontState fs;
+    memset(&fs, 0, sizeof fs);
+    fs.font = &swr->debugUIFont;
+    fs.fontTpag = &swr->debugUIFontTpag;
+    fs.fontTpagIndex = -1;
+    fs.fontPageId = -1;
+    fs.spriteFontSprite = NULL;
+
+    swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, c1, alpha, lineSeparation, fs.font, &fs);
 }
 
 static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
@@ -1222,6 +1252,7 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawLineColor            = SWRenderer_drawLineColor;
     swrVtable.drawText                 = SWRenderer_drawText;
     swrVtable.drawTextColor            = SWRenderer_drawTextColor;
+    swrVtable.drawTextUI               = SWRenderer_drawTextUI;
     swrVtable.flush                    = SWRenderer_flush;
     swrVtable.clearScreen              = SWRenderer_clearScreen;
     swrVtable.createSpriteFromSurface  = SWRenderer_createSpriteFromSurface;

@@ -4,6 +4,7 @@
 #include "sw_renderer.h"
 #include "defines.h"
 #include "pixel_convert.h"
+#include "debug_font/debug_font.h"
 
 // Unimplemented Functions
 #define UNIMP() do { logWarn("NYI %s\n", __func__); } while (0)
@@ -90,6 +91,14 @@ typedef struct
     // only used for surfaces.  The application surface doesn't support these at the moment.
     int currentSurfaceIndex;
     int writeMask;
+
+    // Embedded debug UI font backing drawTextUI. Lazily built so drawTextUI
+    // needs no game fonts (data.win may ship none).
+    Font debugUIFont;
+    FontGlyph debugUIFontGlyphs[DEBUGFONT_GLYPH_COUNT];
+    TexturePageItem debugUIFontTpag;
+    bool debugUIFontInitialized;
+    SWTexture* debugUIFontTexture; // NULL = not created yet
 }
 SWRenderer;
 
