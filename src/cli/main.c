@@ -34,6 +34,39 @@ static void printOsTypeNames(FILE* out) {
 static bool logColour;
 
 void platformLog(const logType type, const char *format, va_list va) {
+#ifdef USE_TERMINAL
+    // The terminal backend draws its framebuffer on stdout, so logging to
+    // the console would scribble over the display. Log to a file instead.
+    static FILE *logFile = NULL;
+    if (logFile == NULL) {
+        logFile = fopen("butterscotch.log", "w");
+    }
+    if (logFile == NULL) {
+        // Nowhere to log without trashing the display; drop the message.
+        return;
+    }
+    {
+        const char* textPrefix = "";
+        switch (type) {
+            case LOG_TYPE_WARNING:
+                textPrefix = "Warning: ";
+                break;
+            case LOG_TYPE_ERROR:
+                textPrefix = "Error: ";
+                break;
+            case LOG_TYPE_DEBUG:
+                textPrefix = "Debug: ";
+                break;
+            case LOG_TYPE_NORMAL:
+            default:
+                break;
+        }
+        fputs(textPrefix, logFile);
+        vfprintf(logFile, format, va);
+        fflush(logFile);
+        return;
+    }
+#endif
     FILE *out = stderr;
     const char* colourPrefix = ANSI_COLOUR_CODE_RESET;
     const char* textPrefix = "";
@@ -216,7 +249,9 @@ static void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) 
     args->disableLogColours = !isatty(1); // 1 == stdout
     // TODO: detect available driver features
     // at runtime to improve defaults.
-#if defined(ENABLE_MODERN_GL)
+#if defined(USE_TERMINAL)
+    args->renderer = SOFTWARE;
+#elif defined(ENABLE_MODERN_GL)
     args->renderer = MODERN_GL;
 #elif defined(ENABLE_LEGACY_GL)
     args->renderer = LEGACY_GL;
